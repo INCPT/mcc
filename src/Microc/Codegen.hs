@@ -9,22 +9,22 @@ module Microc.Codegen
   )
 where
 
-import qualified LLVM.AST.IntegerPredicate     as IP
-import qualified LLVM.AST.FloatingPointPredicate
-                                               as FP
-import           LLVM.AST                       ( Operand )
-import qualified LLVM.AST                      as AST
-import qualified LLVM.AST.Float                as AST
-import qualified LLVM.AST.Type                 as AST
-import qualified LLVM.AST.Constant             as C
-import           LLVM.AST.Name
-import           LLVM.AST.Typed                 ( typeOf )
-
-import qualified LLVM.IRBuilder.Module         as L
-import qualified LLVM.IRBuilder.Monad          as L
-import qualified LLVM.IRBuilder.Instruction    as L
-import qualified LLVM.IRBuilder.Constant       as L
-import           LLVM.Prelude                   ( ShortByteString )
+-- import qualified LLVM.AST.IntegerPredicate     as IP
+-- import qualified LLVM.AST.FloatingPointPredicate
+--                                                as FP
+-- import           LLVM.AST                       ( Operand )
+-- import qualified LLVM.AST                      as AST
+-- import qualified LLVM.AST.Float                as AST
+-- import qualified LLVM.AST.Type                 as AST
+-- import qualified LLVM.AST.Constant             as C
+-- import           LLVM.AST.Name
+-- import           LLVM.AST.Typed                 ( typeOf )
+-- 
+-- import qualified LLVM.IRBuilder.Module         as L
+-- import qualified LLVM.IRBuilder.Monad          as L
+-- import qualified LLVM.IRBuilder.Instruction    as L
+-- import qualified LLVM.IRBuilder.Constant       as L
+-- import           LLVM.Prelude                   ( ShortByteString )
 
 import qualified Data.Map                      as M
 import           Control.Monad.State
@@ -44,6 +44,8 @@ import qualified Data.Text                     as T
 import           Data.Text                      ( Text )
 import           Data.Word                      ( Word32 )
 import           Data.List                      ( find )
+
+{-
 
 -- When using the IRBuilder, both functions and variables have the type Operand
 data Env = Env { operands :: M.Map Text Operand
@@ -402,3 +404,8 @@ codegenProgram (structs, globals, funcs) =
         mapM_ emitTypeDef   structs
         mapM_ codegenGlobal globals
         mapM_ codegenFunc   funcs
+
+-}
+
+codegenProgram :: SProgram -> ()
+codegenProgram (structs, globals, funcs) = ()

@@ -9,7 +9,10 @@ ghc-options: -Wall
              -fno-warn-name-shadowing 
              -Wcompat
              -Wincomplete-uni-patterns
-extra-source-files: README.md
+extra-source-files:
+  - README.md
+  - src/Microc/Parser/Generator.y
+  - src/Microc/Scanner/Generator.x
 
 dependencies:
     - base >= 4.7 && < 5
@@ -24,9 +27,9 @@ dependencies:
     - filepath
     - bytestring
     - prettyprinter
-    - llvm-hs-pure >= 9 && < 10
-    - llvm-hs >= 9 && < 10
-    - llvm-hs-pretty >= 0.9 && < 1
+      # - llvm-hs-pure >= 9 && < 10
+      # - llvm-hs >= 9 && < 10
+      # - llvm-hs-pretty >= 0.9 && < 1
     - megaparsec
     - parser-combinators
 
@@ -34,10 +37,19 @@ default-extensions: OverloadedStrings, LambdaCase
 
 library:
   source-dirs: src
+  build-tools:
+    - alex
+    - happy
+  other-modules:
+    - Microc.Parser.Generator
+    - Microc.Scanner.Generator
 
 executable:
   main: Main.hs
   source-dirs: app
+  build-tools:
+    - alex
+    - happy
   dependencies: 
       - optparse-applicative
       - mcc

@@ -3,7 +3,7 @@ module Main where
 import           Microc                  hiding ( Parser )
 
 import           Options.Applicative
-import           LLVM.Pretty
+-- import           LLVM.Pretty
 import           Data.String.Conversions
 import qualified Data.Text                     as T
 import qualified Data.Text.IO                  as T
@@ -66,7 +66,7 @@ runOpts (Options action infile ptype) = do
           let llvm = codegenProgram sast
           in  case action of
                 Sast            -> pPrint sast
-                LLVM            -> T.putStrLn . cs . ppllvm $ llvm
+                -- LLVM            -> T.putStrLn . cs . ppllvm $ llvm
                 Compile outfile -> compile llvm outfile
                 Run             -> run llvm >>= T.putStr
                 Ast             -> error "unreachable"

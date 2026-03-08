@@ -1,10 +1,8 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.33.0.
+-- This file has been generated from package.yaml by hpack version 0.39.1.
 --
 -- see: https://github.com/sol/hpack
---
--- hash: a168355244c92a5a39b4a5a9f6accd48993a937062b5c7daca3f02e5c8838a2c
 
 name:           mcc
 version:        0.1.0.0
@@ -19,6 +17,8 @@ license-file:   LICENSE
 build-type:     Simple
 extra-source-files:
     README.md
+    src/Microc/Parser/Generator.y
+    src/Microc/Scanner/Generator.x
 
 source-repository head
   type: git
@@ -30,21 +30,24 @@ library
       Microc.Ast
       Microc.Codegen
       Microc.Parser.Combinator
-      Microc.Parser.Generator
       Microc.Sast
       Microc.Scanner.Combinator
-      Microc.Scanner.Generator
       Microc.Semant
       Microc.Semant.Analysis
       Microc.Semant.Error
       Microc.Toplevel
       Microc.Utils
   other-modules:
-      Paths_mcc
+      Microc.Parser.Generator
+      Microc.Scanner.Generator
   hs-source-dirs:
       src
-  default-extensions: OverloadedStrings, LambdaCase
+  default-extensions:
+      OverloadedStrings, LambdaCase
   ghc-options: -Wall -fno-warn-name-shadowing -Wcompat -Wincomplete-uni-patterns
+  build-tools:
+      alex
+    , happy
   build-depends:
       array
     , base >=4.7 && <5
@@ -52,9 +55,6 @@ library
     , containers
     , directory
     , filepath
-    , llvm-hs >=9 && <10
-    , llvm-hs-pretty >=0.9 && <1
-    , llvm-hs-pure >=9 && <10
     , megaparsec
     , mtl
     , parser-combinators
@@ -71,8 +71,12 @@ executable mcc
       Paths_mcc
   hs-source-dirs:
       app
-  default-extensions: OverloadedStrings, LambdaCase
+  default-extensions:
+      OverloadedStrings, LambdaCase
   ghc-options: -Wall -fno-warn-name-shadowing -Wcompat -Wincomplete-uni-patterns
+  build-tools:
+      alex
+    , happy
   build-depends:
       array
     , base >=4.7 && <5
@@ -80,9 +84,6 @@ executable mcc
     , containers
     , directory
     , filepath
-    , llvm-hs >=9 && <10
-    , llvm-hs-pretty >=0.9 && <1
-    , llvm-hs-pure >=9 && <10
     , mcc
     , megaparsec
     , mtl
@@ -103,7 +104,8 @@ test-suite testall
       Paths_mcc
   hs-source-dirs:
       tests
-  default-extensions: OverloadedStrings, LambdaCase
+  default-extensions:
+      OverloadedStrings, LambdaCase
   ghc-options: -Wall -fno-warn-name-shadowing -Wcompat -Wincomplete-uni-patterns
   build-depends:
       array
@@ -112,9 +114,6 @@ test-suite testall
     , containers
     , directory
     , filepath
-    , llvm-hs >=9 && <10
-    , llvm-hs-pretty >=0.9 && <1
-    , llvm-hs-pure >=9 && <10
     , mcc
     , megaparsec
     , mtl
@@ -136,7 +135,8 @@ benchmark bench
       Paths_mcc
   hs-source-dirs:
       bench
-  default-extensions: OverloadedStrings, LambdaCase
+  default-extensions:
+      OverloadedStrings, LambdaCase
   ghc-options: -Wall -fno-warn-name-shadowing -Wcompat -Wincomplete-uni-patterns
   build-depends:
       array
@@ -146,9 +146,6 @@ benchmark bench
     , criterion
     , directory
     , filepath
-    , llvm-hs >=9 && <10
-    , llvm-hs-pretty >=0.9 && <1
-    , llvm-hs-pure >=9 && <10
     , mcc
     , megaparsec
     , mtl

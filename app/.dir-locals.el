@@ -1,1 +1,1 @@
-((nil . ((dante-target . "exe:mcc"))))
+((nil . ((dante-target . "mcc:exe:mcc"))))

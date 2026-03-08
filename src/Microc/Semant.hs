@@ -5,6 +5,8 @@ module Microc.Semant
   )
 where
 
+import           Control.Monad (join, unless, forM, forM_, foldM, when, liftM3)
+
 import           Microc.Ast
 import           Microc.Sast
 import           Microc.Semant.Error

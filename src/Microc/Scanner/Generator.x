@@ -1,6 +1,7 @@
 {
 module Microc.Scanner.Generator where
 import Microc.Ast
+import Data.Char (ord)
 
 }
 
