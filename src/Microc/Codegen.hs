@@ -46,6 +46,14 @@ import qualified Data.Text                     as T
 import           Data.Text                      ( Text )
 import           Data.Word                      ( Word32 )
 import           Data.List                      ( find )
+import qualified Data.List as List
+import           Data.Text.Encoding             ( encodeUtf8 )
+import           Control.Monad.Reader           ( ReaderT
+                                                , ask
+                                                , runReaderT
+                                                )
+import qualified Data.Map                      as M
+import qualified Data.ByteString.Lazy          as LBS
 
 {-
 
@@ -409,7 +417,206 @@ codegenProgram (structs, globals, funcs) =
 
 -}
 
--- TODO replicate the above but generate WASM instead
+-- Environment for tracking variables, functions, and other state during codegen
+data Env = Env { 
+    locals :: M.Map Text (Loc ValueType),
+    funcs :: M.Map Text (Fn ()),
+    structs :: [Struct],
+    strings :: M.Map Text Natural,
+    stringData :: [(Natural, LBS.ByteString)],
+    nextStringOffset :: Natural
+} deriving (Show, Eq)
 
+type Codegen = ReaderT Env GenFun
+
+-- Get the WASM value type for a MicroC type
+wasmType :: Type -> ValueType
+wasmType TyInt = I32
+wasmType TyChar = I32  -- chars are i32 in WASM
+wasmType TyBool = I32  -- bools are i32 in WASM
+wasmType TyFloat = F64
+wasmType (Pointer _) = I32  -- pointers are i32 addresses
+wasmType TyVoid = error "Cannot get WASM type for void"
+wasmType (TyStruct _) = error "Structs not yet supported in WASM codegen"
+
+-- Get size in bytes of a type
+sizeOf :: Type -> Natural
+sizeOf TyInt = 4
+sizeOf TyChar = 1
+sizeOf TyBool = 1
+sizeOf TyFloat = 8
+sizeOf (Pointer _) = 4
+sizeOf TyVoid = 0
+sizeOf (TyStruct _) = error "Struct size calculation not yet implemented"
+
+-- Code generation for expressions
+codegenSexpr :: SExpr -> Codegen ()
+codegenSexpr (TyInt, SLiteral i) = lift $ arg $ i32c i
+codegenSexpr (TyFloat, SFliteral f) = lift $ arg $ f64c f
+codegenSexpr (TyBool, SBoolLit b) = lift $ arg $ i32c (if b then 1 else 0)
+codegenSexpr (TyChar, SCharLit c) = lift $ arg $ i32c (fromIntegral $ fromEnum c)
+codegenSexpr (Pointer TyChar, SStrLit s) = do
+    env <- ask
+    let bs = LBS.fromStrict $ encodeUtf8 $ T.pack s
+    case M.lookup (T.pack s) (strings env) of
+        Just offset -> lift $ arg $ i32c (fromIntegral offset)
+        Nothing -> error "String literal not found in environment"
+codegenSexpr (_, SNull) = lift $ arg $ i32c 0
+codegenSexpr (TyInt, SSizeof t) = lift $ arg $ i32c (fromIntegral $ sizeOf t)
+
+codegenSexpr (_, LVal (SId name)) = do
+    env <- ask
+    case M.lookup name (locals env) of
+        Just loc -> lift $ arg $ produce loc
+        Nothing -> error $ "Variable not found: " ++ T.unpack name
+
+codegenSexpr (_, SAssign (SId name) rhs) = do
+    env <- ask
+    case M.lookup name (locals env) of
+        Just loc -> do
+            codegenSexpr rhs
+            lift $ loc .= produce (Proxy :: Proxy I32)  -- simplified for now
+        Nothing -> error $ "Variable not found: " ++ T.unpack name
+
+codegenSexpr (t, SBinop op lhs rhs) = do
+    codegenSexpr lhs
+    codegenSexpr rhs
+    case op of
+        Add -> case t of
+            TyInt -> lift $ arg $ add (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyFloat -> lift $ arg $ add (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            _ -> error "Invalid type for Add"
+        Sub -> case t of
+            TyInt -> lift $ arg $ sub (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyFloat -> lift $ arg $ sub (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            _ -> error "Invalid type for Sub"
+        Mult -> case t of
+            TyInt -> lift $ arg $ mul (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyFloat -> lift $ arg $ mul (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            _ -> error "Invalid type for Mult"
+        Div -> case t of
+            TyInt -> lift $ arg $ div_s (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyFloat -> lift $ arg $ div_f (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            _ -> error "Invalid type for Div"
+        Equal -> case fst lhs of
+            TyInt -> lift $ arg $ eq (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyBool -> lift $ arg $ eq (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyChar -> lift $ arg $ eq (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyFloat -> lift $ arg $ eq (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            Pointer _ -> lift $ arg $ eq (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            _ -> error "Invalid type for Equal"
+        Neq -> case fst lhs of
+            TyInt -> lift $ arg $ ne (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyBool -> lift $ arg $ ne (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyChar -> lift $ arg $ ne (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyFloat -> lift $ arg $ ne (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            Pointer _ -> lift $ arg $ ne (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            _ -> error "Invalid type for Neq"
+        Less -> case fst lhs of
+            TyInt -> lift $ arg $ lt_s (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyChar -> lift $ arg $ lt_u (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyFloat -> lift $ arg $ lt_f (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            _ -> error "Invalid type for Less"
+        Leq -> case fst lhs of
+            TyInt -> lift $ arg $ le_s (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyChar -> lift $ arg $ le_u (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyFloat -> lift $ arg $ le_f (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            _ -> error "Invalid type for Leq"
+        Greater -> case fst lhs of
+            TyInt -> lift $ arg $ gt_s (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyChar -> lift $ arg $ gt_u (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyFloat -> lift $ arg $ gt_f (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            _ -> error "Invalid type for Greater"
+        Geq -> case fst lhs of
+            TyInt -> lift $ arg $ ge_s (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyChar -> lift $ arg $ ge_u (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyFloat -> lift $ arg $ ge_f (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            _ -> error "Invalid type for Geq"
+        And -> lift $ arg $ Language.Wasm.Builder.and (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+        Or -> lift $ arg $ Language.Wasm.Builder.or (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+        BitAnd -> lift $ arg $ Language.Wasm.Builder.and (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+        BitOr -> lift $ arg $ Language.Wasm.Builder.or (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+        _ -> error $ "Binary operator not yet implemented: " ++ show op
+
+codegenSexpr (t, SUnop op e) = do
+    codegenSexpr e
+    case op of
+        Neg -> case t of
+            TyInt -> do
+                lift $ arg $ i32c 0
+                lift $ arg $ sub (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyFloat -> lift $ arg $ neg_f (Proxy :: Proxy F64)
+            _ -> error "Invalid type for Neg"
+        Not -> lift $ arg $ eqz (Proxy :: Proxy I32)
+
+codegenSexpr (_, SCall fun es) = do
+    env <- ask
+    mapM_ codegenSexpr es
+    case M.lookup fun (funcs env) of
+        Just fn -> lift $ arg $ call fn (replicate (length es) (return ()))
+        Nothing -> error $ "Function not found: " ++ T.unpack fun
+
+codegenSexpr (_, SNoexpr) = return ()
+
+codegenSexpr sx = error $ "Expression not yet implemented: " ++ show sx
+
+-- Code generation for statements
+codegenStatement :: SStatement -> Codegen ()
+codegenStatement (SExpr e) = codegenSexpr e
+codegenStatement (SReturn e) = case e of
+    (TyVoid, SNoexpr) -> return ()
+    _ -> codegenSexpr e >> lift (finish (Proxy :: Proxy I32))  -- simplified
+codegenStatement (SBlock ss) = mapM_ codegenStatement ss
+codegenStatement _ = error "Statement not yet implemented"
+
+-- Code generation for functions
+codegenFunc :: SFunction -> GenMod (Fn ())
+codegenFunc f = do
+    fn <- funRec () $ \self -> do
+        -- Create parameters
+        paramLocs <- mapM (\(Bind t _) -> param (typeProxy t)) (sformals f)
+        -- Create locals
+        localLocs <- mapM (\(Bind t _) -> local (typeProxy t)) (slocals f)
+        
+        let paramMap = M.fromList $ zip (map (\(Bind _ n) -> n) (sformals f)) paramLocs
+        let localMap = M.fromList $ zip (map (\(Bind _ n) -> n) (slocals f)) localLocs
+        let allLocals = M.union paramMap localMap
+        
+        let env = Env {
+            locals = allLocals,
+            funcs = M.empty,  -- Will be filled in later
+            structs = [],
+            strings = M.empty,
+            stringData = [],
+            nextStringOffset = 0
+        }
+        
+        runReaderT (codegenStatement (sbody f)) env
+        return ()
+    return fn
+  where
+    typeProxy :: Type -> Proxy ValueType
+    typeProxy TyInt = Proxy
+    typeProxy TyFloat = Proxy
+    typeProxy TyBool = Proxy
+    typeProxy TyChar = Proxy
+    typeProxy (Pointer _) = Proxy
+    typeProxy _ = error "Unsupported type"
+
+-- Main code generation entry point
 codegenProgram :: SProgram -> Module
-codegenProgram (structs, globals, funcs) = ()
+codegenProgram (structs, globals, funcs) = genMod $ do
+    -- Import memory
+    mem <- importMemory "env" "memory" 1 Nothing
+    
+    -- Generate functions
+    generatedFuncs <- mapM codegenFunc funcs
+    
+    -- Export main if it exists
+    case List.find (\f -> sname f == "main") funcs of
+        Just _ -> case List.find (\(f, sf) -> sname sf == "main") (zip generatedFuncs funcs) of
+            Just (fn, _) -> export "main" fn
+            Nothing -> return ()
+        Nothing -> return ()
+    
+    return ()
