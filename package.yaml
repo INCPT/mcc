@@ -18,9 +18,11 @@ dependencies:
     - base >= 4.7 && < 5
     - mtl
     - array
+    - cereal
     - containers
     - text
     - string-conversions
+    - deepseq
     - directory
     - process
     - unix

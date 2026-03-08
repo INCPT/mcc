@@ -26,6 +26,10 @@ source-repository head
 
 library
   exposed-modules:
+      Language.Wasm.Binary
+      Language.Wasm.Builder
+      Language.Wasm.Structure
+      Language.Wasm.Validate
       Microc
       Microc.Ast
       Microc.Codegen
@@ -52,7 +56,9 @@ library
       array
     , base >=4.7 && <5
     , bytestring
+    , cereal
     , containers
+    , deepseq
     , directory
     , filepath
     , megaparsec
@@ -81,7 +87,9 @@ executable mcc
       array
     , base >=4.7 && <5
     , bytestring
+    , cereal
     , containers
+    , deepseq
     , directory
     , filepath
     , mcc
@@ -111,7 +119,9 @@ test-suite testall
       array
     , base >=4.7 && <5
     , bytestring
+    , cereal
     , containers
+    , deepseq
     , directory
     , filepath
     , mcc
@@ -142,8 +152,10 @@ benchmark bench
       array
     , base >=4.7 && <5
     , bytestring
+    , cereal
     , containers
     , criterion
+    , deepseq
     , directory
     , filepath
     , mcc

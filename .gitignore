@@ -24,3 +24,5 @@ cabal.project.local~
 *.ll
 _build*
 /.dir-locals.el
+.aider*
+.env
