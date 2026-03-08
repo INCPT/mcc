@@ -26,6 +26,8 @@ where
 -- import qualified LLVM.IRBuilder.Constant       as L
 -- import           LLVM.Prelude                   ( ShortByteString )
 
+import           Language.Wasm.Structure
+
 import qualified Data.Map                      as M
 import           Control.Monad.State
 import           Data.String                    ( fromString )
@@ -407,5 +409,7 @@ codegenProgram (structs, globals, funcs) =
 
 -}
 
-codegenProgram :: SProgram -> ()
+-- TODO replicate the above but generate WASM instead
+
+codegenProgram :: SProgram -> Module
 codegenProgram (structs, globals, funcs) = ()
