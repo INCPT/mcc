@@ -1,9 +1,13 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE TypeApplications #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
+{-# OPTIONS_GHC -fno-defer-type-errors #-}
+
 module Microc.Codegen
   ( codegenProgram
   )
@@ -26,10 +30,12 @@ where
 -- import qualified LLVM.IRBuilder.Constant       as L
 -- import           LLVM.Prelude                   ( ShortByteString )
 
+import           Language.Wasm.Builder
 import           Language.Wasm.Structure
 
 import qualified Data.Map                      as M
 import           Control.Monad.State
+import           Data.Proxy
 import           Data.String                    ( fromString )
 
 import           Microc.Utils
@@ -419,12 +425,12 @@ codegenProgram (structs, globals, funcs) =
 
 -- Environment for tracking variables, functions, and other state during codegen
 data Env = Env { 
-    locals :: M.Map Text (Loc ValueType),
-    funcs :: M.Map Text (Fn ()),
-    structs :: [Struct],
-    strings :: M.Map Text Natural,
-    stringData :: [(Natural, LBS.ByteString)],
-    nextStringOffset :: Natural
+  locals :: M.Map Text (Loc ValueType),
+  funcs :: M.Map Text (Fn ()),
+  structs :: [Struct],
+  strings :: M.Map Text Int,
+  stringData :: [(Int, LBS.ByteString)],
+  nextStringOffset :: Int
 } deriving (Show, Eq)
 
 type Codegen = ReaderT Env GenFun
@@ -440,7 +446,7 @@ wasmType TyVoid = error "Cannot get WASM type for void"
 wasmType (TyStruct _) = error "Structs not yet supported in WASM codegen"
 
 -- Get size in bytes of a type
-sizeOf :: Type -> Natural
+sizeOf :: Type -> Int
 sizeOf TyInt = 4
 sizeOf TyChar = 1
 sizeOf TyBool = 1
@@ -457,8 +463,8 @@ codegenSexpr (TyBool, SBoolLit b) = lift $ arg $ i32c (if b then 1 else 0)
 codegenSexpr (TyChar, SCharLit c) = lift $ arg $ i32c (fromIntegral $ fromEnum c)
 codegenSexpr (Pointer TyChar, SStrLit s) = do
     env <- ask
-    let bs = LBS.fromStrict $ encodeUtf8 $ T.pack s
-    case M.lookup (T.pack s) (strings env) of
+    let bs = LBS.fromStrict $ encodeUtf8 s
+    case M.lookup s (strings env) of
         Just offset -> lift $ arg $ i32c (fromIntegral offset)
         Nothing -> error "String literal not found in environment"
 codegenSexpr (_, SNull) = lift $ arg $ i32c 0
@@ -483,7 +489,7 @@ codegenSexpr (t, SBinop op lhs rhs) = do
     codegenSexpr rhs
     case op of
         Add -> case t of
-            TyInt -> lift $ arg $ add (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyInt -> lift $ arg $ add @(Proxy I32) @(Proxy I32)
             TyFloat -> lift $ arg $ add (Proxy :: Proxy F64) (Proxy :: Proxy F64)
             _ -> error "Invalid type for Add"
         Sub -> case t of
@@ -606,17 +612,15 @@ codegenFunc f = do
 -- Main code generation entry point
 codegenProgram :: SProgram -> Module
 codegenProgram (structs, globals, funcs) = genMod $ do
-    -- Import memory
-    mem <- importMemory "env" "memory" 1 Nothing
-    
-    -- Generate functions
-    generatedFuncs <- mapM codegenFunc funcs
-    
-    -- Export main if it exists
-    case List.find (\f -> sname f == "main") funcs of
-        Just _ -> case List.find (\(f, sf) -> sname sf == "main") (zip generatedFuncs funcs) of
-            Just (fn, _) -> export "main" fn
-            Nothing -> return ()
-        Nothing -> return ()
-    
-    return ()
+  -- Import memory
+  mem <- importMemory "env" "memory" 1 Nothing
+  
+  -- Generate functions
+  generatedFuncs <- mapM codegenFunc funcs
+  
+  -- Export main if it exists
+  case List.find (\f -> sname f == "main") funcs of
+      Just _ -> case List.find (\(f, sf) -> sname sf == "main") (zip generatedFuncs funcs) of
+          Just (fn, _) -> export "main" fn
+          Nothing -> error "no main"
+      Nothing -> error "no main"
