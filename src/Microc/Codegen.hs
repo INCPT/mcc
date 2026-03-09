@@ -5,6 +5,7 @@
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 {-# OPTIONS_GHC -fno-defer-type-errors #-}
 
@@ -30,7 +31,6 @@ where
 -- import qualified LLVM.IRBuilder.Constant       as L
 -- import           LLVM.Prelude                   ( ShortByteString )
 
-import           Language.Wasm.Builder
 import           Language.Wasm.Structure
 
 import qualified Data.Map                      as M
@@ -473,7 +473,7 @@ codegenSexpr (TyInt, SSizeof t) = lift $ arg $ i32c (fromIntegral $ sizeOf t)
 codegenSexpr (_, LVal (SId name)) = do
     env <- ask
     case M.lookup name (locals env) of
-        Just (Loc idx :: Loc ValueType) -> lift $ appendExpr [GetLocal idx]
+        Just (Loc idx) -> lift $ appendExpr [GetLocal idx]
         Nothing -> error $ "Variable not found: " ++ T.unpack name
 
 codegenSexpr (_, SAssign (SId name) rhs) = do
@@ -581,6 +581,7 @@ codegenFunc f = do
     fn <- funRec () $ \self -> do
         -- Create parameters - we need to handle each type explicitly
         paramLocs <- mapM createParam (sformals f)
+
         -- Create locals
         localLocs <- mapM createLocal (slocals f)
         
