@@ -22,7 +22,7 @@ module Language.Wasm.Builder (
     export,
     nextFuncIndex, setGlobalInitializer,
     GenFun,
-    Glob, Loc, Fn(..), Mem, Tbl, Label,
+    Glob, Loc (Loc), Fn(..), Mem, Tbl, Label,
     param, local, label,
     ret,
     arg,

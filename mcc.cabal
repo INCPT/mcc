@@ -48,7 +48,7 @@ library
       src
   default-extensions:
       OverloadedStrings, LambdaCase
-  ghc-options: -Wall -fno-warn-name-shadowing -Wcompat -Wincomplete-uni-patterns
+  ghc-options: -Wall -fno-warn-name-shadowing -Wcompat -Wincomplete-uni-patterns -fno-defer-type-errors
   build-tools:
       alex
     , happy
@@ -79,7 +79,7 @@ executable mcc
       app
   default-extensions:
       OverloadedStrings, LambdaCase
-  ghc-options: -Wall -fno-warn-name-shadowing -Wcompat -Wincomplete-uni-patterns
+  ghc-options: -Wall -fno-warn-name-shadowing -Wcompat -Wincomplete-uni-patterns -fno-defer-type-errors
   build-tools:
       alex
     , happy
@@ -114,7 +114,7 @@ test-suite testall
       tests
   default-extensions:
       OverloadedStrings, LambdaCase
-  ghc-options: -Wall -fno-warn-name-shadowing -Wcompat -Wincomplete-uni-patterns
+  ghc-options: -Wall -fno-warn-name-shadowing -Wcompat -Wincomplete-uni-patterns -fno-defer-type-errors
   build-depends:
       array
     , base >=4.7 && <5
@@ -147,7 +147,7 @@ benchmark bench
       bench
   default-extensions:
       OverloadedStrings, LambdaCase
-  ghc-options: -Wall -fno-warn-name-shadowing -Wcompat -Wincomplete-uni-patterns
+  ghc-options: -Wall -fno-warn-name-shadowing -Wcompat -Wincomplete-uni-patterns -fno-defer-type-errors
   build-depends:
       array
     , base >=4.7 && <5

@@ -9,6 +9,7 @@ ghc-options: -Wall
              -fno-warn-name-shadowing 
              -Wcompat
              -Wincomplete-uni-patterns
+             -fno-defer-type-errors
 extra-source-files:
   - README.md
   - src/Microc/Parser/Generator.y

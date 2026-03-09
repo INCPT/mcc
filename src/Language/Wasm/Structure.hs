@@ -114,13 +114,13 @@ data ValueType =
     | F64
     | Func
     | Extern
-    deriving (Show, Eq, Generic, NFData)
+    deriving (Show, Eq, Ord, Generic, NFData)
 
 type ResultType = [ValueType]
 type ParamsType = [ValueType]
 type LocalsType = [ValueType]
 
-data FuncType = FuncType { params :: ParamsType, results :: ResultType } deriving (Show, Eq, Generic, NFData)
+data FuncType = FuncType { params :: ParamsType, results :: ResultType } deriving (Show, Eq, Ord, Generic, NFData)
 
 data BlockType =
     Inline (Maybe ValueType)

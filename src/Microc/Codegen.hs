@@ -1,4 +1,6 @@
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# OPTIONS_GHC -fno-defer-type-errors  #-}
 
 module Microc.Codegen
   ( codegenProgram

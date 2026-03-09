@@ -2,8 +2,14 @@ module Main where
 
 import           Microc                  hiding ( Parser )
 
+import qualified Data.ByteString as B
+
 import           Options.Applicative
 -- import           LLVM.Pretty
+
+import           Language.Wasm.Binary
+
+import           Data.Serialize
 import           Data.String.Conversions
 import qualified Data.Text                     as T
 import qualified Data.Text.IO                  as T
@@ -63,10 +69,10 @@ runOpts (Options action infile ptype) = do
       _   -> case checkProgram ast of
         Left err -> putDoc $ pretty err <> "\n"
         Right sast ->
-          let llvm = codegenProgram sast
+          let wasm = codegenProgram sast
           in  case action of
                 Sast            -> pPrint sast
-                -- LLVM            -> T.putStrLn . cs . ppllvm $ llvm
-                Compile outfile -> compile llvm outfile
-                Run             -> run llvm >>= T.putStr
+                LLVM            -> B.writeFile "out.o" $ encode wasm
+                -- Compile outfile -> compile llvm outfile
+                -- Run             -> run llvm >>= T.putStr
                 Ast             -> error "unreachable"
