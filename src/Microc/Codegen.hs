@@ -519,8 +519,8 @@ codegenSexpr (t, SBinop op lhs rhs) = do
                 lift $ arg $ mul l r
             _ -> error "Invalid type for Mult"
         Div -> case t of
-            TyInt -> lift $ arg $ div_s (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyFloat -> lift $ arg $ div_f (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            TyInt -> lift $ appendExpr [IBinOp BS32 IDivS]
+            TyFloat -> lift $ appendExpr [FBinOp BS64 FDiv]
             _ -> error "Invalid type for Div"
         Equal -> case fst lhs of
             TyInt -> do
@@ -567,60 +567,24 @@ codegenSexpr (t, SBinop op lhs rhs) = do
                 lift $ arg $ ne l r
             _ -> error "Invalid type for Neq"
         Less -> case fst lhs of
-            TyInt -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ lt_s l r
-            TyChar -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ lt_u l r
-            TyFloat -> do
-                r <- lift $ produce (Proxy :: Proxy F64)
-                l <- lift $ produce (Proxy :: Proxy F64)
-                lift $ arg $ lt_f l r
+            TyInt -> lift $ appendExpr [IRelOp BS32 ILtS]
+            TyChar -> lift $ appendExpr [IRelOp BS32 ILtU]
+            TyFloat -> lift $ appendExpr [FRelOp BS64 FLt]
             _ -> error "Invalid type for Less"
         Leq -> case fst lhs of
-            TyInt -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ le_s l r
-            TyChar -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ le_u l r
-            TyFloat -> do
-                r <- lift $ produce (Proxy :: Proxy F64)
-                l <- lift $ produce (Proxy :: Proxy F64)
-                lift $ arg $ le_f l r
+            TyInt -> lift $ appendExpr [IRelOp BS32 ILeS]
+            TyChar -> lift $ appendExpr [IRelOp BS32 ILeU]
+            TyFloat -> lift $ appendExpr [FRelOp BS64 FLe]
             _ -> error "Invalid type for Leq"
         Greater -> case fst lhs of
-            TyInt -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ gt_s l r
-            TyChar -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ gt_u l r
-            TyFloat -> do
-                r <- lift $ produce (Proxy :: Proxy F64)
-                l <- lift $ produce (Proxy :: Proxy F64)
-                lift $ arg $ gt_f l r
+            TyInt -> lift $ appendExpr [IRelOp BS32 IGtS]
+            TyChar -> lift $ appendExpr [IRelOp BS32 IGtU]
+            TyFloat -> lift $ appendExpr [FRelOp BS64 FGt]
             _ -> error "Invalid type for Greater"
         Geq -> case fst lhs of
-            TyInt -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ ge_s l r
-            TyChar -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ ge_u l r
-            TyFloat -> do
-                r <- lift $ produce (Proxy :: Proxy F64)
-                l <- lift $ produce (Proxy :: Proxy F64)
-                lift $ arg $ ge_f l r
+            TyInt -> lift $ appendExpr [IRelOp BS32 IGeS]
+            TyChar -> lift $ appendExpr [IRelOp BS32 IGeU]
+            TyFloat -> lift $ appendExpr [FRelOp BS64 FGe]
             _ -> error "Invalid type for Geq"
         And -> do
             r <- lift $ produce (Proxy :: Proxy I32)
@@ -645,11 +609,11 @@ codegenSexpr (t, SUnop op e) = do
     case op of
         Neg -> case t of
             TyInt -> do
-                lift $ arg $ i32c 0
-                lift $ arg $ sub (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyFloat -> lift $ arg $ neg_f (Proxy :: Proxy F64)
+                lift $ appendExpr [I32Const 0]
+                lift $ appendExpr [IBinOp BS32 ISub]
+            TyFloat -> lift $ appendExpr [FUnOp BS64 FNeg]
             _ -> error "Invalid type for Neg"
-        Not -> lift $ arg $ eqz (Proxy :: Proxy I32)
+        Not -> lift $ appendExpr [I32Eqz]
 
 codegenSexpr (_, SCall fun es) = do
     env <- ask
