@@ -586,22 +586,10 @@ codegenSexpr (t, SBinop op lhs rhs) = do
             TyChar -> lift $ appendExpr [IRelOp BS32 IGeU]
             TyFloat -> lift $ appendExpr [FRelOp BS64 FGe]
             _ -> error "Invalid type for Geq"
-        And -> do
-            r <- lift $ produce (Proxy :: Proxy I32)
-            l <- lift $ produce (Proxy :: Proxy I32)
-            lift $ arg $ Language.Wasm.Builder.and l r
-        Or -> do
-            r <- lift $ produce (Proxy :: Proxy I32)
-            l <- lift $ produce (Proxy :: Proxy I32)
-            lift $ arg $ Language.Wasm.Builder.or l r
-        BitAnd -> do
-            r <- lift $ produce (Proxy :: Proxy I32)
-            l <- lift $ produce (Proxy :: Proxy I32)
-            lift $ arg $ Language.Wasm.Builder.and l r
-        BitOr -> do
-            r <- lift $ produce (Proxy :: Proxy I32)
-            l <- lift $ produce (Proxy :: Proxy I32)
-            lift $ arg $ Language.Wasm.Builder.or l r
+        And -> lift $ appendExpr [IBinOp BS32 IAnd]
+        Or -> lift $ appendExpr [IBinOp BS32 IOr]
+        BitAnd -> lift $ appendExpr [IBinOp BS32 IAnd]
+        BitOr -> lift $ appendExpr [IBinOp BS32 IOr]
         _ -> error $ "Binary operator not yet implemented: " ++ show op
 
 codegenSexpr (t, SUnop op e) = do
