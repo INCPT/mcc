@@ -473,15 +473,15 @@ codegenSexpr (TyInt, SSizeof t) = lift $ arg $ i32c (fromIntegral $ sizeOf t)
 codegenSexpr (_, LVal (SId name)) = do
     env <- ask
     case M.lookup name (locals env) of
-        Just loc -> lift $ arg $ produce loc
+        Just (Loc idx) -> lift $ appendExpr [GetLocal idx]
         Nothing -> error $ "Variable not found: " ++ T.unpack name
 
 codegenSexpr (_, SAssign (SId name) rhs) = do
     env <- ask
     case M.lookup name (locals env) of
-        Just loc -> do
+        Just (Loc idx) -> do
             codegenSexpr rhs
-            lift $ loc .= produce (Proxy :: Proxy I32)  -- simplified for now
+            lift $ appendExpr [SetLocal idx]
         Nothing -> error $ "Variable not found: " ++ T.unpack name
 
 codegenSexpr (t, SBinop op lhs rhs) = do
@@ -489,82 +489,34 @@ codegenSexpr (t, SBinop op lhs rhs) = do
     codegenSexpr rhs
     case op of
         Add -> case t of
-            TyInt -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ add l r
-            TyFloat -> do
-                r <- lift $ produce (Proxy :: Proxy F64)
-                l <- lift $ produce (Proxy :: Proxy F64)
-                lift $ arg $ add l r
+            TyInt -> lift $ appendExpr [IBinOp BS32 IAdd]
+            TyFloat -> lift $ appendExpr [FBinOp BS64 FAdd]
             _ -> error "Invalid type for Add"
         Sub -> case t of
-            TyInt -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ sub l r
-            TyFloat -> do
-                r <- lift $ produce (Proxy :: Proxy F64)
-                l <- lift $ produce (Proxy :: Proxy F64)
-                lift $ arg $ sub l r
+            TyInt -> lift $ appendExpr [IBinOp BS32 ISub]
+            TyFloat -> lift $ appendExpr [FBinOp BS64 FSub]
             _ -> error "Invalid type for Sub"
         Mult -> case t of
-            TyInt -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ mul l r
-            TyFloat -> do
-                r <- lift $ produce (Proxy :: Proxy F64)
-                l <- lift $ produce (Proxy :: Proxy F64)
-                lift $ arg $ mul l r
+            TyInt -> lift $ appendExpr [IBinOp BS32 IMul]
+            TyFloat -> lift $ appendExpr [FBinOp BS64 FMul]
             _ -> error "Invalid type for Mult"
         Div -> case t of
             TyInt -> lift $ appendExpr [IBinOp BS32 IDivS]
             TyFloat -> lift $ appendExpr [FBinOp BS64 FDiv]
             _ -> error "Invalid type for Div"
         Equal -> case fst lhs of
-            TyInt -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ eq l r
-            TyBool -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ eq l r
-            TyChar -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ eq l r
-            TyFloat -> do
-                r <- lift $ produce (Proxy :: Proxy F64)
-                l <- lift $ produce (Proxy :: Proxy F64)
-                lift $ arg $ eq l r
-            Pointer _ -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ eq l r
+            TyInt -> lift $ appendExpr [IRelOp BS32 IEq]
+            TyBool -> lift $ appendExpr [IRelOp BS32 IEq]
+            TyChar -> lift $ appendExpr [IRelOp BS32 IEq]
+            TyFloat -> lift $ appendExpr [FRelOp BS64 FEq]
+            Pointer _ -> lift $ appendExpr [IRelOp BS32 IEq]
             _ -> error "Invalid type for Equal"
         Neq -> case fst lhs of
-            TyInt -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ ne l r
-            TyBool -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ ne l r
-            TyChar -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ ne l r
-            TyFloat -> do
-                r <- lift $ produce (Proxy :: Proxy F64)
-                l <- lift $ produce (Proxy :: Proxy F64)
-                lift $ arg $ ne l r
-            Pointer _ -> do
-                r <- lift $ produce (Proxy :: Proxy I32)
-                l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ ne l r
+            TyInt -> lift $ appendExpr [IRelOp BS32 INe]
+            TyBool -> lift $ appendExpr [IRelOp BS32 INe]
+            TyChar -> lift $ appendExpr [IRelOp BS32 INe]
+            TyFloat -> lift $ appendExpr [FRelOp BS64 FNe]
+            Pointer _ -> lift $ appendExpr [IRelOp BS32 INe]
             _ -> error "Invalid type for Neq"
         Less -> case fst lhs of
             TyInt -> lift $ appendExpr [IRelOp BS32 ILtS]
@@ -607,7 +559,7 @@ codegenSexpr (_, SCall fun es) = do
     env <- ask
     mapM_ codegenSexpr es
     case M.lookup fun (funcs env) of
-        Just fn -> lift $ arg $ call fn (replicate (length es) (return ()))
+        Just (Fn idx) -> lift $ appendExpr [Call idx]
         Nothing -> error $ "Function not found: " ++ T.unpack fun
 
 codegenSexpr (_, SNoexpr) = return ()
@@ -618,8 +570,8 @@ codegenSexpr sx = error $ "Expression not yet implemented: " ++ show sx
 codegenStatement :: SStatement -> Codegen ()
 codegenStatement (SExpr e) = codegenSexpr e
 codegenStatement (SReturn e) = case e of
-    (TyVoid, SNoexpr) -> return ()
-    _ -> codegenSexpr e >> lift (finish (Proxy :: Proxy I32))  -- simplified
+    (TyVoid, SNoexpr) -> lift $ appendExpr [Return]
+    _ -> codegenSexpr e >> lift (appendExpr [Return])
 codegenStatement (SBlock ss) = mapM_ codegenStatement ss
 codegenStatement _ = error "Statement not yet implemented"
 
