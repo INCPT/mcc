@@ -473,15 +473,17 @@ codegenSexpr (TyInt, SSizeof t) = lift $ arg $ i32c (fromIntegral $ sizeOf t)
 codegenSexpr (_, LVal (SId name)) = do
     env <- ask
     case M.lookup name (locals env) of
-        Just (Loc idx) -> lift $ appendExpr [GetLocal idx]
+        Just loc -> case loc of
+            Loc idx -> lift $ appendExpr [GetLocal idx]
         Nothing -> error $ "Variable not found: " ++ T.unpack name
 
 codegenSexpr (_, SAssign (SId name) rhs) = do
     env <- ask
     case M.lookup name (locals env) of
-        Just (Loc idx) -> do
+        Just loc -> do
             codegenSexpr rhs
-            lift $ appendExpr [SetLocal idx]
+            case loc of
+                Loc idx -> lift $ appendExpr [SetLocal idx]
         Nothing -> error $ "Variable not found: " ++ T.unpack name
 
 codegenSexpr (t, SBinop op lhs rhs) = do
@@ -579,10 +581,10 @@ codegenStatement _ = error "Statement not yet implemented"
 codegenFunc :: SFunction -> GenMod (Fn ())
 codegenFunc f = do
     fn <- funRec () $ \self -> do
-        -- Create parameters
-        paramLocs <- mapM (\(Bind t _) -> param (typeProxy t)) (sformals f)
+        -- Create parameters - we need to handle each type explicitly
+        paramLocs <- mapM createParam (sformals f)
         -- Create locals
-        localLocs <- mapM (\(Bind t _) -> local (typeProxy t)) (slocals f)
+        localLocs <- mapM createLocal (slocals f)
         
         let paramMap = M.fromList $ zip (map (\(Bind _ n) -> n) (sformals f)) paramLocs
         let localMap = M.fromList $ zip (map (\(Bind _ n) -> n) (slocals f)) localLocs
@@ -601,13 +603,23 @@ codegenFunc f = do
         return ()
     return fn
   where
-    typeProxy :: Type -> Proxy ValueType
-    typeProxy TyInt = Proxy
-    typeProxy TyFloat = Proxy
-    typeProxy TyBool = Proxy
-    typeProxy TyChar = Proxy
-    typeProxy (Pointer _) = Proxy
-    typeProxy _ = error "Unsupported type"
+    createParam :: Bind -> GenFun (Loc ValueType)
+    createParam (Bind t _) = case t of
+        TyInt -> param (Proxy @I32)
+        TyFloat -> param (Proxy @F64)
+        TyBool -> param (Proxy @I32)
+        TyChar -> param (Proxy @I32)
+        Pointer _ -> param (Proxy @I32)
+        _ -> error "Unsupported parameter type"
+    
+    createLocal :: Bind -> GenFun (Loc ValueType)
+    createLocal (Bind t _) = case t of
+        TyInt -> local (Proxy @I32)
+        TyFloat -> local (Proxy @F64)
+        TyBool -> local (Proxy @I32)
+        TyChar -> local (Proxy @I32)
+        Pointer _ -> local (Proxy @I32)
+        _ -> error "Unsupported local type"
 
 -- Main code generation entry point
 codegenProgram :: SProgram -> Module
