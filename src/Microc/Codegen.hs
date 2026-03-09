@@ -489,59 +489,161 @@ codegenSexpr (t, SBinop op lhs rhs) = do
     codegenSexpr rhs
     case op of
         Add -> case t of
-            TyInt -> lift $ arg $ add @(Proxy I32) @(Proxy I32)
-            TyFloat -> lift $ arg $ add (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            TyInt -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ add l r
+            TyFloat -> do
+                r <- lift $ produce (Proxy :: Proxy F64)
+                l <- lift $ produce (Proxy :: Proxy F64)
+                lift $ arg $ add l r
             _ -> error "Invalid type for Add"
         Sub -> case t of
-            TyInt -> lift $ arg $ sub (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyFloat -> lift $ arg $ sub (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            TyInt -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy F64)
+                lift $ arg $ sub l r
+            TyFloat -> do
+                r <- lift $ produce (Proxy :: Proxy F64)
+                l <- lift $ produce (Proxy :: Proxy F64)
+                lift $ arg $ sub l r
             _ -> error "Invalid type for Sub"
         Mult -> case t of
-            TyInt -> lift $ arg $ mul (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyFloat -> lift $ arg $ mul (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            TyInt -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ mul l r
+            TyFloat -> do
+                r <- lift $ produce (Proxy :: Proxy F64)
+                l <- lift $ produce (Proxy :: Proxy F64)
+                lift $ arg $ mul l r
             _ -> error "Invalid type for Mult"
         Div -> case t of
-            TyInt -> lift $ arg $ div_s (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyFloat -> lift $ arg $ div_f (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            TyInt -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ div_s l r
+            TyFloat -> do
+                r <- lift $ produce (Proxy :: Proxy F64)
+                l <- lift $ produce (Proxy :: Proxy F64)
+                lift $ arg $ div_f l r
             _ -> error "Invalid type for Div"
         Equal -> case fst lhs of
-            TyInt -> lift $ arg $ eq (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyBool -> lift $ arg $ eq (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyChar -> lift $ arg $ eq (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyFloat -> lift $ arg $ eq (Proxy :: Proxy F64) (Proxy :: Proxy F64)
-            Pointer _ -> lift $ arg $ eq (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyInt -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ eq l r
+            TyBool -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ eq l r
+            TyChar -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ eq l r
+            TyFloat -> do
+                r <- lift $ produce (Proxy :: Proxy F64)
+                l <- lift $ produce (Proxy :: Proxy F64)
+                lift $ arg $ eq l r
+            Pointer _ -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ eq l r
             _ -> error "Invalid type for Equal"
         Neq -> case fst lhs of
-            TyInt -> lift $ arg $ ne (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyBool -> lift $ arg $ ne (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyChar -> lift $ arg $ ne (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyFloat -> lift $ arg $ ne (Proxy :: Proxy F64) (Proxy :: Proxy F64)
-            Pointer _ -> lift $ arg $ ne (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+            TyInt -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ ne l r
+            TyBool -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ ne l r
+            TyChar -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ ne l r
+            TyFloat -> do
+                r <- lift $ produce (Proxy :: Proxy F64)
+                l <- lift $ produce (Proxy :: Proxy F64)
+                lift $ arg $ ne l r
+            Pointer _ -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ ne l r
             _ -> error "Invalid type for Neq"
         Less -> case fst lhs of
-            TyInt -> lift $ arg $ lt_s (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyChar -> lift $ arg $ lt_u (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyFloat -> lift $ arg $ lt_f (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            TyInt -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ lt_s l r
+            TyChar -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ lt_u l r
+            TyFloat -> do
+                r <- lift $ produce (Proxy :: Proxy F64)
+                l <- lift $ produce (Proxy :: Proxy F64)
+                lift $ arg $ lt_f l r
             _ -> error "Invalid type for Less"
         Leq -> case fst lhs of
-            TyInt -> lift $ arg $ le_s (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyChar -> lift $ arg $ le_u (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyFloat -> lift $ arg $ le_f (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            TyInt -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ le_s l r
+            TyChar -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ le_u l r
+            TyFloat -> do
+                r <- lift $ produce (Proxy :: Proxy F64)
+                l <- lift $ produce (Proxy :: Proxy F64)
+                lift $ arg $ le_f l r
             _ -> error "Invalid type for Leq"
         Greater -> case fst lhs of
-            TyInt -> lift $ arg $ gt_s (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyChar -> lift $ arg $ gt_u (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyFloat -> lift $ arg $ gt_f (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            TyInt -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ gt_s l r
+            TyChar -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ gt_u l r
+            TyFloat -> do
+                r <- lift $ produce (Proxy :: Proxy F64)
+                l <- lift $ produce (Proxy :: Proxy F64)
+                lift $ arg $ gt_f l r
             _ -> error "Invalid type for Greater"
         Geq -> case fst lhs of
-            TyInt -> lift $ arg $ ge_s (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyChar -> lift $ arg $ ge_u (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyFloat -> lift $ arg $ ge_f (Proxy :: Proxy F64) (Proxy :: Proxy F64)
+            TyInt -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ ge_s l r
+            TyChar -> do
+                r <- lift $ produce (Proxy :: Proxy I32)
+                l <- lift $ produce (Proxy :: Proxy I32)
+                lift $ arg $ ge_u l r
+            TyFloat -> do
+                r <- lift $ produce (Proxy :: Proxy F64)
+                l <- lift $ produce (Proxy :: Proxy F64)
+                lift $ arg $ ge_f l r
             _ -> error "Invalid type for Geq"
-        And -> lift $ arg $ Language.Wasm.Builder.and (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-        Or -> lift $ arg $ Language.Wasm.Builder.or (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-        BitAnd -> lift $ arg $ Language.Wasm.Builder.and (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-        BitOr -> lift $ arg $ Language.Wasm.Builder.or (Proxy :: Proxy I32) (Proxy :: Proxy I32)
+        And -> do
+            r <- lift $ produce (Proxy :: Proxy I32)
+            l <- lift $ produce (Proxy :: Proxy I32)
+            lift $ arg $ Language.Wasm.Builder.and l r
+        Or -> do
+            r <- lift $ produce (Proxy :: Proxy I32)
+            l <- lift $ produce (Proxy :: Proxy I32)
+            lift $ arg $ Language.Wasm.Builder.or l r
+        BitAnd -> do
+            r <- lift $ produce (Proxy :: Proxy I32)
+            l <- lift $ produce (Proxy :: Proxy I32)
+            lift $ arg $ Language.Wasm.Builder.and l r
+        BitOr -> do
+            r <- lift $ produce (Proxy :: Proxy I32)
+            l <- lift $ produce (Proxy :: Proxy I32)
+            lift $ arg $ Language.Wasm.Builder.or l r
         _ -> error $ "Binary operator not yet implemented: " ++ show op
 
 codegenSexpr (t, SUnop op e) = do
@@ -549,11 +651,16 @@ codegenSexpr (t, SUnop op e) = do
     case op of
         Neg -> case t of
             TyInt -> do
-                lift $ arg $ i32c 0
-                lift $ arg $ sub (Proxy :: Proxy I32) (Proxy :: Proxy I32)
-            TyFloat -> lift $ arg $ neg_f (Proxy :: Proxy F64)
+                val <- lift $ produce (Proxy :: Proxy I32)
+                zero <- lift $ i32c 0
+                lift $ arg $ sub zero val
+            TyFloat -> do
+                val <- lift $ produce (Proxy :: Proxy F64)
+                lift $ arg $ neg_f val
             _ -> error "Invalid type for Neg"
-        Not -> lift $ arg $ eqz (Proxy :: Proxy I32)
+        Not -> do
+            val <- lift $ produce (Proxy :: Proxy I32)
+            lift $ arg $ eqz val
 
 codegenSexpr (_, SCall fun es) = do
     env <- ask
