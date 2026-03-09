@@ -522,11 +522,11 @@ codegenSexpr (t, SBinop op lhs rhs) = do
             TyInt -> do
                 r <- lift $ produce (Proxy :: Proxy I32)
                 l <- lift $ produce (Proxy :: Proxy I32)
-                lift $ arg $ div_s (l :: Proxy I32) (r :: Proxy I32)
+                lift $ arg $ div_s l r
             TyFloat -> do
                 r <- lift $ produce (Proxy :: Proxy F64)
                 l <- lift $ produce (Proxy :: Proxy F64)
-                lift $ arg $ div_f (l :: Proxy F64) (r :: Proxy F64)
+                lift $ arg $ div_f l r
             _ -> error "Invalid type for Div"
         Equal -> case fst lhs of
             TyInt -> do
@@ -653,14 +653,14 @@ codegenSexpr (t, SUnop op e) = do
             TyInt -> do
                 val <- lift $ produce (Proxy :: Proxy I32)
                 zero <- lift $ i32c 0
-                lift $ arg $ sub (zero :: Proxy I32) (val :: Proxy I32)
+                lift $ arg $ sub zero val
             TyFloat -> do
                 val <- lift $ produce (Proxy :: Proxy F64)
-                lift $ arg $ neg_f (val :: Proxy F64)
+                lift $ arg $ neg_f val
             _ -> error "Invalid type for Neg"
         Not -> do
             val <- lift $ produce (Proxy :: Proxy I32)
-            lift $ arg $ eqz (val :: Proxy I32)
+            lift $ arg $ eqz val
 
 codegenSexpr (_, SCall fun es) = do
     env <- ask
