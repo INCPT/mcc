@@ -473,17 +473,15 @@ codegenSexpr (TyInt, SSizeof t) = lift $ arg $ i32c (fromIntegral $ sizeOf t)
 codegenSexpr (_, LVal (SId name)) = do
     env <- ask
     case M.lookup name (locals env) of
-        Just loc -> case loc of
-            Loc idx -> lift $ appendExpr [GetLocal idx]
+        Just (Loc idx :: Loc ValueType) -> lift $ appendExpr [GetLocal idx]
         Nothing -> error $ "Variable not found: " ++ T.unpack name
 
 codegenSexpr (_, SAssign (SId name) rhs) = do
     env <- ask
     case M.lookup name (locals env) of
-        Just loc -> do
+        Just (Loc idx :: Loc ValueType) -> do
             codegenSexpr rhs
-            case loc of
-                Loc idx -> lift $ appendExpr [SetLocal idx]
+            lift $ appendExpr [SetLocal idx]
         Nothing -> error $ "Variable not found: " ++ T.unpack name
 
 codegenSexpr (t, SBinop op lhs rhs) = do
@@ -604,22 +602,30 @@ codegenFunc f = do
     return fn
   where
     createParam :: Bind -> GenFun (Loc ValueType)
-    createParam (Bind t _) = case t of
-        TyInt -> param (Proxy @I32)
-        TyFloat -> param (Proxy @F64)
-        TyBool -> param (Proxy @I32)
-        TyChar -> param (Proxy @I32)
-        Pointer _ -> param (Proxy @I32)
-        _ -> error "Unsupported parameter type"
+    createParam (Bind t _) = do
+        loc <- case t of
+            TyInt -> param (Proxy @I32)
+            TyFloat -> param (Proxy @F64)
+            TyBool -> param (Proxy @I32)
+            TyChar -> param (Proxy @I32)
+            Pointer _ -> param (Proxy @I32)
+            _ -> error "Unsupported parameter type"
+        -- Convert Loc t to Loc ValueType by extracting and rewrapping the index
+        case loc of
+            Loc idx -> return (Loc idx :: Loc ValueType)
     
     createLocal :: Bind -> GenFun (Loc ValueType)
-    createLocal (Bind t _) = case t of
-        TyInt -> local (Proxy @I32)
-        TyFloat -> local (Proxy @F64)
-        TyBool -> local (Proxy @I32)
-        TyChar -> local (Proxy @I32)
-        Pointer _ -> local (Proxy @I32)
-        _ -> error "Unsupported local type"
+    createLocal (Bind t _) = do
+        loc <- case t of
+            TyInt -> local (Proxy @I32)
+            TyFloat -> local (Proxy @F64)
+            TyBool -> local (Proxy @I32)
+            TyChar -> local (Proxy @I32)
+            Pointer _ -> local (Proxy @I32)
+            _ -> error "Unsupported local type"
+        -- Convert Loc t to Loc ValueType by extracting and rewrapping the index
+        case loc of
+            Loc idx -> return (Loc idx :: Loc ValueType)
 
 -- Main code generation entry point
 codegenProgram :: SProgram -> Module
