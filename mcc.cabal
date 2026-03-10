@@ -41,6 +41,7 @@ library
       Microc.Semant.Error
       Microc.Toplevel
       Microc.Utils
+      OSC.AST
   other-modules:
       Microc.Parser.Generator
       Microc.Scanner.Generator
