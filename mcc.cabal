@@ -53,7 +53,8 @@ library
       alex
     , happy
   build-depends:
-      array
+      BNFC
+    , array
     , base >=4.7 && <5
     , bytestring
     , cereal
@@ -84,7 +85,8 @@ executable mcc
       alex
     , happy
   build-depends:
-      array
+      BNFC
+    , array
     , base >=4.7 && <5
     , bytestring
     , cereal
@@ -116,7 +118,8 @@ test-suite testall
       OverloadedStrings, LambdaCase
   ghc-options: -Wall -fno-warn-name-shadowing -Wcompat -Wincomplete-uni-patterns -fno-defer-type-errors
   build-depends:
-      array
+      BNFC
+    , array
     , base >=4.7 && <5
     , bytestring
     , cereal
@@ -149,7 +152,8 @@ benchmark bench
       OverloadedStrings, LambdaCase
   ghc-options: -Wall -fno-warn-name-shadowing -Wcompat -Wincomplete-uni-patterns -fno-defer-type-errors
   build-depends:
-      array
+      BNFC
+    , array
     , base >=4.7 && <5
     , bytestring
     , cereal
