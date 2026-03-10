@@ -1,0 +1,108 @@
+-- Program structure
+entrypoints Program ;
+
+Prog. Program ::= [TopLevel] ;
+
+-- Top-level definitions
+TLBind.     TopLevel ::= Ident ":" Type "=" Expr ;
+TLTypeAlias. TopLevel ::= "type" Ident "=" Type ;
+
+separator TopLevel "" ;
+
+-- Types
+TyI32.    Type ::= "i32" ;
+TyI64.    Type ::= "i64" ;
+TyF32.    Type ::= "f32" ;
+TyF64.    Type ::= "f64" ;
+TyBool.   Type ::= "bool" ;
+TyArray.  Type ::= Type "[" Integer "]" ;
+TyStruct. Type ::= "{" [StructField] "}" ;
+TyFunc.   Type ::= Type "->" Type ;
+TyName.   Type ::= Ident ;
+
+coercions Type 1 ;
+
+-- Structure fields
+SField. StructField ::= Ident ":" Type ;
+
+separator StructField "," ;
+separator nonempty StructField "" ;
+
+-- Expressions
+ELitInt.    Expr6 ::= Integer ;
+ELitFloat.  Expr6 ::= Double ;
+ELitBool.   Expr6 ::= Boolean ;
+EVar.       Expr6 ::= Ident ;
+EArrayInit. Expr6 ::= "[" Expr "..." "]" ;
+EStructLit. Expr6 ::= "{" [StructInit] "}" ;
+ELambda.    Expr6 ::= "\\" LambdaParam "->" Expr ;
+ELambdaMulti. Expr6 ::= "\\" LambdaParam "->" [Statement] ;
+EParen.     Expr6 ::= "(" Expr ")" ;
+
+-- Lambda parameters
+LPVar.    LambdaParam ::= Ident ;
+LPSplice. LambdaParam ::= "{" ".." "}" ;
+
+-- Structure initialization
+SInit. StructInit ::= Ident ":" Expr ;
+
+separator StructInit "," ;
+separator nonempty StructInit "" ;
+
+-- Function application (left associative, higher precedence than operators)
+EApp. Expr5 ::= Expr5 Expr6 ;
+
+-- Unary operators
+ENeg.  Expr4 ::= "-" Expr5 ;
+ENot.  Expr4 ::= "!" Expr5 ;
+
+-- Binary operators (following standard precedence)
+EPow.  Expr3 ::= Expr3 "^" Expr4 ;
+
+EMul.  Expr2 ::= Expr2 "*" Expr3 ;
+EDiv.  Expr2 ::= Expr2 "/" Expr3 ;
+EMod.  Expr2 ::= Expr2 "%" Expr3 ;
+
+EAdd.  Expr1 ::= Expr1 "+" Expr2 ;
+ESub.  Expr1 ::= Expr1 "-" Expr2 ;
+
+-- Relational operators
+ELt.   Expr ::= Expr1 "<" Expr1 ;
+ELe.   Expr ::= Expr1 "<=" Expr1 ;
+EGt.   Expr ::= Expr1 ">" Expr1 ;
+EGe.   Expr ::= Expr1 ">=" Expr1 ;
+EEq.   Expr ::= Expr1 "==" Expr1 ;
+ENeq.  Expr ::= Expr1 "!=" Expr1 ;
+
+coercions Expr 6 ;
+
+-- Boolean literals
+BTrue.  Boolean ::= "true" ;
+BFalse. Boolean ::= "false" ;
+
+-- Statements
+SBind.      Statement ::= Ident ":" Type "=" Expr ;
+SAssign.    Statement ::= Ident "=" Expr ;
+SIncr.      Statement ::= Ident "++" ;
+SDecr.      Statement ::= Ident "--" ;
+SAddAssign. Statement ::= Ident "+=" Expr ;
+SSubAssign. Statement ::= Ident "-=" Expr ;
+SMulAssign. Statement ::= Ident "*=" Expr ;
+SDivAssign. Statement ::= Ident "/=" Expr ;
+SWhile.     Statement ::= "while" Expr [Statement] ;
+SFor.       Statement ::= "for" Ident ":" Type "=" Expr ";" Expr ";" Statement [Statement] ;
+SSwitch.    Statement ::= "switch" Expr [SwitchCase] ;
+SReturn.    Statement ::= "return" Expr ;
+SExpr.      Statement ::= Expr ;
+
+separator Statement "" ;
+
+-- Switch cases
+SCCase.    SwitchCase ::= Expr "->" [Statement] ;
+SCDefault. SwitchCase ::= "_" "->" [Statement] ;
+
+separator nonempty SwitchCase "" ;
+
+-- Comments
+comment "//" ;
+comment "/*" "*/" ;
