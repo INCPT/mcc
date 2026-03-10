@@ -1,0 +1,103 @@
+// FM Synthesis Module with Closure-based State
+// Clean functional approach with hidden mutable state
+
+// Constants
+pi: f32 = 3.14159265359
+two_pi: f32 = 6.28318531
+sample_rate: f32 = 44100.0
+
+// Phasor: generates phase values that advance based on frequency
+phasor: {} -> f32 -> f32 = \{} ->
+  phase: f32 = 0.0
+
+  return \freq ->
+    phase_increment: f32 = freq / sample_rate * two_pi
+    phase = phase + phase_increment
+    
+    // Wrap phase to [0, 2π]
+    while phase >= two_pi
+      phase = phase - two_pi
+    
+    return phase
+
+// Oscillator: generates waveforms using a phasor and wave function
+osc: { wave: f32 -> f32 } -> { freq: f32, amplitude: f32 } -> f32 = \{..} ->
+  ph: f32 -> f32 = phasor {}
+
+  return \{..} ->
+    wave (ph freq) * amplitude
+
+// Sine wave function
+sine_wave: f32 -> f32 = \phase ->
+  sin32 phase
+
+// FM synthesizer: 2-operator FM with modulator and carrier
+fm: {} -> { modulator_freq: f32, carrier_freq: f32, mod_index: f32 } -> f32 = \{} ->
+  // Create modulator oscillator
+  modulator: { freq: f32, amplitude: f32 } -> f32 = osc { wave: sine_wave }
+  
+  // Create carrier phasor (we need direct phase access for FM)
+  carrier_ph: f32 -> f32 = phasor {}
+  
+  // Mutable parameters
+  mod_freq: f32 = 0.0
+  carr_freq: f32 = 0.0
+  mod_idx: f32 = 0.0
+
+  return \{..} ->
+    // Update parameters
+    mod_freq = modulator_freq
+    carr_freq = carrier_freq
+    mod_idx = mod_index
+    
+    // Generate modulator output
+    mod_out: f32 = modulator { freq: mod_freq, amplitude: 1.0 }
+    
+    // Apply modulation index
+    modulation: f32 = mod_out * mod_idx
+    
+    // Get carrier phase and apply modulation
+    carr_phase: f32 = carrier_ph carr_freq
+    modulated_phase: f32 = carr_phase + modulation
+    
+    // Generate carrier output
+    output: f32 = sine_wave modulated_phase
+    
+    return output
+
+// Process a buffer of samples
+process_buffer: (f32 -> f32) -> i32 -> f32[1024] = \synth buffer_size ->
+  output: f32[1024] = [0.0...]
+  
+  for i: i32 = 0; i < buffer_size; i++
+    output[i] = synth 0.0
+  
+  return output
+
+// Example: Create an FM synth instance
+create_fm_synth: f32 -> f32 -> f32 -> f32 -> f32 = \carr_freq mod_freq mod_idx ->
+  synth: { modulator_freq: f32, carrier_freq: f32, mod_index: f32 } -> f32 = fm {}
+  
+  return synth {
+    modulator_freq: mod_freq
+    carrier_freq: carr_freq
+    mod_index: mod_idx
+  }
+
+// Example: Sweep modulation index over time
+fm_sweep: {} -> f32 = \{} ->
+  synth: { modulator_freq: f32, carrier_freq: f32, mod_index: f32 } -> f32 = fm {}
+  mod_idx: f32 = 0.0
+  
+  return \() ->
+    // Slowly increase modulation index
+    mod_idx = mod_idx + 0.0001
+    
+    if mod_idx > 10.0
+      mod_idx = 0.0
+    
+    return synth {
+      modulator_freq: 220.0
+      carrier_freq: 440.0
+      mod_index: mod_idx
+    }
