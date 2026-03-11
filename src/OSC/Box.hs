@@ -52,10 +52,16 @@ b2 = res
 
 data Binding expr = Binding Ident expr
 
+-- TODO: streams not in scope outside of graph
+-- TODO: branch operation computes both branches
+
+data Index = IConst Number | IVar Ident
+
 data Expr
   = EConst Number
-  | EGraph Graph [Int] -- ref to other graphs already inlined; [Int] is the access index
-  | EVar Ident         -- references a regular class var, not a graph
+  | EVar Ident           -- references a regular class var, not a graph
+  | EGraph Graph         -- ref to other graphs already inlined
+  | ESelect Expr [Index]
   | ERec Int Ident [Binding Expr] Expr -- rec delay |prev| -> expr
   | ECall String Expr Expr
   | EArr [Expr]
@@ -69,9 +75,10 @@ data LBox
   = LBConst Number
   | LBVar Ident
   | LBDelay Int BoxIndex
-  | LBFunc String BoxIndex BoxIndex -- TODO: func must be pure
+  | LBSelect [BoxIndex] BoxIndex 
+  | LBFunc String [BoxIndex] [BoxIndex] -- TODO: func must be pure
 
-inlineGraph :: Graph -> Expr
+inlineGraph :: Expr -> [Index] -> (Expr, Maybe (Ident, [Index]))
 inlineGraph = undefined
 
 inlineExpr :: [Binding Expr] -> Expr -> Expr
@@ -89,6 +96,8 @@ exprToBoxes (ERec delay n bindings ret) = do
   -- TODO: replace leaf values in ret with the delay boxes
   retBoxes <- exprToBoxes ret
   traverse newBox $ map (LBDelay delay) retBoxes
+
+-- TODO: should this be legal: f: f32[4] -> f32, rec |prev| return (f prev)
 
 --------------------------------------------------------------------------------
 
