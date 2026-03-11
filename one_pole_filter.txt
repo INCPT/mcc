@@ -1,0 +1,98 @@
+// One-Pole Filter Module
+// Simple first-order lowpass/highpass filter with closure-based state
+
+// Constants
+sample_rate: f32 = 44100.0
+
+// One-pole lowpass filter
+// Implements: y[n] = y[n-1] + coeff * (x[n] - y[n-1])
+// where coeff = 1 - e^(-2π * cutoff / sample_rate)
+lpf: {} -> f32 -> f32 -> f32 = \{} ->
+  y: f32 = 0.0
+  
+  return \cutoff input ->
+    // Calculate filter coefficient from cutoff frequency
+    two_pi: f32 = 6.28318531
+    omega: f32 = two_pi * cutoff / sample_rate
+    coeff: f32 = 1.0 - exp32 (0.0 - omega)
+    
+    // Apply filter equation
+    y = y + coeff * (input - y)
+    
+    return y
+
+// One-pole highpass filter
+// Implements: y[n] = coeff * (y[n-1] + x[n] - x[n-1])
+// where coeff = 1 - e^(-2π * cutoff / sample_rate)
+hpf: {} -> f32 -> f32 -> f32 = \{} ->
+  y: f32 = 0.0
+  x_prev: f32 = 0.0
+  
+  return \cutoff input ->
+    // Calculate filter coefficient from cutoff frequency
+    two_pi: f32 = 6.28318531
+    omega: f32 = two_pi * cutoff / sample_rate
+    coeff: f32 = 1.0 - exp32 (0.0 - omega)
+    
+    // Apply filter equation
+    y = coeff * (y + input - x_prev)
+    x_prev = input
+    
+    return y
+
+// Generic one-pole filter with configurable type
+one_pole: { filter_type: i32 } -> f32 -> f32 -> f32 = \{..} ->
+  y: f32 = 0.0
+  x_prev: f32 = 0.0
+  
+  return \cutoff input ->
+    two_pi: f32 = 6.28318531
+    omega: f32 = two_pi * cutoff / sample_rate
+    coeff: f32 = 1.0 - exp32 (0.0 - omega)
+    
+    output: f32 = 0.0
+    
+    // 0 = lowpass, 1 = highpass
+    switch filter_type
+      0 ->
+        y = y + coeff * (input - y)
+        output = y
+      1 ->
+        y = coeff * (y + input - x_prev)
+        x_prev = input
+        output = y
+      _ ->
+        output = input
+    
+    return output
+
+// Process a buffer with a filter
+process_buffer: (f32 -> f32 -> f32) -> f32 -> i32 -> f32[1024] -> f32[1024] = \filter cutoff buffer_size input ->
+  output: f32[1024] = [0.0...]
+  
+  @inline everything
+  for i: i32 = 0; i < buffer_size; i++
+    output[i] = filter cutoff input[i]
+  
+  return output
+
+// Example: Sweep cutoff frequency over time
+filter_sweep: {} -> f32[1024] -> f32[1024] = \{} ->
+  filter: f32 -> f32 -> f32 = lpf {}
+  cutoff: f32 = 100.0
+  
+  return \input ->
+    output: f32[1024] = [0.0...]
+    buffer_size: i32 = 1024
+    
+    @inline everything
+    for i: i32 = 0; i < buffer_size; i++
+      // Sweep cutoff from 100Hz to 10kHz
+      cutoff = cutoff + 10.0
+      
+      if cutoff > 10000.0
+        cutoff = 100.0
+      
+      output[i] = filter cutoff input[i]
+    
+    return output
