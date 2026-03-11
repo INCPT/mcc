@@ -10,7 +10,7 @@ data Box
   = BConst Number
   | BVar Ident
   | BDelay Ident Int Box
-  | BFunc String Box Box
+  | BFunc String Box Box -- TODO: func must be pure
 
 flow :: Box -> String
 flow (BConst n) = show n
