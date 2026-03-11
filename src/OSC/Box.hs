@@ -52,18 +52,15 @@ b2 = res
 
 data Binding expr = Binding Ident expr
 
-data Array = Array [Int] [Expr] -- dimensions, flat array
-
 data Expr
   = EConst Number
   | EGraph Graph [Int] -- ref to other graphs already inlined; [Int] is the access index
-  | EVar Ident  -- references a regular class var, not a graph
+  | EVar Ident         -- references a regular class var, not a graph
   | ERec Int Ident [Binding Expr] Expr -- rec delay |prev| -> expr
   | ECall String Expr Expr
-  | EStruct [(String, Expr)]
-  | EArr Array
+  | EArr [Expr]
 
-data Graph = Graph [Binding Expr] Array
+data Graph = Graph [Binding Expr] Expr
 
 newtype BoxIndex = BoxIndex Int
   deriving Num
@@ -71,7 +68,7 @@ newtype BoxIndex = BoxIndex Int
 data LBox
   = LBConst Number
   | LBVar Ident
-  | LBDelay Ident Int BoxIndex
+  | LBDelay Int BoxIndex
   | LBFunc String BoxIndex BoxIndex -- TODO: func must be pure
 
 inlineGraph :: Graph -> Expr
@@ -80,29 +77,20 @@ inlineGraph = undefined
 inlineExpr :: [Binding Expr] -> Expr -> Expr
 inlineExpr = undefined
 
--- data Ret
---   = RConst Number
---   | RStruct [(String, Ret)]
---   | RArray [Int] [Ret]
+newBox :: LBox -> State (Map BoxIndex LBox) BoxIndex
+newBox = undefined
 
-data EExpr
-  = EEConst Number
-  | EEVar Ident     -- references a regular class var, not a graph
-  | EERec Int Ident [Binding EExpr] EExpr
-  | EECall String EExpr EExpr
-  | EEStruct [(String, EExpr)]
-  | EEArr Array
-
-exprToBoxes :: EExpr -> [LBox]
-exprToBoxes (EEConst n) = [LBConst n]
-exprToBoxes (EEVar n) = [LBVar n]
-exprToBoxes (EERec _ _ _ (EEConst n)) = [LBConst n]
-exprToBoxes (EERec delay n bindings _) = undefined
+exprToBoxes :: Expr -> State (Map BoxIndex LBox) [BoxIndex]
+exprToBoxes (EConst n) = pure <$> newBox (LBConst n)
+exprToBoxes (EVar n) = pure <$> newBox (LBVar n)
+exprToBoxes (ERec _ _ _ (EConst n)) = pure <$> newBox (LBConst n)
+exprToBoxes (ERec delay n bindings ret) = do
+  -- inline bindings into ret
+  -- TODO: replace leaf values in ret with the delay boxes
+  retBoxes <- exprToBoxes ret
+  traverse newBox $ map (LBDelay delay) retBoxes
 
 --------------------------------------------------------------------------------
-
-inc :: State BoxIndex BoxIndex
-inc = undefined
 
 desugar :: Map Ident Expr -> Graph -> State BoxIndex [LBox]
 desugar env (Graph bindings ret) = sequence
