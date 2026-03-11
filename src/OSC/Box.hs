@@ -86,7 +86,7 @@ inlineGraph :: Expr -> [Index] -> (Expr, Maybe (Ident, [Index]))
 inlineGraph = undefined
 
 -- TODO: semantic check of no mutual or self recursion between exprs/boxes
-inlineExpr :: [Binding Expr] -> Expr -> Expr
+inlineExpr :: Map Ident Expr -> [Binding Expr] -> Expr -> Expr
 inlineExpr = undefined
 
 newBox :: LBox -> State (Map BoxIndex LBox) BoxIndex
@@ -112,7 +112,10 @@ exprToBoxes env (ERec delay n bindings ret) = do
   -- TODO: replace leaf values in ret with the delay boxes
 
   rec
-    retBoxes <- exprToBoxes (env { identToBox = M.insert n argNode env.identToBox }) (inlineExpr bindings ret)
+    retBoxes <- exprToBoxes
+      (env { identToBox = M.insert n argNode env.identToBox })
+      (inlineExpr env.identToExpr bindings ret)
+
     delayBoxes <- traverse newBox $ map (LBDelay delay) retBoxes
     argNode <- newBox (LBArr delayBoxes)
 
