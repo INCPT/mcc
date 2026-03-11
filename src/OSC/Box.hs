@@ -82,12 +82,11 @@ data LBox
   | LBFunc String BoxIndex BoxIndex -- TODO: func must be pure
   deriving Show
 
-inlineGraph :: Expr -> [Index] -> (Expr, Maybe (Ident, [Index]))
-inlineGraph = undefined
-
 inlineExpr :: Map Ident Expr -> [Binding Expr] -> Expr -> Expr
 inlineExpr env bindings expr = inline (env `M.union` bindingMap) expr
   where
+    -- TODO: semantic check of no mutual or self recursion between exprs/boxes
+    -- TODO: no shadowing etc
     bindingMap = M.fromList [(n, e) | Binding n e <- bindings]
     
     inline :: Map Ident Expr -> Expr -> Expr
@@ -121,9 +120,6 @@ exprToBoxes env (EVar n)
   | otherwise = pure <$> newBox (LBVar n)
 exprToBoxes _ (ERec _ _ _ (EConst n)) = pure <$> newBox (LBConst n)
 exprToBoxes env (ERec delay n bindings ret) = do
-  -- replace n in bindings and ret with [
-  -- TODO: replace leaf values in ret with the delay boxes
-
   rec
     retBoxes <- exprToBoxes
       (env { identToBox = M.insert n argNode env.identToBox })
@@ -134,7 +130,6 @@ exprToBoxes env (ERec delay n bindings ret) = do
 
   pure retBoxes
 
--- TODO: semantic check of no mutual or self recursion between exprs/boxes
 -- TODO: should this be legal: f: f32[4] -> f32, rec |prev| return (f prev)
 
 --------------------------------------------------------------------------------
