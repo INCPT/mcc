@@ -55,6 +55,7 @@ typeSize (CType (TArray t dim)) = stypeSize t * product dim
 typeSize (CType (TStruct m)) = sum [ typeSize t | t <- M.elems m ]
 typeSize (CType (TAbs _ _)) = 4
 
+-- eliminate empty complex bindings, e.g. a: f32[] = b: a and b are interchangeable here (but not when they are simple)
 -- complex or captured values (including simple ones) go in linear memory
 -- captured values are passed as additional reference arguments to the function
 
