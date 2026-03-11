@@ -1,4 +1,5 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE RecursiveDo #-}
 
 module OSC.Box where
@@ -60,8 +61,8 @@ data Index = IConst Number | IVar Ident
 
 data Expr
   = EConst Number
-  | EVar Ident           -- references a regular class var, not a graph
-  | EGraph Graph         -- ref to other graphs already inlined
+  | EVar Ident
+  | EGraph Ident
   | ESelect Expr [Index]
   | ERec Int Ident [Binding Expr] Expr -- rec delay |prev| -> expr
   | ECall String Expr Expr
@@ -70,7 +71,7 @@ data Expr
 data Graph = Graph [Binding Expr] Expr
 
 newtype BoxIndex = BoxIndex Int
-  deriving (Num, Show)
+  deriving (Num, Eq, Ord, Show)
 
 data LBox
   = LBConst Number
@@ -95,10 +96,15 @@ newBox box = do
   ST.put (M.insert nextIdx box boxes)
   return nextIdx
 
-exprToBoxes :: Map Ident BoxIndex -> Expr -> State (Map BoxIndex LBox) [BoxIndex]
+data Env = Env
+  { identToBox :: Map Ident BoxIndex
+  , identToExpr :: Map Ident Expr
+  }
+
+exprToBoxes :: Env -> Expr -> State (Map BoxIndex LBox) [BoxIndex]
 exprToBoxes _ (EConst n) = pure <$> newBox (LBConst n)
 exprToBoxes env (EVar n)
-  | Just boxIndex <- M.lookup n env = pure [boxIndex]
+  | Just boxIndex <- M.lookup n env.identToBox = pure [boxIndex]
   | otherwise = pure <$> newBox (LBVar n)
 exprToBoxes _ (ERec _ _ _ (EConst n)) = pure <$> newBox (LBConst n)
 exprToBoxes env (ERec delay n bindings ret) = do
@@ -106,7 +112,7 @@ exprToBoxes env (ERec delay n bindings ret) = do
   -- TODO: replace leaf values in ret with the delay boxes
 
   rec
-    retBoxes <- exprToBoxes (M.insert n argNode env) ret
+    retBoxes <- exprToBoxes (env { identToBox = M.insert n argNode env.identToBox }) (inlineExpr bindings ret)
     delayBoxes <- traverse newBox $ map (LBDelay delay) retBoxes
     argNode <- newBox (LBArr delayBoxes)
 
