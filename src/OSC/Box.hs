@@ -50,19 +50,20 @@ b2 = res
 
 --------------------------------------------------------------------------------
 
-data Binding = Binding Ident Expr
+data Binding expr = Binding Ident expr
 
 data Array = Array [Int] [Expr] -- dimensions, flat array
 
 data Expr
   = EConst Number
   | EGraph Graph [Int] -- ref to other graphs already inlined; [Int] is the access index
-  | EVar Ident
-  | ERec Int Ident [Binding] Expr -- rec delay |prev| -> expr
+  | EVar Ident  -- references a regular class var, not a graph
+  | ERec Int Ident [Binding Expr] Expr -- rec delay |prev| -> expr
+  | ECall String Expr Expr
   | EStruct [(String, Expr)]
   | EArr Array
 
-data Graph = Graph [Binding] Array
+data Graph = Graph [Binding Expr] Array
 
 newtype BoxIndex = BoxIndex Int
   deriving Num
@@ -72,6 +73,33 @@ data LBox
   | LBVar Ident
   | LBDelay Ident Int BoxIndex
   | LBFunc String BoxIndex BoxIndex -- TODO: func must be pure
+
+inlineGraph :: Graph -> Expr
+inlineGraph = undefined
+
+inlineExpr :: [Binding Expr] -> Expr -> Expr
+inlineExpr = undefined
+
+-- data Ret
+--   = RConst Number
+--   | RStruct [(String, Ret)]
+--   | RArray [Int] [Ret]
+
+data EExpr
+  = EEConst Number
+  | EEVar Ident     -- references a regular class var, not a graph
+  | EERec Int Ident [Binding EExpr] EExpr
+  | EECall String EExpr EExpr
+  | EEStruct [(String, EExpr)]
+  | EEArr Array
+
+exprToBoxes :: EExpr -> [LBox]
+exprToBoxes (EEConst n) = [LBConst n]
+exprToBoxes (EEVar n) = [LBVar n]
+exprToBoxes (EERec _ _ _ (EEConst n)) = [LBConst n]
+exprToBoxes (EERec delay n bindings _) = undefined
+
+--------------------------------------------------------------------------------
 
 inc :: State BoxIndex BoxIndex
 inc = undefined
