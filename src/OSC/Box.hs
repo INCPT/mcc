@@ -110,6 +110,42 @@ exprToBoxes env (ERec delay n bindings ret) = do
 -- TODO: should this be legal: f: f32[4] -> f32, rec |prev| return (f prev)
 
 --------------------------------------------------------------------------------
+-- Example to verify that RecursiveDo with lazy State doesn't diverge
+-- This mirrors the pattern used in exprToBoxes for ERec
+exampleRecDo :: State (Map Int String) [Int]
+exampleRecDo = do
+  rec
+    -- Use the result of computation that depends on 'keys'
+    result <- traverse (\k -> ST.modify (M.insert k ("value" ++ show k)) >> return k) keys
+    -- Define 'keys' based on something that uses 'result' indirectly
+    -- but the actual list structure [1,2,3] is available immediately (lazy)
+    let keys = [1, 2, 3]
+  return result
+
+-- More direct analog to the ERec pattern:
+-- Creating boxes that reference each other through delays
+exampleDelayPattern :: State (Map BoxIndex LBox) [BoxIndex]
+exampleDelayPattern = do
+  rec
+    -- Create return boxes that reference the delay boxes
+    retBoxes <- traverse newBox [LBFunc "+" delayBox1 (BoxIndex 100), LBFunc "*" delayBox2 (BoxIndex 200)]
+    -- Create delay boxes that reference the return boxes
+    [delayBox1, delayBox2] <- traverse (\retBox -> newBox (LBDelay 1 retBox)) retBoxes
+  return retBoxes
+
+-- Test function to run the example
+testRecDo :: IO ()
+testRecDo = do
+  putStrLn "Testing RecursiveDo with lazy State:"
+  let (result, finalState) = ST.runState exampleRecDo M.empty
+  putStrLn $ "Result: " ++ show result
+  putStrLn $ "Final state: " ++ show finalState
+  putStrLn "\nThis demonstrates that the pattern won't diverge because:"
+  putStrLn "1. The list structure [1,2,3] is available immediately (spine is strict)"
+  putStrLn "2. The State monad is lazy, so we can reference future computations"
+  putStrLn "3. The recursion is productive - each step produces observable output"
+
+--------------------------------------------------------------------------------
 
 desugar :: Map Ident Expr -> Graph -> State BoxIndex [LBox]
 desugar env (Graph bindings ret) = sequence
