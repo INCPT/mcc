@@ -128,9 +128,9 @@ exampleDelayPattern :: State (Map BoxIndex LBox) [BoxIndex]
 exampleDelayPattern = do
   rec
     -- Create return boxes that reference the delay boxes
-    retBoxes <- traverse newBox [LBFunc "+" delayBox1 (BoxIndex 100), LBFunc "*" delayBox2 (BoxIndex 200)]
+    retBoxes <- traverse newBox [LBFunc "+" (boxes !! 0) (BoxIndex 100), LBFunc "*" (boxes !! 1) (BoxIndex 200)]
     -- Create delay boxes that reference the return boxes
-    [delayBox1, delayBox2] <- traverse (\retBox -> newBox (LBDelay 1 retBox)) retBoxes
+    boxes <- traverse (\retBox -> newBox (LBDelay 1 retBox)) retBoxes
   return retBoxes
 
 -- Test function to run the example
