@@ -82,13 +82,12 @@ data LBox
 inlineGraph :: Expr -> [Index] -> (Expr, Maybe (Ident, [Index]))
 inlineGraph = undefined
 
+-- TODO: semantic check of no mutual or self recursion between exprs/boxes
 inlineExpr :: [Binding Expr] -> Expr -> Expr
 inlineExpr = undefined
 
 newBox :: LBox -> State (Map BoxIndex LBox) BoxIndex
 newBox = undefined
-
--- TODO: semantic check of no mutual or self recursion between exprs/boxes
 
 exprToBoxes :: Expr -> State (Map BoxIndex LBox) [BoxIndex]
 exprToBoxes (EConst n) = pure <$> newBox (LBConst n)
@@ -99,7 +98,7 @@ exprToBoxes (ERec delay n bindings ret) = do
   -- TODO: replace leaf values in ret with the delay boxes
   retBoxes <- exprToBoxes ret
   delayBoxes <- traverse newBox $ map (LBDelay delay) retBoxes
-  let argNode = LBArr delayBoxes
+  argNode <- newBox (LBArr delayBoxes)
   return retBoxes
 
 -- TODO: should this be legal: f: f32[4] -> f32, rec |prev| return (f prev)
