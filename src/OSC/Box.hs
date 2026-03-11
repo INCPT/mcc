@@ -89,7 +89,11 @@ inlineExpr :: [Binding Expr] -> Expr -> Expr
 inlineExpr = undefined
 
 newBox :: LBox -> State (Map BoxIndex LBox) BoxIndex
-newBox = undefined
+newBox box = do
+  boxes <- ST.get
+  let nextIdx = BoxIndex (M.size boxes)
+  ST.put (M.insert nextIdx box boxes)
+  return nextIdx
 
 exprToBoxes :: Map Ident BoxIndex -> Expr -> State (Map BoxIndex LBox) [BoxIndex]
 exprToBoxes _ (EConst n) = pure <$> newBox (LBConst n)
