@@ -70,7 +70,7 @@ data Expr
 data Graph = Graph [Binding Expr] Expr
 
 newtype BoxIndex = BoxIndex Int
-  deriving Num
+  deriving (Num, Show)
 
 data LBox
   = LBConst Number
@@ -79,6 +79,7 @@ data LBox
   | LBArr [BoxIndex]
   | LBSelect [BoxIndex] BoxIndex 
   | LBFunc String BoxIndex BoxIndex -- TODO: func must be pure
+  deriving Show
 
 inlineGraph :: Expr -> [Index] -> (Expr, Maybe (Ident, [Index]))
 inlineGraph = undefined
@@ -137,7 +138,7 @@ exampleDelayPattern = do
 testRecDo :: IO ()
 testRecDo = do
   putStrLn "Testing RecursiveDo with lazy State:"
-  let (result, finalState) = ST.runState exampleRecDo M.empty
+  let (result, finalState) = ST.runState exampleDelayPattern M.empty
   putStrLn $ "Result: " ++ show result
   putStrLn $ "Final state: " ++ show finalState
   putStrLn "\nThis demonstrates that the pattern won't diverge because:"
