@@ -85,7 +85,6 @@ data LBox
 inlineGraph :: Expr -> [Index] -> (Expr, Maybe (Ident, [Index]))
 inlineGraph = undefined
 
--- TODO: semantic check of no mutual or self recursion between exprs/boxes
 inlineExpr :: Map Ident Expr -> [Binding Expr] -> Expr -> Expr
 inlineExpr = undefined
 
@@ -121,6 +120,7 @@ exprToBoxes env (ERec delay n bindings ret) = do
 
   pure retBoxes
 
+-- TODO: semantic check of no mutual or self recursion between exprs/boxes
 -- TODO: should this be legal: f: f32[4] -> f32, rec |prev| return (f prev)
 
 --------------------------------------------------------------------------------
