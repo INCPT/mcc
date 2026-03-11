@@ -86,7 +86,21 @@ inlineGraph :: Expr -> [Index] -> (Expr, Maybe (Ident, [Index]))
 inlineGraph = undefined
 
 inlineExpr :: Map Ident Expr -> [Binding Expr] -> Expr -> Expr
-inlineExpr = undefined
+inlineExpr env bindings expr = inline (env `M.union` bindingMap) expr
+  where
+    bindingMap = M.fromList [(n, e) | Binding n e <- bindings]
+    
+    inline :: Map Ident Expr -> Expr -> Expr
+    inline env' (EVar n)
+      | Just e <- M.lookup n env' = inline env' e
+      | otherwise = EVar n
+    inline _ e@(EConst _) = e
+    inline _ e@(EGraph _) = e
+    inline env' (ESelect e indices) = ESelect (inline env' e) indices
+    inline env' (ERec delay n bindings' ret) = 
+      ERec delay n bindings' (inline (M.delete n env') ret)
+    inline env' (ECall f a b) = ECall f (inline env' a) (inline env' b)
+    inline env' (EArr es) = EArr (map (inline env') es)
 
 newBox :: LBox -> State (Map BoxIndex LBox) BoxIndex
 newBox box = do
