@@ -75,8 +75,9 @@ data LBox
   = LBConst Number
   | LBVar Ident
   | LBDelay Int BoxIndex
+  | LBArr [BoxIndex]
   | LBSelect [BoxIndex] BoxIndex 
-  | LBFunc String [BoxIndex] [BoxIndex] -- TODO: func must be pure
+  | LBFunc String BoxIndex BoxIndex -- TODO: func must be pure
 
 inlineGraph :: Expr -> [Index] -> (Expr, Maybe (Ident, [Index]))
 inlineGraph = undefined
@@ -87,15 +88,19 @@ inlineExpr = undefined
 newBox :: LBox -> State (Map BoxIndex LBox) BoxIndex
 newBox = undefined
 
+-- TODO: semantic check of no mutual or self recursion between exprs/boxes
+
 exprToBoxes :: Expr -> State (Map BoxIndex LBox) [BoxIndex]
 exprToBoxes (EConst n) = pure <$> newBox (LBConst n)
 exprToBoxes (EVar n) = pure <$> newBox (LBVar n)
 exprToBoxes (ERec _ _ _ (EConst n)) = pure <$> newBox (LBConst n)
 exprToBoxes (ERec delay n bindings ret) = do
-  -- inline bindings into ret
+  -- replace n in bindings and ret with [
   -- TODO: replace leaf values in ret with the delay boxes
   retBoxes <- exprToBoxes ret
-  traverse newBox $ map (LBDelay delay) retBoxes
+  delayBoxes <- traverse newBox $ map (LBDelay delay) retBoxes
+  let argNode = LBArr delayBoxes
+  return retBoxes
 
 -- TODO: should this be legal: f: f32[4] -> f32, rec |prev| return (f prev)
 
