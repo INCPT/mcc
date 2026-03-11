@@ -42,6 +42,7 @@ library
       Microc.Toplevel
       Microc.Utils
       OSC.AST
+      OSC.Box
   other-modules:
       Microc.Parser.Generator
       Microc.Scanner.Generator
