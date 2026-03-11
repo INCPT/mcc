@@ -1,9 +1,10 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE RecursiveDo #-}
 
 module OSC.Box where
 
 import qualified Control.Monad.State as ST
-import Control.Monad.State (State)
+import Control.Monad.State.Lazy (State)
 
 import qualified Data.Map as M
 import Data.Map (Map)
@@ -89,17 +90,22 @@ inlineExpr = undefined
 newBox :: LBox -> State (Map BoxIndex LBox) BoxIndex
 newBox = undefined
 
-exprToBoxes :: Expr -> State (Map BoxIndex LBox) [BoxIndex]
-exprToBoxes (EConst n) = pure <$> newBox (LBConst n)
-exprToBoxes (EVar n) = pure <$> newBox (LBVar n)
-exprToBoxes (ERec _ _ _ (EConst n)) = pure <$> newBox (LBConst n)
-exprToBoxes (ERec delay n bindings ret) = do
+exprToBoxes :: Map Ident BoxIndex -> Expr -> State (Map BoxIndex LBox) [BoxIndex]
+exprToBoxes _ (EConst n) = pure <$> newBox (LBConst n)
+exprToBoxes env (EVar n)
+  | Just boxIndex <- M.lookup n env = pure [boxIndex]
+  | otherwise = pure <$> newBox (LBVar n)
+exprToBoxes _ (ERec _ _ _ (EConst n)) = pure <$> newBox (LBConst n)
+exprToBoxes env (ERec delay n bindings ret) = do
   -- replace n in bindings and ret with [
   -- TODO: replace leaf values in ret with the delay boxes
-  retBoxes <- exprToBoxes ret
-  delayBoxes <- traverse newBox $ map (LBDelay delay) retBoxes
-  argNode <- newBox (LBArr delayBoxes)
-  return retBoxes
+
+  rec
+    retBoxes <- exprToBoxes (M.insert n argNode env) ret
+    delayBoxes <- traverse newBox $ map (LBDelay delay) retBoxes
+    argNode <- newBox (LBArr delayBoxes)
+
+  pure retBoxes
 
 -- TODO: should this be legal: f: f32[4] -> f32, rec |prev| return (f prev)
 
