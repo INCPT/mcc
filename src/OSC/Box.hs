@@ -193,7 +193,18 @@ data LBox
   deriving Show
 
 inlineRef :: Ident -> Expr -> Expr -> Expr
-inlineRef n expr replace = undefined
+inlineRef n replace expr = inline expr
+  where
+    inline (EVar v)
+      | v == n = replace
+      | otherwise = EVar v
+    inline e@(EConst _) = e
+    inline (EArr dims es) = EArr dims (map inline es)
+    inline (ESelect dims e is) = ESelect dims (inline e) (map (fmap inline) is)
+    inline (ERec delay v ret)
+      | v == n = ERec delay v ret  -- shadowed, don't recurse
+      | otherwise = ERec delay v (inline ret)
+    inline (ECall f args) = ECall f (map inline args)
 
 exprToBox :: Map Ident BoxIndex -> Expr -> BoxGenM BoxIndex
 exprToBox _ (EConst n) = newBox (LBConst n)
