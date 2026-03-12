@@ -392,3 +392,56 @@ codegen expr = W.runWriter $ ST.evalStateT gen (LocalIndex 0, MemAddr 0, mempty)
       (_, _, localMap) <- ST.get
       emitDelays localMap delayMap
       pure retLocal
+
+--------------------------------------------------------------------------------
+-- Test expressions
+
+-- Simple expression: 5 + 10
+testSimple :: Expr
+testSimple = ECall (Ident "add") [EConst (I 5), EConst (I 10)]
+
+-- More complex expression with delay and array
+-- rec |prev| -> prev + [1, 2, 3][0]
+testComplex :: Expr
+testComplex = ERec 1 (Ident "prev") $
+  ECall (Ident "add")
+    [ EVar (Ident "prev")
+    , ESelect [3] (EArr [3] [EConst (I 1), EConst (I 2), EConst (I 3)]) [IdxConst 0]
+    ]
+
+-- Expression with nested arrays and selection
+-- [[1, 2], [3, 4]][1][0]
+testNestedArray :: Expr
+testNestedArray = ESelect [2]
+  (ESelect [2, 2]
+    (EArr [2, 2]
+      [ EConst (I 1), EConst (I 2)
+      , EConst (I 3), EConst (I 4)
+      ])
+    [IdxConst 1])
+  [IdxConst 0]
+
+-- Expression with variable indexing
+-- rec |i| -> arr[i] where arr = [10, 20, 30]
+testVarIndex :: Expr
+testVarIndex = ERec 1 (Ident "i") $
+  ESelect [3]
+    (EArr [3] [EConst (I 10), EConst (I 20), EConst (I 30)])
+    [IdxVar (EVar (Ident "i"))]
+
+printCodegen :: String -> Expr -> IO ()
+printCodegen name expr = do
+  putStrLn $ "\n=== " ++ name ++ " ==="
+  putStrLn $ "Expression: " ++ show expr
+  let (LocalIndex retIdx, instrs) = codegen expr
+  putStrLn $ "Return local: " ++ show retIdx
+  putStrLn "Instructions:"
+  mapM_ (putStrLn . ("  " ++) . show) instrs
+
+runTests :: IO ()
+runTests = do
+  putStrLn "Testing OSC.Box codegen"
+  printCodegen "Simple: 5 + 10" testSimple
+  printCodegen "Complex: rec with delay and array select" testComplex
+  printCodegen "Nested array selection" testNestedArray
+  printCodegen "Variable indexing with delay" testVarIndex
