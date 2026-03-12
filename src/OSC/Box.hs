@@ -207,7 +207,18 @@ inlineRef n replace expr = inline expr
     inline (ECall f args) = ECall f (map inline args)
 
 mergeSelects :: Expr -> Expr
-mergeSelects = undefined
+mergeSelects (ESelect outerDims e outerIndices) =
+  case mergeSelects e of
+    -- If selecting from another select, combine them
+    ESelect innerDims innerExpr innerIndices ->
+      ESelect innerDims (mergeSelects innerExpr) (innerIndices ++ outerIndices)
+    -- Otherwise, recurse on the expression being selected from
+    e' -> ESelect outerDims e' (map (fmap mergeSelects) outerIndices)
+mergeSelects (EArr dims es) = EArr dims (map mergeSelects es)
+mergeSelects (ERec delay n ret) = ERec delay n (mergeSelects ret)
+mergeSelects (ECall f args) = ECall f (map mergeSelects args)
+mergeSelects e@(EConst _) = e
+mergeSelects e@(EVar _) = e
 
 exprToBox :: Map Ident BoxIndex -> Expr -> BoxGenM BoxIndex
 exprToBox _ (EConst n) = newBox (LBConst n)
@@ -225,16 +236,7 @@ exprToBox env (EArr dims es) = do
 exprToBox env (ESelect dims e is) = do
   eBoxIndex <- exprToBox env e
   isBoxIndexs <- traverse (traverse (exprToBox env)) is
-  
-  -- Check if we're selecting from another select - if so, combine them
-  (_, boxMap) <- ST.get
-  case M.lookup eBoxIndex boxMap of
-    Just (LBSelect innerDims innerBoxIndex innerIndices) -> do
-      -- Combine the indices: outer selection applied to inner selection
-      -- This flattens nested selections into a single selection
-      let combinedIndices = innerIndices ++ isBoxIndexs
-      newBox (LBSelect innerDims innerBoxIndex combinedIndices)
-    _ -> newBox (LBSelect dims eBoxIndex isBoxIndexs)
+  newBox (LBSelect dims eBoxIndex isBoxIndexs)
 exprToBox env (ECall n args) = do
   argBoxIndexs <- traverse (exprToBox env) args
   newBox (LBCall n argBoxIndexs)
@@ -429,7 +431,9 @@ boxToBlockMemo env delayMap k lbox = memoBox k (boxToBlock env delayMap lbox)
 codegen :: Expr -> (LocalIndex, [Instr])
 codegen expr = (retLocal, localDecls ++ instrs)
   where
-    (boxIndex, (_, boxMap)) = ST.runState (exprToBox mempty expr) (BoxIndex 0, mempty)
+    -- Merge nested selects before generating boxes
+    mergedExpr = mergeSelects expr
+    (boxIndex, (_, boxMap)) = ST.runState (exprToBox mempty mergedExpr) (BoxIndex 0, mempty)
     Just box = M.lookup boxIndex boxMap
 
     ((retLocal, (_, _, _, declaredLocals)), instrs) = 
