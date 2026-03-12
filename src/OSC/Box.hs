@@ -120,7 +120,7 @@ data Type = TSimple | TArray Int
 data Expr
   = EConst Number
   | EVar Ident
-  | EArr [Expr]
+  | EArr [Int] [Expr]
   | ESelect Expr [Index Expr]
   | ERec Int Ident Expr -- rec delay |prev| -> expr
   | ECall Ident [Expr]
@@ -150,12 +150,12 @@ inlineExpr env bindings expr = inline (env `M.union` bindingMap) expr
     inline env' (EArr es) = EArr (map (inline env') es)
 -}
 
-drill :: Map BoxIndex LBox -> BoxIndex -> [Index a] -> (BoxIndex, [Index a])
-drill boxMap lbl [IConst n]
-  | Just (LBArr labels) <- M.lookup lbl boxMap = (labels !! n, [])
-drill boxMap lbl (IConst n:ns)
-  | Just (LBArr labels) <- M.lookup lbl boxMap = drill boxMap (labels !! n) ns
-drill _ lbl is = (lbl, is)
+-- drill :: Map BoxIndex LBox -> BoxIndex -> [Index a] -> (BoxIndex, [Index a])
+-- drill boxMap lbl [IConst n]
+--   | Just (LBArr labels) <- M.lookup lbl boxMap = (labels !! n, [])
+-- drill boxMap lbl (IConst n:ns)
+--   | Just (LBArr labels) <- M.lookup lbl boxMap = drill boxMap (labels !! n) ns
+-- drill _ lbl is = (lbl, is)
 
 -- drill :: Map BoxIndex LBox -> [BoxIndex] -> [Index a] -> Either ([BoxIndex], [Index a]) BoxIndex
 -- drill _ boxes [IConst n] = Right (boxes !! n)
@@ -163,13 +163,13 @@ drill _ lbl is = (lbl, is)
 --   | Just (LBArr boxes') <- M.lookup (boxes !! n) env = drill env boxes' ns
 -- drill _ boxes is = Left (boxes, is)
 
-flattenBox :: Map BoxIndex LBox -> BoxIndex -> (BoxIndex, Map BoxIndex LBox)
-flattenBox boxMap lbl
-  | Just (LBArr labels) <- M.lookup lbl boxMap =
-      case labels of
-        [singleBoxIndex] -> (singleBoxIndex, boxMap)
-        _ -> (lbl, boxMap)
-  | otherwise = (lbl, boxMap)
+-- flattenBox :: Map BoxIndex LBox -> BoxIndex -> (BoxIndex, Map BoxIndex LBox)
+-- flattenBox boxMap lbl
+--   | Just (LBArr _ labels) <- M.lookup lbl boxMap =
+--       case labels of
+--         [singleBoxIndex] -> (singleBoxIndex, boxMap)
+--         _ -> (lbl, boxMap)
+--   | otherwise = (lbl, boxMap)
 
 --------------------------------------------------------------------------------
 
@@ -184,7 +184,7 @@ newBox box = do
 data LBox
   = LBConst Number
   | LBVar Ident
-  | LBArr [BoxIndex]
+  | LBArr [Int] [BoxIndex] -- dimensions
   | LBSelect BoxIndex [Index BoxIndex] -- maximally drilled into
   | LBDelay Int BoxIndex
   | LBCall Ident [BoxIndex]
@@ -198,9 +198,9 @@ exprToBox env (ERec delay n ret) = mdo
   retBoxIndex <- exprToBox (M.insert n delayBoxIndex env) ret
   delayBoxIndex <- newBox (LBDelay delay retBoxIndex)
   pure retBoxIndex
-exprToBox env (EArr es) = do
+exprToBox env (EArr dims es) = do
   labels <- traverse (exprToBox env) es
-  newBox (LBArr labels)
+  newBox (LBArr dims labels)
 exprToBox env (ESelect e is) = do
   eBoxIndex <- exprToBox env e
   isBoxIndexs <- traverse (traverse (exprToBox env)) is
@@ -224,44 +224,60 @@ data LocalArr = LArr LocalIndex MemAddr Int
 
 data Instr
   = ILoadAddr LocalIndex Ident
-  | ILoadLocal LocalIndex LocalIndex -- local, value
-
-  | ILoadLocalArr MemAddr LocalIndex LocalIndex -- local, index, value
+  -- | ILoadLocal LocalIndex LocalIndex -- local, value
+  | IStore MemAddr Value -- local, index, value
   | ICall Ident [LocalSimple]
   
 data Program = Program [Instr] (Either LocalSimple LocalArr) -- execute block, return local
 
-type CodegenM = WriterT [Instr] (State (LocalIndex, MemAddr))
+type CodegenM = WriterT [Instr] (State (LocalIndex, MemAddr, Map BoxIndex Value))
 
 reserve :: Int -> CodegenM MemAddr
 reserve bytes = do
-  (lidx, MemAddr cur) <- ST.get
-  ST.put (lidx, MemAddr (cur + bytes))
+  (lidx, MemAddr cur, values) <- ST.get
+  ST.put (lidx, MemAddr (cur + bytes), values)
   pure (MemAddr (cur + bytes))
 
 localSimple :: CodegenM LocalIndex
 localSimple = do
-  (LocalIndex idx, mem) <- ST.get
-  ST.put (LocalIndex (idx + 4), mem)
+  (LocalIndex idx, mem, values) <- ST.get
+  ST.put (LocalIndex (idx + 4), mem, values)
   pure (LocalIndex idx)
 
 localArray :: Int -> CodegenM (LocalIndex, MemAddr)
 localArray size = do
-  (LocalIndex idx, MemAddr cur) <- ST.get
-  ST.put (LocalIndex (idx + 4), MemAddr (cur + size * 4))
+  (LocalIndex idx, MemAddr cur, values) <- ST.get
+  ST.put (LocalIndex (idx + 4), MemAddr (cur + size * 4), values)
   pure (LocalIndex idx, MemAddr cur)
+
+cache :: BoxIndex -> CodegenM Value -> CodegenM Value
+cache box genValue = do
+  (idx, mem, values) <- ST.get
+  case M.lookup box values of
+    Just value' -> pure value'
+    Nothing -> do
+      value <- genValue
+      ST.put (idx, mem, M.insert box value values)
+      pure value
 
 emit :: Instr -> CodegenM ()
 emit = W.tell . pure
 
-data Return = RConst Number | RLocal LocalIndex
+data Value = RConst Number | RLocal LocalIndex
 
-boxToBlock :: Map BoxIndex LBox -> LBox -> CodegenM Return
+boxToBlock :: Map BoxIndex LBox -> LBox -> CodegenM Value
 boxToBlock _ (LBConst n) = pure (RConst n)
 boxToBlock _ (LBVar n) = do
   lidx <- localSimple
   emit $ ILoadAddr lidx n
   pure $ RLocal lidx
-boxToBlock _ (LBArr boxes) = do
-  (lidx, mem) <- localArray (length boxes)
-  undefined
+boxToBlock env (LBArr dims boxes) = do
+  (lidx, MemAddr mem) <- localArray (product dims)
+  sequence_
+    [ do
+        value <- cache boxIndex (boxToBlock env box)
+        emit $ IStore (MemAddr $ mem + index * 4) value
+    | (index, boxIndex) <- zip [0..] boxes
+    , Just box <- [ M.lookup boxIndex env ]
+    ]
+  pure $ RLocal lidx
