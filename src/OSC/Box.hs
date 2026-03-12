@@ -283,7 +283,7 @@ gatherDelays env = M.fromList <$> sequence
   | (k, LBDelay _ retBoxIndex) <- M.toList env
   ]
 
-boxToBlock :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> BoxIndex -> LBox -> CodegenM LocalIndex
+boxToBlock :: Map BoxIndex LBox -> Map BoxIndex (LocalIndex, BoxIndex) -> BoxIndex -> LBox -> CodegenM LocalIndex
 boxToBlock _ _ _ (LBConst n) = do
   lidx <- localSimple
   emit $ IConst n
@@ -345,17 +345,17 @@ boxToBlock env delayMap _ (LBSelect dims boxIndex indices)
       pure res
   | otherwise = error "select: box (this is a bug)"
 boxToBlock _ delayMap k (LBDelay _ _)
-  | Just delayLocal <- M.lookup k delayMap = pure delayLocal
+  | Just (delayLocal, _) <- M.lookup k delayMap = pure delayLocal
   | otherwise = error "delay (this is a bug)"
-boxToBlock env delayMap _ (LBCall n argBoxes) = do
+boxToBlock env delayMap _ (LBCall n argBoxIndices) = do
   -- Push all arguments onto the stack
   sequence_
-    [ case M.lookup argBox env of
+    [ case M.lookup argBoxIndex env of
         Just box -> do
-          argLocal <- cache argBox (boxToBlock env delayMap argBox box)
+          argLocal <- cache argBoxIndex (boxToBlock env delayMap argBoxIndex box)
           emit $ ILocalGet argLocal
         Nothing -> error "call: arg box not found (this is a bug)"
-    | argBox <- argBoxes
+    | argBoxIndex <- argBoxIndices
     ]
   
   -- Call function (args are on stack)
