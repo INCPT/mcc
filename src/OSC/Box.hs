@@ -208,10 +208,12 @@ inlineRef n replace expr = inline expr
 
 exprToBox :: Map Ident BoxIndex -> Expr -> BoxGenM BoxIndex
 exprToBox _ (EConst n) = newBox (LBConst n)
-exprToBox _ (EVar n) = newBox (LBVar n)
+exprToBox env (EVar n)
+  | Just boxIndex <- M.lookup n env = pure boxIndex
+  | otherwise = newBox (LBVar n)
 exprToBox _ (ERec _ _ (EConst n)) = newBox (LBConst n)
 exprToBox env (ERec delay n ret) = mdo
-  retBoxIndex <- exprToBox env ret
+  retBoxIndex <- exprToBox (M.insert n delayBoxIndex env) ret
   delayBoxIndex <- newBox (LBDelay delay retBoxIndex)
   pure retBoxIndex
 exprToBox env (EArr dims es) = do
@@ -241,7 +243,8 @@ data LocalArr = LArr LocalIndex MemAddr Int deriving Show
 data BinOp = Plus | Mul | Minus | Div deriving Show
 
 data Instr
-  = ILocalGet LocalIndex
+  = ILocal LocalIndex
+  | ILocalGet LocalIndex
   | ILocalSet LocalIndex
   | ILocalTee LocalIndex  -- set and leave value on stack
   | IConst Number
@@ -264,9 +267,10 @@ reserve bytes = do
 
 localSimple :: CodegenM LocalIndex
 localSimple = do
-  (LocalIndex idx, mem, values) <- ST.get
+  (lidx@(LocalIndex idx), mem, values) <- ST.get
   ST.put (LocalIndex (idx + 1), mem, values)
-  pure (LocalIndex idx)
+  emit $ ILocal lidx
+  pure lidx
 
 localArray :: Int -> CodegenM (LocalIndex, MemAddr)
 localArray size = do
@@ -451,7 +455,7 @@ printBoxes :: Expr -> IO ()
 printBoxes expr = do
   putStrLn $ "Box index: " ++ show boxIndex
   putStrLn "Boxes:"
-  mapM_ (putStrLn . ("  " ++) . show) boxMap
+  mapM_ (putStrLn . ("  " ++) . show) (M.toList boxMap)
   where
     (boxIndex, (_, boxMap)) = ST.runState (exprToBox mempty expr) (BoxIndex 0, mempty)
 
