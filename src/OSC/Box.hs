@@ -271,25 +271,25 @@ emit = W.tell . pure
 
 data Value = VConst Number | VLocal LocalIndex
 
-boxToBlock :: Map BoxIndex LBox -> LBox -> CodegenM Value
-boxToBlock _ (LBConst n) = pure (VConst n)
-boxToBlock _ (LBVar n) = do
+boxToBlock :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> BoxIndex -> LBox -> CodegenM Value
+boxToBlock _ _ _ (LBConst n) = pure (VConst n)
+boxToBlock _ _ _ (LBVar n) = do
   lidx <- localSimple
   emit $ ILoadAddr lidx n
   pure $ VLocal lidx
-boxToBlock env (LBArr dims boxes) = do
+boxToBlock env delayMap _ (LBArr dims boxes) = do
   (lidx, MemAddr mem) <- localArray (product dims)
   sequence_
     [ do
-        value <- cache boxIndex (boxToBlock env box)
+        value <- cache boxIndex (boxToBlock env delayMap boxIndex box)
         emit $ IStore (MemAddr $ mem + index * 4) value
     | (index, boxIndex) <- zip [0..] boxes
     , Just box <- [ M.lookup boxIndex env ]
     ]
   pure $ VLocal lidx
-boxToBlock env (LBSelect dims boxIndex indices)
+boxToBlock env delayMap _ (LBSelect dims boxIndex indices)
   | Just box <- M.lookup boxIndex env = do
-      bsel <- cache boxIndex (boxToBlock env box)
+      bsel <- cache boxIndex (boxToBlock env delayMap boxIndex box)
       case bsel of
         VConst _ -> error "select: bsel (this is a bug)"
         VLocal bsel' -> do
@@ -300,7 +300,7 @@ boxToBlock env (LBSelect dims boxIndex indices)
                 IConst i -> emit $ IBinOp Plus lidx (VConst $ I (i * card))
                 IVar indexBoxIndex
                   | Just indexBox <- M.lookup indexBoxIndex env -> do
-                      vidx <- cache indexBoxIndex (boxToBlock env indexBox)
+                      vidx <- cache indexBoxIndex (boxToBlock env delayMap indexBoxIndex indexBox)
                       case vidx of
                         VConst (I i) -> emit $ IBinOp Plus lidx (VConst $ I (i * card))
                         VConst _ -> error "select: index not natural (this is a bug)"
@@ -313,5 +313,7 @@ boxToBlock env (LBSelect dims boxIndex indices)
           emit $ ILoadOffset res bsel' (VLocal lidx)
           pure $ VLocal res
   | otherwise = error "select: box (this is a bug)"
-boxToBlock env (LBDelay delay box) = undefined
-boxToBlock env (LBCall n args) = undefined
+boxToBlock _ delayMap k (LBDelay _ _)
+  | Just delayLocal <- M.lookup k delayMap = pure $ VLocal delayLocal
+  | otherwise = error "delay (this is a bug)"
+boxToBlock _ _ _ (LBCall n args) = undefined
