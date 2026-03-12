@@ -4,6 +4,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE TupleSections #-}
 {-# OPTIONS_GHC -fno-defer-type-errors #-}
 
 module OSC.Box where
@@ -257,6 +258,7 @@ localArray :: Int -> CodegenM (LocalIndex, MemAddr)
 localArray size = do
   lidx <- localSimple
   addr <- reserve (size * 4)
+
   -- Store the base address in the local
   emit $ IConst (I $ let MemAddr a = addr in a)
   emit $ ILocalSet lidx
@@ -274,6 +276,12 @@ cache box genLocal = do
 
 emit :: Instr -> CodegenM ()
 emit = W.tell . pure
+
+gatherDelays :: Map BoxIndex LBox -> CodegenM (Map BoxIndex (LocalIndex, BoxIndex))
+gatherDelays env = M.fromList <$> sequence
+  [ (k, ) <$> ((, ) <$> localSimple <*> pure retBoxIndex)
+  | (k, LBDelay _ retBoxIndex) <- M.toList env
+  ]
 
 boxToBlock :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> BoxIndex -> LBox -> CodegenM LocalIndex
 boxToBlock _ _ _ (LBConst n) = do
