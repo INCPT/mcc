@@ -20,39 +20,39 @@ data Number = I Int | F Double
 data Ident = Ident String
   deriving (Eq, Ord, Show)
 
-data Box
-  = BConst Number
-  | BVar Ident
-  | BDelay Ident Int Box
-  | BFunc String Box Box -- TODO: func must be pure
-
-flow :: Box -> String
-flow (BConst n) = show n
-flow (BVar (Ident v)) = v
-flow (BFunc f a b) = "((" <> flow a <> ") " <> f <> " (" <> flow b <> "))"
-flow (BDelay (Ident n) _ _) = n
-
-gatherDelays :: Box -> [(Ident, Box)]
-gatherDelays (BDelay n _ b) = [(n, b)]
-gatherDelays (BFunc _ a b) = gatherDelays a <> gatherDelays b
-gatherDelays _ = []
-
-codegen :: Box -> IO ()
-codegen b = do
-  putStrLn $ "out = " <> flow b
-  sequence_
-    [ putStrLn $ n <> " = " <> flow b'
-    | (Ident n, b') <- gatherDelays b
-    ]
-
-b1 :: Box
-b1 = BFunc "+" (BConst (I 5)) (BVar (Ident "sample_rate"))
-
-b2 :: Box
-b2 = res
-  where
-    prev = BDelay (Ident "prev" ) 1 res
-    res = BFunc "+" prev (BConst (I 1))
+-- data Box
+--   = BConst Number
+--   | BVar Ident
+--   | BDelay Ident Int Box
+--   | BFunc String Box Box -- TODO: func must be pure
+-- 
+-- flow :: Box -> String
+-- flow (BConst n) = show n
+-- flow (BVar (Ident v)) = v
+-- flow (BFunc f a b) = "((" <> flow a <> ") " <> f <> " (" <> flow b <> "))"
+-- flow (BDelay (Ident n) _ _) = n
+-- 
+-- gatherDelays :: Box -> [(Ident, Box)]
+-- gatherDelays (BDelay n _ b) = [(n, b)]
+-- gatherDelays (BFunc _ a b) = gatherDelays a <> gatherDelays b
+-- gatherDelays _ = []
+-- 
+-- codegen :: Box -> IO ()
+-- codegen b = do
+--   putStrLn $ "out = " <> flow b
+--   sequence_
+--     [ putStrLn $ n <> " = " <> flow b'
+--     | (Ident n, b') <- gatherDelays b
+--     ]
+-- 
+-- b1 :: Box
+-- b1 = BFunc "+" (BConst (I 5)) (BVar (Ident "sample_rate"))
+-- 
+-- b2 :: Box
+-- b2 = res
+--   where
+--     prev = BDelay (Ident "prev" ) 1 res
+--     res = BFunc "+" prev (BConst (I 1))
 
 -- desugar :: Map Ident Expr -> Graph -> State BoxIndex [LBox]
 -- desugar env (Graph bindings ret) = sequence
@@ -181,18 +181,14 @@ data LBox
   | LBCall Ident [BoxIndex]
   deriving Show
 
-data Env = Env
-  { identToBoxIndex :: Map Ident BoxIndex
-  }
+type Env = Map Ident BoxIndex
 
 exprToBox :: Env -> Expr -> State (BoxIndex, Map BoxIndex LBox) BoxIndex
 exprToBox _ (EConst n) = newBox (LBConst n)
 exprToBox _ (EVar n) = newBox (LBVar n)
 exprToBox _ (ERec _ _ (EConst n)) = newBox (LBConst n)
 exprToBox env (ERec delay n ret) = mdo
-  retBoxIndex <- exprToBox
-    (env { identToBoxIndex = M.insert n delayBoxIndex env.identToBoxIndex })
-    ret
+  retBoxIndex <- exprToBox (M.insert n delayBoxIndex env) ret
   delayBoxIndex <- newBox (LBDelay delay retBoxIndex)
   pure retBoxIndex
 exprToBox env (EArr es) = do
@@ -210,7 +206,8 @@ exprToBox env (ECall n args) = do
 
 -- TODO: after component clustering, if a component is called only once, inline
 
-data Addr
+newtype Addr = Addr Int
+  deriving Num
 
 data Local = Simple Addr | Array Addr Int
 
@@ -222,3 +219,24 @@ data Block
   | Call Ident [Local]
   
 data Program = Program [Block] Local -- execute block, return local
+
+type CodegenM = ST.State Addr
+
+reserve :: Int -> CodegenM Addr
+reserve bytes = do
+  Addr cur <- ST.get
+  ST.put (Addr (cur + bytes))
+  pure (Addr (cur + bytes))
+
+localSimple :: (Local -> Block) -> CodegenM Block
+localSimple f = do
+  addr <- reserve 4
+  pure (f (Simple addr))
+
+localArray :: Int -> (Local -> Block) -> CodegenM Block
+localArray size f = do
+  addr <- reserve (size * 4)
+  pure (f (Simple addr))
+
+codegen :: Env -> LBox -> CodegenM Program
+codegen = undefined
