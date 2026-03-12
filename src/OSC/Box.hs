@@ -270,6 +270,10 @@ data Instr
   | ICall Ident    -- call function, args already on stack
   | IDrop
   deriving Show
+
+data CodegenEnv = CodegenEnv
+  {
+  }
   
 type CodegenM = StateT (LocalIndex, MemAddr, Map BoxIndex LocalIndex, [LocalIndex]) (Writer [Instr])
 
