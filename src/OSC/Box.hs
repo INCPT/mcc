@@ -368,16 +368,11 @@ boxToBlock env delayMap (LBSelect dims boxIndex indices)
       -- Load from base + offset
       res <- localSimple
 
-      -- Calculate byte offset: offsetLocal * 4
-      byteOffsetLocal <- localSimple
+      -- Push base address + (offset * 4) onto stack, then load
+      emit $ ILocalGet baseLocal
       emit $ ILocalGet offsetLocal
       emit $ IConst (I 4)  -- 4 bytes per element
       emit $ IBinOp Mul
-      emit $ ILocalSet byteOffsetLocal
-
-      -- Load: push base address, then load with byte offset
-      emit $ ILocalGet baseLocal
-      emit $ ILocalGet byteOffsetLocal
       emit $ IBinOp Plus
       emit $ ILoad (MemAddr 0)  -- load from (stack_addr + 0)
       emit $ ILocalSet res
