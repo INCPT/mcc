@@ -277,37 +277,40 @@ cache box genLocal = do
 emit :: Instr -> CodegenM ()
 emit = W.tell . pure
 
-gatherDelays :: Map BoxIndex LBox -> CodegenM (Map BoxIndex (LocalIndex, BoxIndex))
+gatherDelays :: Map BoxIndex LBox -> CodegenM (Map BoxIndex LocalIndex)
 gatherDelays env = M.fromList <$> sequence
-  [ (k, ) <$> ((, ) <$> localSimple <*> pure retBoxIndex)
-  | (k, LBDelay _ retBoxIndex) <- M.toList env
+  [ (retBoxIndex,) <$> localSimple
+  | LBDelay _ retBoxIndex <- M.elems env
   ]
 
-boxToBlock :: Map BoxIndex LBox -> Map BoxIndex (LocalIndex, BoxIndex) -> BoxIndex -> LBox -> CodegenM LocalIndex
-boxToBlock _ _ _ (LBConst n) = do
+boxToBlockMemo :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> BoxIndex -> LBox -> CodegenM LocalIndex
+boxToBlockMemo env delayMap k lbox = cache k (boxToBlock env delayMap lbox)
+
+boxToBlock :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> LBox -> CodegenM LocalIndex
+boxToBlock _ _ (LBConst n) = do
   lidx <- localSimple
   emit $ IConst n
   emit $ ILocalSet lidx
   pure lidx
-boxToBlock _ _ _ (LBVar n) = do
+boxToBlock _ _ (LBVar n) = do
   lidx <- localSimple
   emit $ IGlobalGet n
   emit $ ILocalSet lidx
   pure lidx
-boxToBlock env delayMap _ (LBArr dims boxes) = do
+boxToBlock env delayMap (LBArr dims boxes) = do
   (lidx, MemAddr baseAddr) <- localArray (product dims)
   sequence_
     [ do
-        valueLocal <- cache boxIndex (boxToBlock env delayMap boxIndex box)
+        valueLocal <- boxToBlockMemo env delayMap boxIndex box
         emit $ ILocalGet valueLocal
         emit $ IStore (MemAddr $ baseAddr + index * 4)
     | (index, boxIndex) <- zip [0..] boxes
     , Just box <- [ M.lookup boxIndex env ]
     ]
   pure lidx
-boxToBlock env delayMap _ (LBSelect dims boxIndex indices)
+boxToBlock env delayMap (LBSelect dims boxIndex indices)
   | Just box <- M.lookup boxIndex env = do
-      baseLocal <- cache boxIndex (boxToBlock env delayMap boxIndex box)
+      baseLocal <- boxToBlockMemo env delayMap boxIndex box
       offsetLocal <- localSimple
       emit $ IConst (I 0)
       emit $ ILocalSet offsetLocal
@@ -322,7 +325,7 @@ boxToBlock env delayMap _ (LBSelect dims boxIndex indices)
               emit $ ILocalSet offsetLocal
             IdxVar indexBoxIndex
               | Just indexBox <- M.lookup indexBoxIndex env -> do
-                  idxLocal <- cache indexBoxIndex (boxToBlock env delayMap indexBoxIndex indexBox)
+                  idxLocal <- boxToBlockMemo env delayMap indexBoxIndex indexBox
                   emit $ ILocalGet offsetLocal
                   emit $ ILocalGet idxLocal
                   emit $ IConst (I card)
@@ -344,15 +347,15 @@ boxToBlock env delayMap _ (LBSelect dims boxIndex indices)
       emit $ ILocalSet res
       pure res
   | otherwise = error "select: box (this is a bug)"
-boxToBlock _ delayMap k (LBDelay _ _)
-  | Just (delayLocal, _) <- M.lookup k delayMap = pure delayLocal
+boxToBlock _ delayMap (LBDelay _ retBoxIndex)
+  | Just delayLocal <- M.lookup retBoxIndex delayMap = pure delayLocal
   | otherwise = error "delay (this is a bug)"
-boxToBlock env delayMap _ (LBCall n argBoxIndices) = do
+boxToBlock env delayMap (LBCall n argBoxIndices) = do
   -- Push all arguments onto the stack
   sequence_
     [ case M.lookup argBoxIndex env of
         Just box -> do
-          argLocal <- cache argBoxIndex (boxToBlock env delayMap argBoxIndex box)
+          argLocal <- cache argBoxIndex (boxToBlockMemo env delayMap argBoxIndex box)
           emit $ ILocalGet argLocal
         Nothing -> error "call: arg box not found (this is a bug)"
     | argBoxIndex <- argBoxIndices
