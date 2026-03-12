@@ -140,10 +140,12 @@ inlineExpr env bindings expr = inline (env `M.union` bindingMap) expr
     inline env' (EArr es) = EArr (map (inline env') es)
 -}
 
-drill :: Map Ident LBox -> LBox -> [Index a] -> (LBox, [Index a])
-drill _ (Fix (LBArrF boxes)) [IConst n] = (boxes !! n, [])
-drill env (Fix (LBArrF boxes)) (IConst n:ns) = drill env (boxes !! n) ns
-drill _ boxes is = (boxes, is)
+drill :: Map Label LBox -> Label -> [Index a] -> (Label, [Index a])
+drill boxMap lbl [IConst n]
+  | Just (LBArr labels) <- M.lookup lbl boxMap = (labels !! n, [])
+drill boxMap lbl (IConst n:ns)
+  | Just (LBArr labels) <- M.lookup lbl boxMap = drill boxMap (labels !! n) ns
+drill _ lbl is = (lbl, is)
 
 -- drill :: Map BoxIndex LBox -> [BoxIndex] -> [Index a] -> Either ([BoxIndex], [Index a]) BoxIndex
 -- drill _ boxes [IConst n] = Right (boxes !! n)
@@ -151,58 +153,62 @@ drill _ boxes is = (boxes, is)
 --   | Just (LBArr boxes') <- M.lookup (boxes !! n) env = drill env boxes' ns
 -- drill _ boxes is = Left (boxes, is)
 
-flattenBox :: LBox -> LBox
-flattenBox (Fix (LBArrF boxes)) = case map flattenBox boxes of
-  [box] -> box
-  boxes' -> Fix (LBArrF boxes')
-flattenBox box = box
+flattenBox :: Map Label LBox -> Label -> (Label, Map Label LBox)
+flattenBox boxMap lbl
+  | Just (LBArr labels) <- M.lookup lbl boxMap =
+      case labels of
+        [singleLabel] -> (singleLabel, boxMap)
+        _ -> (lbl, boxMap)
+  | otherwise = (lbl, boxMap)
 
 
 
-newBox :: LBox -> State (Map BoxIndex LBox) BoxIndex
+newBox :: LBox -> State (Label, Map Label LBox) Label
 newBox box = do
-  boxes <- ST.get
-  let nextIdx = BoxIndex (M.size boxes)
-  ST.put (M.insert nextIdx box boxes)
-  return nextIdx
+  (nextLabel, boxes) <- ST.get
+  ST.put (nextLabel + 1, M.insert nextLabel box boxes)
+  return nextLabel
 
 --------------------------------------------------------------------------------
 
-newtype Fix f = Fix { unFix :: f (Fix f) }
+newtype Label = Label Int
+  deriving (Eq, Ord, Show, Num)
 
-data LBoxF r
-  = LBConstF Number
-  | LBVarF Ident
-  | LBArrF [r]
-  | LBSelectF r [Index r] -- maximally drilled into
-  | LBDelayF Int r
-  | LBCallF Ident [r]
-  deriving (Show, Functor)
-
-type LBox = Fix LBoxF
-
-instance Show (Fix LBoxF) where
-  show (Fix f) = show f
+data LBox
+  = LBConst Number
+  | LBVar Ident
+  | LBArr [Label]
+  | LBSelect Label [Index Label] -- maximally drilled into
+  | LBDelay Int Label
+  | LBCall Ident [Label]
+  deriving Show
 
 data Env = Env
-  { identToBox :: Map Ident LBox
+  { identToLabel :: Map Ident Label
   }
 
-exprToBox :: Env -> Expr -> LBox
-exprToBox _ (EConst n) = Fix (LBConstF n)
-exprToBox _ (EVar n) = Fix (LBVarF n)
-exprToBox _ (ERec _ _ (EConst n)) = Fix (LBConstF n)
-exprToBox env (ERec delay n ret) = retBox
-  where
-    retBox = exprToBox
-      (env { identToBox = M.insert n delayBox env.identToBox })
-      ret
-    delayBox = Fix (LBDelayF delay retBox)
-exprToBox env (EArr es) = Fix (LBArrF (map (exprToBox env) es))
-exprToBox env (ESelect e is) = Fix (LBSelectF
-  (exprToBox env e)
-  (map (fmap (exprToBox env)) is))
-exprToBox env (ECall n args) = Fix (LBCallF n (map (exprToBox env) args))
+exprToBox :: Env -> Expr -> State (Label, Map Label LBox) Label
+exprToBox _ (EConst n) = newBox (LBConst n)
+exprToBox env (EVar n)
+  | Just lbl <- M.lookup n env.identToLabel = return lbl
+  | otherwise = newBox (LBVar n)
+exprToBox _ (ERec _ _ (EConst n)) = newBox (LBConst n)
+exprToBox env (ERec delay n ret) = mdo
+  retLabel <- exprToBox
+    (env { identToLabel = M.insert n delayLabel env.identToLabel })
+    ret
+  delayLabel <- newBox (LBDelay delay retLabel)
+  return retLabel
+exprToBox env (EArr es) = do
+  labels <- mapM (exprToBox env) es
+  newBox (LBArr labels)
+exprToBox env (ESelect e is) = do
+  eLabel <- exprToBox env e
+  isLabels <- mapM (traverse (exprToBox env)) is
+  newBox (LBSelect eLabel isLabels)
+exprToBox env (ECall n args) = do
+  argLabels <- mapM (exprToBox env) args
+  newBox (LBCall n argLabels)
 
 --------------------------------------------------------------------------------
 
