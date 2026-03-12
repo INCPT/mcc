@@ -285,7 +285,9 @@ gatherDelays env = M.fromList <$> sequence
 
 emitDelays :: Map BoxIndex LocalIndex -> Map BoxIndex LocalIndex -> CodegenM ()
 emitDelays localMap delayMap = sequence_
-  [ undefined
+  [ do
+      emit $ ILocalGet retLocal
+      emit $ ILocalSet delayLocal
   | (retBoxIndex, delayLocal) <- M.toList delayMap
   , Just retLocal <- [ M.lookup retBoxIndex localMap ]
   ]
