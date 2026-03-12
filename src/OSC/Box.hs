@@ -415,7 +415,7 @@ boxToBlock env delayMap (LBDelay _ retBoxIndex)
   | Just delayLocal <- M.lookup retBoxIndex delayMap
   , Just retBox <- M.lookup retBoxIndex env = do
       -- Compute the value that will be delayed
-      retLocal <- boxToBlockMemo env delayMap retBoxIndex retBox
+      _retLocal <- boxToBlockMemo env delayMap retBoxIndex retBox
       -- Return the delay local (which holds the previous value)
       pure delayLocal
   | otherwise = error "delay (this is a bug)"
