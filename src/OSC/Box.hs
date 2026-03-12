@@ -140,8 +140,8 @@ inlineExpr env bindings expr = inline (env `M.union` bindingMap) expr
 -}
 
 drill :: Map Ident LBox -> LBox -> [Index a] -> (LBox, [Index a])
-drill _ (LBArr boxes) [IConst n] = (boxes !! n, [])
-drill env (LBArr boxes) (IConst n:ns) = drill env (boxes !! n) ns
+drill _ (Fix (LBArrF boxes)) [IConst n] = (boxes !! n, [])
+drill env (Fix (LBArrF boxes)) (IConst n:ns) = drill env (boxes !! n) ns
 drill _ boxes is = (boxes, is)
 
 -- drill :: Map BoxIndex LBox -> [BoxIndex] -> [Index a] -> Either ([BoxIndex], [Index a]) BoxIndex
@@ -151,9 +151,9 @@ drill _ boxes is = (boxes, is)
 -- drill _ boxes is = Left (boxes, is)
 
 flattenBox :: LBox -> LBox
-flattenBox (LBArr boxes) = case map flattenBox boxes of
+flattenBox (Fix (LBArrF boxes)) = case map flattenBox boxes of
   [box] -> box
-  boxes -> LBArr boxes
+  boxes' -> Fix (LBArrF boxes')
 flattenBox box = box
 
 
@@ -167,34 +167,41 @@ newBox box = do
 
 --------------------------------------------------------------------------------
 
-data LBox
-  = LBConst Number
-  | LBVar Ident
-  | LBArr [LBox]
-  | LBSelect LBox [Index LBox] -- maximally drilled into
-  | LBDelay Int LBox
-  | LBCall Ident [LBox]
-  deriving Show
+newtype Fix f = Fix { unFix :: f (Fix f) }
+
+data LBoxF r
+  = LBConstF Number
+  | LBVarF Ident
+  | LBArrF [r]
+  | LBSelectF r [Index r] -- maximally drilled into
+  | LBDelayF Int r
+  | LBCallF Ident [r]
+  deriving (Show, Functor)
+
+type LBox = Fix LBoxF
+
+instance Show (Fix LBoxF) where
+  show (Fix f) = show f
 
 data Env = Env
   { identToBox :: Map Ident LBox
   }
 
 exprToBox :: Env -> Expr -> LBox
-exprToBox _ (EConst n) = LBConst n
-exprToBox _ (EVar n) = LBVar n
-exprToBox _ (ERec _ _ (EConst n)) = LBConst n
+exprToBox _ (EConst n) = Fix (LBConstF n)
+exprToBox _ (EVar n) = Fix (LBVarF n)
+exprToBox _ (ERec _ _ (EConst n)) = Fix (LBConstF n)
 exprToBox env (ERec delay n ret) = retBox
   where
     retBox = exprToBox
       (env { identToBox = M.insert n delayBox env.identToBox })
       ret
-    delayBox = LBDelay delay retBox
-exprToBox env (EArr es) = LBArr (map (exprToBox env) es)
-exprToBox env (ESelect e is) = LBSelect
+    delayBox = Fix (LBDelayF delay retBox)
+exprToBox env (EArr es) = Fix (LBArrF (map (exprToBox env) es))
+exprToBox env (ESelect e is) = Fix (LBSelectF
   (exprToBox env e)
-  (map (fmap (exprToBox env)) is)
-exprToBox env (ECall n args) = LBCall n (map (exprToBox env) args)
+  (map (fmap (exprToBox env)) is))
+exprToBox env (ECall n args) = Fix (LBCallF n (map (exprToBox env) args))
 
 --------------------------------------------------------------------------------
 
