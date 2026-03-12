@@ -316,4 +316,21 @@ boxToBlock env delayMap _ (LBSelect dims boxIndex indices)
 boxToBlock _ delayMap k (LBDelay _ _)
   | Just delayLocal <- M.lookup k delayMap = pure $ VLocal delayLocal
   | otherwise = error "delay (this is a bug)"
-boxToBlock _ _ _ (LBCall n args) = undefined
+boxToBlock env delayMap _ (LBCall n argBoxes) = do
+  argLocals <- sequence
+    [ case M.lookup argBox env of
+        Just box -> do
+          value <- cache argBox (boxToBlock env delayMap argBox box)
+          case value of
+            VLocal lidx -> pure (LSimple lidx)
+            VConst c -> do
+              -- Materialize constant into a local
+              lidx <- localSimple
+              emit $ IBinOp Plus lidx (VConst c)  -- Load constant by adding to 0
+              pure (LSimple lidx)
+        Nothing -> error "call: arg box not found (this is a bug)"
+    | argBox <- argBoxes
+    ]
+  resultLocal <- localSimple
+  emit $ ICall n argLocals
+  pure $ VLocal resultLocal
