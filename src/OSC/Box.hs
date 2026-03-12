@@ -272,21 +272,26 @@ data Instr
   deriving Show
 
 data CodegenEnv = CodegenEnv
-  {
+  { nextLocal :: LocalIndex
+  , nextMem :: MemAddr
+  , values :: Map BoxIndex LocalIndex
+  , locals :: [LocalIndex]
   }
   
-type CodegenM = StateT (LocalIndex, MemAddr, Map BoxIndex LocalIndex, [LocalIndex]) (Writer [Instr])
+type CodegenM = StateT CodegenEnv (Writer [Instr])
 
 reserve :: Int -> CodegenM MemAddr
 reserve bytes = do
-  (lidx, MemAddr cur, values, locals) <- ST.get
-  ST.put (lidx, MemAddr (cur + bytes), values, locals)
+  env <- ST.get
+  let MemAddr cur = env.nextMem
+  ST.put $ env { nextMem = MemAddr (cur + bytes) }
   pure (MemAddr cur)
 
 localSimple :: CodegenM LocalIndex
 localSimple = do
-  (lidx@(LocalIndex idx), mem, values, locals) <- ST.get
-  ST.put (LocalIndex (idx + 1), mem, values, locals ++ [lidx])
+  env <- ST.get
+  let lidx@(LocalIndex idx) = env.nextLocal
+  ST.put $ env { nextLocal = LocalIndex (idx + 1), locals = env.locals ++ [lidx] }
   pure lidx
 
 localArray :: Int -> CodegenM (LocalIndex, MemAddr)
@@ -301,14 +306,14 @@ localArray size = do
 
 memoBox :: BoxIndex -> CodegenM LocalIndex -> CodegenM LocalIndex
 memoBox boxIndex genLocal = do
-  (idx, mem, values, locals) <- ST.get
-  case M.lookup boxIndex values of
+  env <- ST.get
+  case M.lookup boxIndex env.values of
     Just local -> pure local
     Nothing -> mdo
       -- This works because the state is lazy; we update the state first here because
       -- genLocal is recursive and won't return and thus the state will be updated
       -- only at the end
-      ST.put (idx, mem, M.insert boxIndex local values, locals)
+      ST.put $ env { values = M.insert boxIndex local env.values }
       local <- genLocal
       pure local
 
@@ -321,14 +326,16 @@ gatherDelays env = M.fromList <$> sequence
   | LBDelay _ retBoxIndex <- M.elems env
   ]
 
-emitDelays :: Map BoxIndex LocalIndex -> Map BoxIndex LocalIndex -> CodegenM ()
-emitDelays localMap delayMap = sequence_
-  [ do
-      emit $ ILocalGet retLocal
-      emit $ ILocalSet delayLocal
-  | (retBoxIndex, delayLocal) <- M.toList delayMap
-  , Just retLocal <- [M.lookup retBoxIndex localMap]
-  ]
+emitDelays :: Map BoxIndex LocalIndex -> CodegenM ()
+emitDelays delayMap = do
+  env <- ST.get
+  sequence_
+    [ do
+        emit $ ILocalGet retLocal
+        emit $ ILocalSet delayLocal
+    | (retBoxIndex, delayLocal) <- M.toList delayMap
+    , Just retLocal <- [M.lookup retBoxIndex env.values]
+    ]
 
 boxToBlock :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> LBox -> CodegenM LocalIndex
 boxToBlock _ _ (LBConst n) = do
@@ -440,10 +447,17 @@ codegen expr = (retLocal, localDecls ++ instrs)
     (boxIndex, (_, boxMap)) = ST.runState (exprToBox mempty mergedExpr) (BoxIndex 0, mempty)
     Just box = M.lookup boxIndex boxMap
 
-    ((retLocal, (_, _, _, declaredLocals)), instrs) = 
-      W.runWriter (ST.runStateT gen (LocalIndex 0, MemAddr 0, mempty, []))
+    initialEnv = CodegenEnv
+      { nextLocal = LocalIndex 0
+      , nextMem = MemAddr 0
+      , values = mempty
+      , locals = []
+      }
+
+    ((retLocal, finalEnv), instrs) = 
+      W.runWriter (ST.runStateT gen initialEnv)
     
-    localDecls = map ILocal declaredLocals
+    localDecls = map ILocal finalEnv.locals
 
     gen :: CodegenM LocalIndex
     gen = do
@@ -456,8 +470,7 @@ codegen expr = (retLocal, localDecls ++ instrs)
         | delayLocal <- M.elems delayMap
         ]
       retLocal <- boxToBlock boxMap delayMap box
-      (_, _, localMap, _) <- ST.get
-      emitDelays localMap delayMap
+      emitDelays delayMap
       pure retLocal
 
 --------------------------------------------------------------------------------
