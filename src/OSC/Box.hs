@@ -250,8 +250,8 @@ data Instr
   | IConst Number
   | IGlobalGet Ident
   | IGlobalSet Ident
-  | ILoad MemAddr  -- i32.load: load from memory at address
-  | IStore MemAddr -- i32.store: store to memory at address
+  | ILoad MemAddr  -- i32.load offset: load from (stack_addr + offset)
+  | IStore MemAddr -- i32.store offset: store to (stack_addr + offset)
   | IBinOp BinOp   -- consumes two stack values, produces one
   | ICall Ident    -- call function, args already on stack
   | IDrop
@@ -328,12 +328,10 @@ boxToBlock env delayMap (LBArr dims boxes) = do
   sequence_
     [ do
         valueLocal <- boxToBlockMemo env delayMap boxIndex box
-        -- Calculate address: base + offset
-        emit $ ILocalGet lidx  -- base address
-        emit $ IConst (I (index * 4))  -- offset
-        emit $ IBinOp Plus
-        emit $ ILocalGet valueLocal
-        emit $ IStore (MemAddr 0)  -- store to address on stack
+        -- Push base address, then value, then store with offset
+        emit $ ILocalGet lidx  -- base address on stack
+        emit $ ILocalGet valueLocal  -- value on stack
+        emit $ IStore (MemAddr (index * 4))  -- store to (stack_addr + offset)
     | (index, boxIndex) <- zip [0..] boxes
     , Just box <- [ M.lookup boxIndex env ]
     ]
@@ -370,12 +368,18 @@ boxToBlock env delayMap (LBSelect dims boxIndex indices)
       -- Load from base + offset
       res <- localSimple
 
-      emit $ ILocalGet baseLocal
+      -- Calculate byte offset: offsetLocal * 4
+      byteOffsetLocal <- localSimple
       emit $ ILocalGet offsetLocal
       emit $ IConst (I 4)  -- 4 bytes per element
       emit $ IBinOp Mul
+      emit $ ILocalSet byteOffsetLocal
+
+      -- Load: push base address, then load with byte offset
+      emit $ ILocalGet baseLocal
+      emit $ ILocalGet byteOffsetLocal
       emit $ IBinOp Plus
-      emit $ ILoad (MemAddr 0)  -- load from address on stack
+      emit $ ILoad (MemAddr 0)  -- load from (stack_addr + 0)
       emit $ ILocalSet res
       pure res
   | otherwise = error "select: box (this is a bug)"
