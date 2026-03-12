@@ -222,107 +222,138 @@ newtype MemAddr = MemAddr Int
 data LocalSimple = LSimple LocalIndex
 data LocalArr = LArr LocalIndex MemAddr Int
 
-data BinOp = Plus | Mul
+data BinOp = Plus | Mul | Minus | Div
 
 data Instr
-  = ILoadAddr LocalIndex Ident
-  | ILoadAddr'' LocalIndex MemAddr
-  | ILoadOffset LocalIndex LocalIndex Value -- local <- base[value]
-  | ILoadVal LocalIndex LocalIndex
-  | IStore MemAddr Value -- local, index, value
-  | ICall LocalIndex Ident [Value]
-  | IBinOp BinOp LocalIndex Value
+  = ILocalGet LocalIndex
+  | ILocalSet LocalIndex
+  | ILocalTee LocalIndex  -- set and leave value on stack
+  | IConst Number
+  | IGlobalGet Ident
+  | IGlobalSet Ident
+  | ILoad MemAddr  -- i32.load: load from memory at address
+  | IStore MemAddr -- i32.store: store to memory at address
+  | IBinOp BinOp   -- consumes two stack values, produces one
+  | ICall Ident    -- call function, args already on stack
+  | IDrop
   
 data Program = Program [Instr] (Either LocalSimple LocalArr) -- execute block, return local
 
-type CodegenM = WriterT [Instr] (State (LocalIndex, MemAddr, Map BoxIndex Value))
+type CodegenM = WriterT [Instr] (State (LocalIndex, MemAddr, Map BoxIndex LocalIndex))
 
 reserve :: Int -> CodegenM MemAddr
 reserve bytes = do
   (lidx, MemAddr cur, values) <- ST.get
   ST.put (lidx, MemAddr (cur + bytes), values)
-  pure (MemAddr (cur + bytes))
+  pure (MemAddr cur)
 
 localSimple :: CodegenM LocalIndex
 localSimple = do
   (LocalIndex idx, mem, values) <- ST.get
-  ST.put (LocalIndex (idx + 4), mem, values)
+  ST.put (LocalIndex (idx + 1), mem, values)
   pure (LocalIndex idx)
 
 localArray :: Int -> CodegenM (LocalIndex, MemAddr)
 localArray size = do
-  (LocalIndex idx, MemAddr cur, values) <- ST.get
-  ST.put (LocalIndex (idx + 4), MemAddr (cur + size * 4), values)
-  emit $ ILoadAddr'' (LocalIndex idx) (MemAddr cur)
-  pure (LocalIndex idx, MemAddr cur)
+  lidx <- localSimple
+  addr <- reserve (size * 4)
+  -- Store the base address in the local
+  emit $ IConst (I $ let MemAddr a = addr in a)
+  emit $ ILocalSet lidx
+  pure (lidx, addr)
 
-cache :: BoxIndex -> CodegenM Value -> CodegenM Value
-cache box genValue = do
+cache :: BoxIndex -> CodegenM LocalIndex -> CodegenM LocalIndex
+cache box genLocal = do
   (idx, mem, values) <- ST.get
   case M.lookup box values of
-    Just value' -> pure value'
+    Just local -> pure local
     Nothing -> do
-      value <- genValue
-      ST.put (idx, mem, M.insert box value values)
-      pure value
+      local <- genLocal
+      ST.put (idx, mem, M.insert box local values)
+      pure local
 
 emit :: Instr -> CodegenM ()
 emit = W.tell . pure
 
-data Value = VConst Number | VLocal LocalIndex
-
-boxToBlock :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> BoxIndex -> LBox -> CodegenM Value
-boxToBlock _ _ _ (LBConst n) = pure (VConst n)
+boxToBlock :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> BoxIndex -> LBox -> CodegenM LocalIndex
+boxToBlock _ _ _ (LBConst n) = do
+  lidx <- localSimple
+  emit $ IConst n
+  emit $ ILocalSet lidx
+  pure lidx
 boxToBlock _ _ _ (LBVar n) = do
   lidx <- localSimple
-  emit $ ILoadAddr lidx n
-  pure $ VLocal lidx
+  emit $ IGlobalGet n
+  emit $ ILocalSet lidx
+  pure lidx
 boxToBlock env delayMap _ (LBArr dims boxes) = do
-  (lidx, MemAddr mem) <- localArray (product dims)
+  (lidx, MemAddr baseAddr) <- localArray (product dims)
   sequence_
     [ do
-        value <- cache boxIndex (boxToBlock env delayMap boxIndex box)
-        emit $ IStore (MemAddr $ mem + index * 4) value
+        valueLocal <- cache boxIndex (boxToBlock env delayMap boxIndex box)
+        emit $ ILocalGet valueLocal
+        emit $ IStore (MemAddr $ baseAddr + index * 4)
     | (index, boxIndex) <- zip [0..] boxes
     , Just box <- [ M.lookup boxIndex env ]
     ]
-  pure $ VLocal lidx
+  pure lidx
 boxToBlock env delayMap _ (LBSelect dims boxIndex indices)
   | Just box <- M.lookup boxIndex env = do
-      bsel <- cache boxIndex (boxToBlock env delayMap boxIndex box)
-      case bsel of
-        VConst _ -> error "select: bsel (this is a bug)"
-        VLocal bsel' -> do
-          lidx <- localSimple
-          res <- localSimple
-          sequence_
-            [ case idx of
-                IConst i -> emit $ IBinOp Plus lidx (VConst $ I (i * card))
-                IVar indexBoxIndex
-                  | Just indexBox <- M.lookup indexBoxIndex env -> do
-                      vidx <- cache indexBoxIndex (boxToBlock env delayMap indexBoxIndex indexBox)
-                      case vidx of
-                        VConst (I i) -> emit $ IBinOp Plus lidx (VConst $ I (i * card))
-                        VConst _ -> error "select: index not natural (this is a bug)"
-                        VLocal i -> do
-                          emit $ IBinOp Mul i (VConst $ I card)
-                          emit $ IBinOp Plus lidx (VLocal i)
-                  | otherwise -> error "select: index (this is a bug)"
-            | (card, idx) <- zip (scanl (*) 1 dims) indices
-            ]
-          emit $ ILoadOffset res bsel' (VLocal lidx)
-          pure $ VLocal res
+      baseLocal <- cache boxIndex (boxToBlock env delayMap boxIndex box)
+      offsetLocal <- localSimple
+      emit $ IConst (I 0)
+      emit $ ILocalSet offsetLocal
+      
+      -- Calculate offset: sum of (index * cardinality) for each dimension
+      sequence_
+        [ case idx of
+            IConst i -> do
+              emit $ ILocalGet offsetLocal
+              emit $ IConst (I (i * card))
+              emit $ IBinOp Plus
+              emit $ ILocalSet offsetLocal
+            IVar indexBoxIndex
+              | Just indexBox <- M.lookup indexBoxIndex env -> do
+                  idxLocal <- cache indexBoxIndex (boxToBlock env delayMap indexBoxIndex indexBox)
+                  emit $ ILocalGet offsetLocal
+                  emit $ ILocalGet idxLocal
+                  emit $ IConst (I card)
+                  emit $ IBinOp Mul
+                  emit $ IBinOp Plus
+                  emit $ ILocalSet offsetLocal
+              | otherwise -> error "select: index (this is a bug)"
+        | (card, idx) <- zip (scanl (*) 1 dims) indices
+        ]
+      
+      -- Load from base + offset
+      res <- localSimple
+      emit $ ILocalGet baseLocal
+      emit $ ILocalGet offsetLocal
+      emit $ IConst (I 4)  -- 4 bytes per element
+      emit $ IBinOp Mul
+      emit $ IBinOp Plus
+      emit $ ILoad (MemAddr 0)  -- offset is already in the address
+      emit $ ILocalSet res
+      pure res
   | otherwise = error "select: box (this is a bug)"
 boxToBlock _ delayMap k (LBDelay _ _)
-  | Just delayLocal <- M.lookup k delayMap = pure $ VLocal delayLocal
+  | Just delayLocal <- M.lookup k delayMap = pure delayLocal
   | otherwise = error "delay (this is a bug)"
 boxToBlock env delayMap _ (LBCall n argBoxes) = do
-  argLocals <- sequence
+  -- Push all arguments onto the stack
+  sequence_
     [ case M.lookup argBox env of
-        Just box -> cache argBox (boxToBlock env delayMap argBox box)
+        Just box -> do
+          argLocal <- cache argBox (boxToBlock env delayMap argBox box)
+          emit $ ILocalGet argLocal
         Nothing -> error "call: arg box not found (this is a bug)"
     | argBox <- argBoxes
     ]
+  
+  -- Call function (args are on stack)
+  emit $ ICall n
+  
+  -- Store result
   res <- localSimple
-  emit $ ICall res n argLocals
-  pure $ VLocal res
+  emit $ ILocalSet res
+  pure res
