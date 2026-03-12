@@ -222,7 +222,16 @@ exprToBox env (EArr dims es) = do
 exprToBox env (ESelect dims e is) = do
   eBoxIndex <- exprToBox env e
   isBoxIndexs <- traverse (traverse (exprToBox env)) is
-  newBox (LBSelect dims eBoxIndex isBoxIndexs)
+  
+  -- Check if we're selecting from another select - if so, combine them
+  (_, boxMap) <- ST.get
+  case M.lookup eBoxIndex boxMap of
+    Just (LBSelect innerDims innerBoxIndex innerIndices) -> do
+      -- Combine the indices: outer selection applied to inner selection
+      -- This flattens nested selections into a single selection
+      let combinedIndices = innerIndices ++ isBoxIndexs
+      newBox (LBSelect innerDims innerBoxIndex combinedIndices)
+    _ -> newBox (LBSelect dims eBoxIndex isBoxIndexs)
 exprToBox env (ECall n args) = do
   argBoxIndexs <- traverse (exprToBox env) args
   newBox (LBCall n argBoxIndexs)
