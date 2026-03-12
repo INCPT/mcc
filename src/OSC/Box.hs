@@ -344,9 +344,7 @@ boxToBlock env delayMap (LBSelect dims boxIndex indices)
       -- Calculate offset: sum of (index * cardinality) for each dimension
       sequence_
         [ case idx of
-            IdxConst 0 -> do
-              emit $ IConst (I 0)
-              emit $ ILocalSet offsetLocal
+            IdxConst 0 -> pure ()
             IdxConst i -> do
               emit $ ILocalGet offsetLocal
               emit $ IConst (I (i * card))
