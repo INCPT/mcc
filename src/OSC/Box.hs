@@ -1,6 +1,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE RecursiveDo #-}
+{-# OPTIONS_GHC -fno-defer-type-errors #-}
 
 module OSC.Box where
 
@@ -57,18 +58,29 @@ data Binding expr = Binding Ident expr
 -- TODO: streams not in scope outside of graph
 -- TODO: normal functions/methods not in scope in graph (only variables are in scope)
 -- TODO: branch operation computes both branches
+-- TODO: after the shadow check/SSA pass all Idents are unique
 
 data Index a = IConst Int | IVar a
   deriving Show
 
+data Expr'
+  = EConst' Number
+  | EVar' Ident
+  | EGraphCall' Ident [Expr]
+  | ECall' Ident [Expr]
+  | EArr' [Expr']
+  | ESelect' Expr (Index Ident)
+  | ERec' Int Ident [Binding Expr'] Expr' -- rec delay |prev| -> expr
+
+-- the above gets inlined to:
+
 data Expr
   = EConst Number
   | EVar Ident
-  | EGraph Ident -- TODO: should prob be inlined here
   | EArr [Expr]
-  | ESelect Expr (Index Ident)
-  | ERec Int Ident [Binding Expr] Expr -- rec delay |prev| -> expr
-  | ECall String Expr Expr
+  | ESelect Expr [Index Expr]
+  | ERec Int Ident Expr -- rec delay |prev| -> expr
+  | ECall Ident [Expr]
 
 data Graph = Graph [Binding Expr] Expr
 
@@ -80,10 +92,11 @@ data LBox
   | LBVar Ident
   | LBDelay Int BoxIndex
   | LBArr [BoxIndex]
-  | LBSelect [BoxIndex] (Index BoxIndex)
-  | LBCall String BoxIndex BoxIndex -- TODO: func must be pure
+  | LBSelect [BoxIndex] [Index BoxIndex]
+  | LBCall Ident [BoxIndex] -- TODO: func must be pure
   deriving Show
 
+{-
 inlineExpr :: Map Ident Expr -> [Binding Expr] -> Expr -> Expr
 inlineExpr env bindings expr = inline (env `M.union` bindingMap) expr
   where
@@ -96,12 +109,12 @@ inlineExpr env bindings expr = inline (env `M.union` bindingMap) expr
       | Just e <- M.lookup n env' = inline env' e
       | otherwise = EVar n
     inline _ e@(EConst _) = e
-    inline _ e@(EGraph _) = e
     inline env' (ESelect e indices) = ESelect (inline env' e) indices
     inline env' (ERec delay n bindings' ret) = 
       ERec delay n bindings' (inline (M.delete n env') ret)
-    inline env' (ECall f a b) = ECall f (inline env' a) (inline env' b)
+    inline env' (ECall f args) = ECall f (fmap (inline env') args)
     inline env' (EArr es) = EArr (map (inline env') es)
+-}
 
 newBox :: LBox -> State (Map BoxIndex LBox) BoxIndex
 newBox box = do
@@ -112,7 +125,6 @@ newBox box = do
 
 data Env = Env
   { identToBox :: Map Ident BoxIndex
-  , identToExpr :: Map Ident Expr
   }
 
 exprToBoxes :: Env -> Expr -> State (Map BoxIndex LBox) [BoxIndex]
@@ -120,20 +132,17 @@ exprToBoxes _ (EConst n) = pure <$> newBox (LBConst n)
 exprToBoxes env (EVar n)
   | Just boxIndex <- M.lookup n env.identToBox = pure [boxIndex]
   | otherwise = pure <$> newBox (LBVar n)
-exprToBoxes _ (ERec _ _ _ (EConst n)) = pure <$> newBox (LBConst n)
-exprToBoxes env (ERec delay n bindings ret) = do
+exprToBoxes _ (ERec _ _ (EConst n)) = pure <$> newBox (LBConst n)
+exprToBoxes env (ERec delay n ret) = do
   rec
     retBoxes <- exprToBoxes
       (env { identToBox = M.insert n argNode env.identToBox })
-      (inlineExpr env.identToExpr bindings ret)
+      ret
 
     delayBoxes <- traverse newBox $ map (LBDelay delay) retBoxes
     argNode <- newBox (LBArr delayBoxes)
 
   pure retBoxes
-exprToBoxes env (EGraph n)
-  | Just e <- M.lookup n env.identToExpr = exprToBoxes env e
-  | otherwise = error "no binding (this is a bug)"
 exprToBoxes env (EArr es) = do
   elemBoxes <- sequence
     [ exprToBoxes env expr >>= boxesToBox
@@ -149,24 +158,21 @@ exprToBoxes env (ESelect e is) = do
       is'' <- sequence
         [ case i of
             IConst n -> pure (IConst n)
-            IVar ident -> case M.lookup ident env.identToExpr of
-              Just e -> do
-                boxes' <- exprToBoxes env e
-                case boxes' of
-                  [box] -> pure (IVar box)
-                  _ -> error "index isn't a single box (this is a bug)"
-              Nothing -> IVar <$> newBox (LBVar ident)
+            IVar expr -> do
+              boxes' <- exprToBoxes env expr
+              case boxes' of
+                [box] -> pure (IVar box)
+                _ -> error "index isn't a single box (this is a bug)"
         | i <- is'
         ]
       pure <$> newBox (LBSelect boxes is'')
 
-exprToBoxes env (ECall n f a) = do
-  f' <- exprToBoxes env f
-  a' <- exprToBoxes env a
-  box <- LBCall n <$> boxesToBox f' <*> boxesToBox a'
+exprToBoxes env (ECall n args) = do
+  args' <- traverse (exprToBoxes env) args
+  box <- LBCall n <$> traverse boxesToBox args'
   pure <$> newBox box
 
-drill :: Map BoxIndex LBox -> [BoxIndex] -> [Index Ident] -> Either ([BoxIndex], [Index Ident]) BoxIndex
+drill :: Map BoxIndex LBox -> [BoxIndex] -> [Index a] -> Either ([BoxIndex], [Index a]) BoxIndex
 drill _ boxes [IConst n] = Right (boxes !! n)
 drill env boxes (IConst n:ns)
   | Just (LBArr boxes') <- M.lookup (boxes !! n) env = drill env boxes' ns
@@ -193,20 +199,20 @@ exampleRecDo = do
 
 -- More direct analog to the ERec pattern:
 -- Creating boxes that reference each other through delays
-exampleDelayPattern :: State (Map BoxIndex LBox) [BoxIndex]
-exampleDelayPattern = do
-  rec
-    -- Create return boxes that reference the delay boxes
-    retBoxes <- traverse newBox [LBCall "+" (boxes !! 0) (BoxIndex 100), LBCall "*" (boxes !! 1) (BoxIndex 200)]
-    -- Create delay boxes that reference the return boxes
-    boxes <- traverse (\retBox -> newBox (LBDelay 1 retBox)) retBoxes
-  return retBoxes
+-- exampleDelayPattern :: State (Map BoxIndex LBox) [BoxIndex]
+-- exampleDelayPattern = do
+--   rec
+--     -- Create return boxes that reference the delay boxes
+--     retBoxes <- traverse newBox [LBCall "+" (boxes !! 0) (BoxIndex 100), LBCall "*" (boxes !! 1) (BoxIndex 200)]
+--     -- Create delay boxes that reference the return boxes
+--     boxes <- traverse (\retBox -> newBox (LBDelay 1 retBox)) retBoxes
+--   return retBoxes
 
 -- Test function to run the example
 testRecDo :: IO ()
 testRecDo = do
   putStrLn "Testing RecursiveDo with lazy State:"
-  let (result, finalState) = ST.runState exampleDelayPattern M.empty
+  let (result, finalState) = ST.runState exampleRecDo M.empty
   putStrLn $ "Result: " ++ show result
   putStrLn $ "Final state: " ++ show finalState
   putStrLn "\nThis demonstrates that the pattern won't diverge because:"
