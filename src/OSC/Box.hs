@@ -283,8 +283,12 @@ gatherDelays env = M.fromList <$> sequence
   | LBDelay _ retBoxIndex <- M.elems env
   ]
 
-emitDelays :: Map BoxIndex LocalIndex -> CodegenM ()
-emitDelays delayMap = undefined
+emitDelays :: Map BoxIndex LocalIndex -> Map BoxIndex LocalIndex -> CodegenM ()
+emitDelays localMap delayMap = sequence_
+  [ undefined
+  | (retBoxIndex, delayLocal) <- M.toList delayMap
+  , Just retLocal <- [ M.lookup retBoxIndex localMap ]
+  ]
 
 boxToBlock :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> LBox -> CodegenM LocalIndex
 boxToBlock _ _ (LBConst n) = do
