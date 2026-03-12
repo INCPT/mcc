@@ -257,19 +257,18 @@ data Instr
   | IDrop
   deriving Show
   
-type CodegenM = (StateT (LocalIndex, MemAddr, Map BoxIndex LocalIndex) (Writer [Instr]))
+type CodegenM = (StateT (LocalIndex, MemAddr, Map BoxIndex LocalIndex, [LocalIndex]) (Writer [Instr]))
 
 reserve :: Int -> CodegenM MemAddr
 reserve bytes = do
-  (lidx, MemAddr cur, values) <- ST.get
-  ST.put (lidx, MemAddr (cur + bytes), values)
+  (lidx, MemAddr cur, values, locals) <- ST.get
+  ST.put (lidx, MemAddr (cur + bytes), values, locals)
   pure (MemAddr cur)
 
 localSimple :: CodegenM LocalIndex
 localSimple = do
-  (lidx@(LocalIndex idx), mem, values) <- ST.get
-  ST.put (LocalIndex (idx + 1), mem, values)
-  emit $ ILocal lidx
+  (lidx@(LocalIndex idx), mem, values, locals) <- ST.get
+  ST.put (LocalIndex (idx + 1), mem, values, locals ++ [lidx])
   pure lidx
 
 localArray :: Int -> CodegenM (LocalIndex, MemAddr)
@@ -284,14 +283,14 @@ localArray size = do
 
 memoBox :: BoxIndex -> CodegenM LocalIndex -> CodegenM LocalIndex
 memoBox boxIndex genLocal = do
-  (idx, mem, values) <- ST.get
+  (idx, mem, values, locals) <- ST.get
   case M.lookup boxIndex values of
     Just local -> pure local
     Nothing -> mdo
       -- This works because the state is lazy; we update the state first here because
       -- genLocal is recursive and won't return and thus the state will be updated
       -- only at the end
-      ST.put (idx, mem, M.insert boxIndex local values)
+      ST.put (idx, mem, M.insert boxIndex local values, locals)
       local <- genLocal
       pure local
 
@@ -405,16 +404,21 @@ boxToBlockMemo env delayMap k lbox = memoBox k (boxToBlock env delayMap lbox)
 --------------------------------------------------------------------------------
 
 codegen :: Expr -> (LocalIndex, [Instr])
-codegen expr = W.runWriter $ ST.evalStateT gen (LocalIndex 0, MemAddr 0, mempty)
+codegen expr = (retLocal, localDecls ++ instrs)
   where
     (boxIndex, (_, boxMap)) = ST.runState (exprToBox mempty expr) (BoxIndex 0, mempty)
     Just box = M.lookup boxIndex boxMap
+
+    ((retLocal, instrs), (_, _, _, declaredLocals)) = 
+      ST.runState (W.runWriterT gen) (LocalIndex 0, MemAddr 0, mempty, [])
+    
+    localDecls = map ILocal declaredLocals
 
     gen :: CodegenM LocalIndex
     gen = do
       delayMap <- gatherDelays boxMap
       retLocal <- boxToBlock boxMap delayMap box
-      (_, _, localMap) <- ST.get
+      (_, _, localMap, _) <- ST.get
       emitDelays localMap delayMap
       pure retLocal
 
