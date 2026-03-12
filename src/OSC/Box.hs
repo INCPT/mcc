@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedRecordDot #-}
@@ -78,7 +79,7 @@ data Binding expr = Binding Ident expr
 -- TODO: should this be legal: f: f32[4] -> f32, rec |prev| return (f prev)
 
 data Index a = IConst Int | IVar a
-  deriving (Show, Functor)
+  deriving (Show, Functor, Foldable, Traversable)
 
 data Expr'
   = EConst' Number
@@ -140,7 +141,7 @@ inlineExpr env bindings expr = inline (env `M.union` bindingMap) expr
     inline env' (EArr es) = EArr (map (inline env') es)
 -}
 
-drill :: Map Label LBox -> Label -> [Index a] -> (Label, [Index a])
+drill :: Map BoxIndex LBox -> BoxIndex -> [Index a] -> (BoxIndex, [Index a])
 drill boxMap lbl [IConst n]
   | Just (LBArr labels) <- M.lookup lbl boxMap = (labels !! n, [])
 drill boxMap lbl (IConst n:ns)
@@ -153,62 +154,57 @@ drill _ lbl is = (lbl, is)
 --   | Just (LBArr boxes') <- M.lookup (boxes !! n) env = drill env boxes' ns
 -- drill _ boxes is = Left (boxes, is)
 
-flattenBox :: Map Label LBox -> Label -> (Label, Map Label LBox)
+flattenBox :: Map BoxIndex LBox -> BoxIndex -> (BoxIndex, Map BoxIndex LBox)
 flattenBox boxMap lbl
   | Just (LBArr labels) <- M.lookup lbl boxMap =
       case labels of
-        [singleLabel] -> (singleLabel, boxMap)
+        [singleBoxIndex] -> (singleBoxIndex, boxMap)
         _ -> (lbl, boxMap)
   | otherwise = (lbl, boxMap)
 
 
 
-newBox :: LBox -> State (Label, Map Label LBox) Label
+newBox :: LBox -> State (BoxIndex, Map BoxIndex LBox) BoxIndex
 newBox box = do
-  (nextLabel, boxes) <- ST.get
-  ST.put (nextLabel + 1, M.insert nextLabel box boxes)
-  return nextLabel
+  (nextBoxIndex, boxes) <- ST.get
+  ST.put (nextBoxIndex + 1, M.insert nextBoxIndex box boxes)
+  return nextBoxIndex
 
 --------------------------------------------------------------------------------
-
-newtype Label = Label Int
-  deriving (Eq, Ord, Show, Num)
 
 data LBox
   = LBConst Number
   | LBVar Ident
-  | LBArr [Label]
-  | LBSelect Label [Index Label] -- maximally drilled into
-  | LBDelay Int Label
-  | LBCall Ident [Label]
+  | LBArr [BoxIndex]
+  | LBSelect BoxIndex [Index BoxIndex] -- maximally drilled into
+  | LBDelay Int BoxIndex
+  | LBCall Ident [BoxIndex]
   deriving Show
 
 data Env = Env
-  { identToLabel :: Map Ident Label
+  { identToBoxIndex :: Map Ident BoxIndex
   }
 
-exprToBox :: Env -> Expr -> State (Label, Map Label LBox) Label
+exprToBox :: Env -> Expr -> State (BoxIndex, Map BoxIndex LBox) BoxIndex
 exprToBox _ (EConst n) = newBox (LBConst n)
-exprToBox env (EVar n)
-  | Just lbl <- M.lookup n env.identToLabel = return lbl
-  | otherwise = newBox (LBVar n)
+exprToBox _ (EVar n) = newBox (LBVar n)
 exprToBox _ (ERec _ _ (EConst n)) = newBox (LBConst n)
 exprToBox env (ERec delay n ret) = mdo
-  retLabel <- exprToBox
-    (env { identToLabel = M.insert n delayLabel env.identToLabel })
+  retBoxIndex <- exprToBox
+    (env { identToBoxIndex = M.insert n delayBoxIndex env.identToBoxIndex })
     ret
-  delayLabel <- newBox (LBDelay delay retLabel)
-  return retLabel
+  delayBoxIndex <- newBox (LBDelay delay retBoxIndex)
+  pure retBoxIndex
 exprToBox env (EArr es) = do
-  labels <- mapM (exprToBox env) es
+  labels <- traverse (exprToBox env) es
   newBox (LBArr labels)
 exprToBox env (ESelect e is) = do
-  eLabel <- exprToBox env e
-  isLabels <- mapM (traverse (exprToBox env)) is
-  newBox (LBSelect eLabel isLabels)
+  eBoxIndex <- exprToBox env e
+  isBoxIndexs <- traverse (traverse (exprToBox env)) is
+  newBox (LBSelect eBoxIndex isBoxIndexs)
 exprToBox env (ECall n args) = do
-  argLabels <- mapM (exprToBox env) args
-  newBox (LBCall n argLabels)
+  argBoxIndexs <- traverse (exprToBox env) args
+  newBox (LBCall n argBoxIndexs)
 
 --------------------------------------------------------------------------------
 
