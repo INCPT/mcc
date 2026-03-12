@@ -375,18 +375,21 @@ boxToBlock env delayMap (LBSelect dims boxIndex indices)
       pure res
   | otherwise = error "select: box (this is a bug)"
 boxToBlock _ delayMap (LBDelay _ retBoxIndex)
-  | Just delayLocal <- M.lookup retBoxIndex delayMap = pure delayLocal
+  | Just delayLocal <- M.lookup retBoxIndex delayMap = do
+      -- Don't emit ILocalGet here - let the caller decide when to load
+      pure delayLocal
   | otherwise = error "delay (this is a bug)"
 boxToBlock env delayMap (LBCall n argBoxIndices) = do
-  -- Push all arguments onto the stack
-  sequence_
+  -- Evaluate all arguments to locals first
+  argLocals <- sequence
     [ case M.lookup argBoxIndex env of
-        Just box -> do
-          argLocal <- boxToBlockMemo env delayMap argBoxIndex box
-          emit $ ILocalGet argLocal
+        Just box -> boxToBlockMemo env delayMap argBoxIndex box
         Nothing -> error "call: arg box not found (this is a bug)"
     | argBoxIndex <- argBoxIndices
     ]
+  
+  -- Push all arguments onto the stack right before the call
+  sequence_ [emit $ ILocalGet argLocal | argLocal <- argLocals]
   
   -- Call function (args are on stack)
   emit $ ICall n
