@@ -411,9 +411,12 @@ boxToBlock env delayMap (LBSelect dims boxIndex indices)
       emit $ ILocalSet res
       pure res
   | otherwise = error "select: box (this is a bug)"
-boxToBlock _ delayMap (LBDelay _ retBoxIndex)
-  | Just delayLocal <- M.lookup retBoxIndex delayMap = do
-      -- Don't emit ILocalGet here - let the caller decide when to load
+boxToBlock env delayMap (LBDelay _ retBoxIndex)
+  | Just delayLocal <- M.lookup retBoxIndex delayMap
+  , Just retBox <- M.lookup retBoxIndex env = do
+      -- Compute the value that will be delayed
+      retLocal <- boxToBlockMemo env delayMap retBoxIndex retBox
+      -- Return the delay local (which holds the previous value)
       pure delayLocal
   | otherwise = error "delay (this is a bug)"
 boxToBlock env delayMap (LBCall n argBoxIndices) = do
