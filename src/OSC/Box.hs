@@ -216,14 +216,14 @@ testRecDo = do
 
 --------------------------------------------------------------------------------
 
-desugar :: Map Ident Expr -> Graph -> State BoxIndex [LBox]
-desugar env (Graph bindings ret) = sequence
-  [ undefined
-  | Binding n e <- bindings
-  ]
-  where
-    -- TODO no shadowing etc
-    innerEnv =  M.fromList
-      [ (n, e)
-      | Binding n e <- bindings
-      ]
+-- desugar :: Map Ident Expr -> Graph -> State BoxIndex [LBox]
+-- desugar env (Graph bindings ret) = sequence
+--   [ undefined
+--   | Binding n e <- bindings
+--   ]
+--   where
+--     -- TODO no shadowing etc
+--     innerEnv =  M.fromList
+--       [ (n, e)
+--       | Binding n e <- bindings
+--       ]
