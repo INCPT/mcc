@@ -112,9 +112,12 @@ data Expr'
 expandExpr :: Expr' -> Expr
 expandExpr = undefined
 
+data Type = TSimple | TArray Int
+  deriving Show
+
 data Expr
   = EConst Number
-  | EVar Ident
+  | EVar Type Ident
   | EArr [Expr]
   | ESelect Expr [Index Expr]
   | ERec Int Ident Expr -- rec delay |prev| -> expr
@@ -178,7 +181,7 @@ newBox box = do
 
 data LBox
   = LBConst Number
-  | LBVar Ident
+  | LBVar Type Ident
   | LBArr [BoxIndex]
   | LBSelect BoxIndex [Index BoxIndex] -- maximally drilled into
   | LBDelay Int BoxIndex
@@ -187,7 +190,7 @@ data LBox
 
 exprToBox :: Map Ident BoxIndex -> Expr -> BoxGenM BoxIndex
 exprToBox _ (EConst n) = newBox (LBConst n)
-exprToBox _ (EVar n) = newBox (LBVar n)
+exprToBox _ (EVar t n) = newBox (LBVar t n)
 exprToBox _ (ERec _ _ (EConst n)) = newBox (LBConst n)
 exprToBox env (ERec delay n ret) = mdo
   retBoxIndex <- exprToBox (M.insert n delayBoxIndex env) ret
@@ -208,38 +211,53 @@ exprToBox env (ECall n args) = do
 
 -- TODO: after component clustering, if a component is called only once, inline
 
-newtype Addr = Addr Int
+newtype LocalIndex = LocalIndex Int
   deriving Num
 
-data Local = Simple Addr | Array Addr Int
+newtype MemAddr = MemAddr Int
+  deriving Num
+
+data LocalSimple = LSimple LocalIndex
+data LocalArr = LArr LocalIndex MemAddr Int
 
 data Block
   = BConst Number
-  | BLocal (Local -> Block)
-  | BLoad Local Ident
-  | BWrite Local Block -- local, value
-  | BWriteArr Local Block Block -- local, index, value
-  | BCall Ident [Local]
+
+  | BLocalSimple (LocalSimple -> Block)
+  | BLocalArr Int (LocalArr -> Block)
+
+  | BLoad LocalIndex Ident
+
+  | BWrite LocalSimple Block -- local, value
+  | BWriteArr LocalArr Block Block -- local, index, value
+  | BCall Ident [LocalSimple]
   
-data Program = Program [Block] Local -- execute block, return local
+data Program = Program [Block] (Either LocalSimple LocalArr) -- execute block, return local
 
-type CodegenM = State Addr
+type CodegenM = State (LocalIndex, MemAddr)
 
-reserve :: Int -> CodegenM Addr
+reserve :: Int -> CodegenM MemAddr
 reserve bytes = do
-  Addr cur <- ST.get
-  ST.put (Addr (cur + bytes))
-  pure (Addr (cur + bytes))
+  (lidx, MemAddr cur) <- ST.get
+  ST.put (lidx, MemAddr (cur + bytes))
+  pure (MemAddr (cur + bytes))
 
-localSimple :: (Local -> Block) -> CodegenM Block
+localSimple :: (LocalSimple -> Block) -> CodegenM Block
 localSimple f = do
-  addr <- reserve 4
-  pure (f (Simple addr))
+  (LocalIndex idx, mem) <- ST.get
+  ST.put (LocalIndex (idx + 4), mem)
+  pure (f (LSimple (LocalIndex idx)))
 
-localArray :: Int -> (Local -> Block) -> CodegenM Block
+localArray :: Int -> (LocalArr -> Block) -> CodegenM Block
 localArray size f = do
-  addr <- reserve (size * 4)
-  pure (f (Simple addr))
+  (LocalIndex idx, MemAddr cur) <- ST.get
+  ST.put (LocalIndex (idx + 4), MemAddr (cur + size * 4))
+  pure (f (LArr (LocalIndex idx) (MemAddr cur) size))
 
-codegen :: Map BoxIndex LBox -> LBox -> CodegenM Program
-codegen = undefined
+data Return = RConst Number | RLocal LocalIndex
+
+boxToBlock :: Map BoxIndex LBox -> LBox -> CodegenM Block
+boxToBlock _ (LBConst n) = pure (BConst n)
+boxToBlock _ (LBVar TSimple n) = localSimple $ \(LSimple lidx) -> BLoad lidx n
+boxToBlock _ (LBVar (TArray size) n) = localArray size $ \(LArr lidx _ _) -> BLoad lidx n
+boxToBlock _ (LBArr boxes) = localArray (length boxes) $ \larr -> undefined
