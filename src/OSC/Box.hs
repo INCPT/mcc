@@ -125,6 +125,7 @@ data Expr
   | ESelect [Int] Expr [Index Expr] -- dims
   | ERec Int Ident Expr -- rec delay |prev| -> expr
   | ECall Ident [Expr]
+  deriving Show
 
 data Graph = Graph [Binding Expr] Expr
 
@@ -190,6 +191,9 @@ data LBox
   | LBDelay Int BoxIndex
   | LBCall Ident [BoxIndex]
   deriving Show
+
+inlineRef :: Ident -> Expr -> Expr -> Expr
+inlineRef n expr replace = undefined
 
 exprToBox :: Map Ident BoxIndex -> Expr -> BoxGenM BoxIndex
 exprToBox _ (EConst n) = newBox (LBConst n)
@@ -264,13 +268,16 @@ localArray size = do
   pure (lidx, addr)
 
 memoBox :: BoxIndex -> CodegenM LocalIndex -> CodegenM LocalIndex
-memoBox box genLocal = do
+memoBox boxIndex genLocal = do
   (idx, mem, values) <- ST.get
-  case M.lookup box values of
+  case M.lookup boxIndex values of
     Just local -> pure local
-    Nothing -> do
+    Nothing -> mdo
+      -- This works because the state is lazy; we update the state first here because
+      -- genLocal is recursive and won't return and thus the state will be updated
+      -- only at the end
+      ST.put (idx, mem, M.insert boxIndex local values)
       local <- genLocal
-      ST.put (idx, mem, M.insert box local values)
       pure local
 
 emit :: Instr -> CodegenM ()
@@ -428,6 +435,14 @@ testVarIndex = ERec 1 (Ident "i") $
   ESelect [3]
     (EArr [3] [EConst (I 10), EConst (I 20), EConst (I 30)])
     [IdxVar (EVar (Ident "i"))]
+
+printBoxes :: Expr -> IO ()
+printBoxes expr = do
+  putStrLn $ "Box index: " ++ show boxIndex
+  putStrLn "Boxes:"
+  mapM_ (putStrLn . ("  " ++) . show) boxMap
+  where
+    (boxIndex, (_, boxMap)) = ST.runState (exprToBox mempty expr) (BoxIndex 0, mempty)
 
 printCodegen :: String -> Expr -> IO ()
 printCodegen name expr = do
