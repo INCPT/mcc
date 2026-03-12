@@ -323,7 +323,7 @@ emitDelays localMap delayMap = sequence_
       emit $ ILocalGet retLocal
       emit $ ILocalSet delayLocal
   | (retBoxIndex, delayLocal) <- M.toList delayMap
-  , Just retLocal <- [ M.lookup retBoxIndex localMap ]
+  , Just retLocal <- [M.lookup retBoxIndex localMap]
   ]
 
 boxToBlock :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> LBox -> CodegenM LocalIndex
