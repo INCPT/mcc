@@ -55,6 +55,7 @@ b2 = res
 data Binding expr = Binding Ident expr
 
 -- TODO: streams not in scope outside of graph
+-- TODO: normal functions/methods not in scope in graph (only variables are in scope)
 -- TODO: branch operation computes both branches
 
 data Index a = IConst Int | IVar a
@@ -144,7 +145,20 @@ exprToBoxes env (ESelect e is) = do
   boxMap <- ST.get
   case drill boxMap boxes is of
     Right box -> pure [box]
-    Left (boxes, is') -> undefined
+    Left (boxes, is') -> do
+      is'' <- sequence
+        [ case i of
+            IConst n -> pure (IConst n)
+            IVar ident -> case M.lookup ident env.identToExpr of
+              Just e -> do
+                boxes' <- exprToBoxes env e
+                case boxes' of
+                  [box] -> pure (IVar box)
+                  _ -> error "index isn't a single box (this is a bug)"
+              Nothing -> IVar <$> newBox (LBVar ident)
+        | i <- is'
+        ]
+      pure <$> newBox (LBSelect boxes is'')
 
 exprToBoxes env (ECall n f a) = do
   f' <- exprToBoxes env f
@@ -183,7 +197,7 @@ exampleDelayPattern :: State (Map BoxIndex LBox) [BoxIndex]
 exampleDelayPattern = do
   rec
     -- Create return boxes that reference the delay boxes
-    retBoxes <- traverse newBox [LBFunc "+" (boxes !! 0) (BoxIndex 100), LBFunc "*" (boxes !! 1) (BoxIndex 200)]
+    retBoxes <- traverse newBox [LBCall "+" (boxes !! 0) (BoxIndex 100), LBCall "*" (boxes !! 1) (BoxIndex 200)]
     -- Create delay boxes that reference the return boxes
     boxes <- traverse (\retBox -> newBox (LBDelay 1 retBox)) retBoxes
   return retBoxes
