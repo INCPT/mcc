@@ -264,8 +264,8 @@ localArray size = do
   emit $ ILocalSet lidx
   pure (lidx, addr)
 
-cache :: BoxIndex -> CodegenM LocalIndex -> CodegenM LocalIndex
-cache box genLocal = do
+memoBox :: BoxIndex -> CodegenM LocalIndex -> CodegenM LocalIndex
+memoBox box genLocal = do
   (idx, mem, values) <- ST.get
   case M.lookup box values of
     Just local -> pure local
@@ -282,9 +282,6 @@ gatherDelays env = M.fromList <$> sequence
   [ (retBoxIndex,) <$> localSimple
   | LBDelay _ retBoxIndex <- M.elems env
   ]
-
-boxToBlockMemo :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> BoxIndex -> LBox -> CodegenM LocalIndex
-boxToBlockMemo env delayMap k lbox = cache k (boxToBlock env delayMap lbox)
 
 boxToBlock :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> LBox -> CodegenM LocalIndex
 boxToBlock _ _ (LBConst n) = do
@@ -355,7 +352,7 @@ boxToBlock env delayMap (LBCall n argBoxIndices) = do
   sequence_
     [ case M.lookup argBoxIndex env of
         Just box -> do
-          argLocal <- cache argBoxIndex (boxToBlockMemo env delayMap argBoxIndex box)
+          argLocal <- boxToBlockMemo env delayMap argBoxIndex box
           emit $ ILocalGet argLocal
         Nothing -> error "call: arg box not found (this is a bug)"
     | argBoxIndex <- argBoxIndices
@@ -368,3 +365,6 @@ boxToBlock env delayMap (LBCall n argBoxIndices) = do
   res <- localSimple
   emit $ ILocalSet res
   pure res
+
+boxToBlockMemo :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> BoxIndex -> LBox -> CodegenM LocalIndex
+boxToBlockMemo env delayMap k lbox = memoBox k (boxToBlock env delayMap lbox)
