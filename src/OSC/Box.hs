@@ -10,9 +10,9 @@
 module OSC.Box where
 
 import qualified Control.Monad.State as ST
-import Control.Monad.State.Lazy (State)
+import Control.Monad.State.Lazy (State, StateT)
 import qualified Control.Monad.Writer.CPS as W
-import Control.Monad.Writer.CPS (WriterT)
+import Control.Monad.Writer.CPS (Writer)
 
 import qualified Data.Map as M
 import Data.Map (Map)
@@ -215,15 +215,15 @@ exprToBox env (ECall n args) = do
 -- TODO: after component clustering, if a component is called only once, inline
 
 newtype LocalIndex = LocalIndex Int
-  deriving Num
+  deriving (Num, Show)
 
 newtype MemAddr = MemAddr Int
-  deriving Num
+  deriving (Num, Show)
 
-data LocalSimple = LSimple LocalIndex
-data LocalArr = LArr LocalIndex MemAddr Int
+data LocalSimple = LSimple LocalIndex deriving Show
+data LocalArr = LArr LocalIndex MemAddr Int deriving Show
 
-data BinOp = Plus | Mul | Minus | Div
+data BinOp = Plus | Mul | Minus | Div deriving Show
 
 data Instr
   = ILocalGet LocalIndex
@@ -237,10 +237,9 @@ data Instr
   | IBinOp BinOp   -- consumes two stack values, produces one
   | ICall Ident    -- call function, args already on stack
   | IDrop
+  deriving Show
   
-data Program = Program [Instr] (Either LocalSimple LocalArr) -- execute block, return local
-
-type CodegenM = WriterT [Instr] (State (LocalIndex, MemAddr, Map BoxIndex LocalIndex))
+type CodegenM = (StateT (LocalIndex, MemAddr, Map BoxIndex LocalIndex) (Writer [Instr]))
 
 reserve :: Int -> CodegenM MemAddr
 reserve bytes = do
@@ -377,3 +376,19 @@ boxToBlock env delayMap (LBCall n argBoxIndices) = do
 
 boxToBlockMemo :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> BoxIndex -> LBox -> CodegenM LocalIndex
 boxToBlockMemo env delayMap k lbox = memoBox k (boxToBlock env delayMap lbox)
+
+--------------------------------------------------------------------------------
+
+codegen :: Expr -> (LocalIndex, [Instr])
+codegen expr = W.runWriter $ ST.evalStateT gen (LocalIndex 0, MemAddr 0, mempty)
+  where
+    (boxIndex, (_, boxMap)) = ST.runState (exprToBox mempty expr) (BoxIndex 0, mempty)
+    Just box = M.lookup boxIndex boxMap
+
+    gen :: CodegenM LocalIndex
+    gen = do
+      delayMap <- gatherDelays boxMap
+      retLocal <- boxToBlock boxMap delayMap box
+      (_, _, localMap) <- ST.get
+      emitDelays localMap delayMap
+      pure retLocal
