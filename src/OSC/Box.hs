@@ -80,7 +80,7 @@ data Binding expr = Binding Ident expr
 
 -- TODO: should this be legal: f: f32[4] -> f32, rec |prev| return (f prev)
 
-data Index a = IConst Int | IVar a
+data Index a = IdxConst Int | IdxVar a
   deriving (Show, Functor, Foldable, Traversable)
 
 data Expr'
@@ -307,12 +307,12 @@ boxToBlock env delayMap _ (LBSelect dims boxIndex indices)
       -- Calculate offset: sum of (index * cardinality) for each dimension
       sequence_
         [ case idx of
-            IConst i -> do
+            IdxConst i -> do
               emit $ ILocalGet offsetLocal
               emit $ IConst (I (i * card))
               emit $ IBinOp Plus
               emit $ ILocalSet offsetLocal
-            IVar indexBoxIndex
+            IdxVar indexBoxIndex
               | Just indexBox <- M.lookup indexBoxIndex env -> do
                   idxLocal <- cache indexBoxIndex (boxToBlock env delayMap indexBoxIndex indexBox)
                   emit $ ILocalGet offsetLocal
