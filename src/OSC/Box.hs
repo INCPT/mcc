@@ -57,16 +57,17 @@ data Binding expr = Binding Ident expr
 -- TODO: streams not in scope outside of graph
 -- TODO: branch operation computes both branches
 
-data Index = IConst Number | IVar Ident
+data Index a = IConst Int | IVar a
+  deriving Show
 
 data Expr
   = EConst Number
   | EVar Ident
   | EGraph Ident
-  | ESelect Expr [Index]
+  | EArr [Expr]
+  | ESelect Expr [Index Ident]
   | ERec Int Ident [Binding Expr] Expr -- rec delay |prev| -> expr
   | ECall String Expr Expr
-  | EArr [Expr]
 
 data Graph = Graph [Binding Expr] Expr
 
@@ -78,8 +79,8 @@ data LBox
   | LBVar Ident
   | LBDelay Int BoxIndex
   | LBArr [BoxIndex]
-  | LBSelect [BoxIndex] BoxIndex 
-  | LBFunc String BoxIndex BoxIndex -- TODO: func must be pure
+  | LBSelect [BoxIndex] [Index BoxIndex]
+  | LBCall String BoxIndex BoxIndex -- TODO: func must be pure
   deriving Show
 
 inlineExpr :: Map Ident Expr -> [Binding Expr] -> Expr -> Expr
@@ -129,6 +130,37 @@ exprToBoxes env (ERec delay n bindings ret) = do
     argNode <- newBox (LBArr delayBoxes)
 
   pure retBoxes
+exprToBoxes env (EGraph n)
+  | Just e <- M.lookup n env.identToExpr = exprToBoxes env e
+  | otherwise = error "no binding (this is a bug)"
+exprToBoxes env (EArr es) = do
+  elemBoxes <- sequence
+    [ exprToBoxes env expr >>= boxesToBox
+    | expr <- es
+    ]
+  pure <$> newBox (LBArr elemBoxes)
+exprToBoxes env (ESelect e is) = do
+  boxes <- exprToBoxes env e
+  boxMap <- ST.get
+  case drill boxMap boxes is of
+    Right box -> pure [box]
+    Left (boxes, is') -> undefined
+
+exprToBoxes env (ECall n f a) = do
+  f' <- exprToBoxes env f
+  a' <- exprToBoxes env a
+  box <- LBCall n <$> boxesToBox f' <*> boxesToBox a'
+  pure <$> newBox box
+
+drill :: Map BoxIndex LBox -> [BoxIndex] -> [Index Ident] -> Either ([BoxIndex], [Index Ident]) BoxIndex
+drill _ boxes [IConst n] = Right (boxes !! n)
+drill env boxes (IConst n:ns)
+  | Just (LBArr boxes') <- M.lookup (boxes !! n) env = drill env boxes' ns
+drill _ boxes is = Left (boxes, is)
+
+boxesToBox :: [BoxIndex] -> State (Map BoxIndex LBox) BoxIndex
+boxesToBox [index] = pure index
+boxesToBox indices = newBox (LBArr indices)
 
 -- TODO: should this be legal: f: f32[4] -> f32, rec |prev| return (f prev)
 
