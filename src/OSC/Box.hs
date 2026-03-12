@@ -324,12 +324,16 @@ boxToBlock _ _ (LBVar n) = do
   emit $ ILocalSet lidx
   pure lidx
 boxToBlock env delayMap (LBArr dims boxes) = do
-  (lidx, MemAddr baseAddr) <- localArray (product dims)
+  (lidx, baseAddr) <- localArray (product dims)
   sequence_
     [ do
         valueLocal <- boxToBlockMemo env delayMap boxIndex box
+        -- Calculate address: base + offset
+        emit $ ILocalGet lidx  -- base address
+        emit $ IConst (I (index * 4))  -- offset
+        emit $ IBinOp Plus
         emit $ ILocalGet valueLocal
-        emit $ IStore (MemAddr $ baseAddr + index * 4)
+        emit $ IStore (MemAddr 0)  -- store to address on stack
     | (index, boxIndex) <- zip [0..] boxes
     , Just box <- [ M.lookup boxIndex env ]
     ]
@@ -371,7 +375,7 @@ boxToBlock env delayMap (LBSelect dims boxIndex indices)
       emit $ IConst (I 4)  -- 4 bytes per element
       emit $ IBinOp Mul
       emit $ IBinOp Plus
-      emit $ ILoad (MemAddr 0)  -- offset is already in the address
+      emit $ ILoad (MemAddr 0)  -- load from address on stack
       emit $ ILocalSet res
       pure res
   | otherwise = error "select: box (this is a bug)"
@@ -419,6 +423,13 @@ codegen expr = (retLocal, localDecls ++ instrs)
     gen :: CodegenM LocalIndex
     gen = do
       delayMap <- gatherDelays boxMap
+      -- Initialize delay variables to 0
+      sequence_
+        [ do
+            emit $ IConst (I 0)
+            emit $ ILocalSet delayLocal
+        | delayLocal <- M.elems delayMap
+        ]
       retLocal <- boxToBlock boxMap delayMap box
       (_, _, localMap, _) <- ST.get
       emitDelays localMap delayMap
