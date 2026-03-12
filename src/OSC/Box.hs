@@ -64,9 +64,9 @@ data Index a = IConst Int | IVar a
 data Expr
   = EConst Number
   | EVar Ident
-  | EGraph Ident
+  | EGraph Ident -- TODO: should prob be inlined here
   | EArr [Expr]
-  | ESelect Expr [Index Ident]
+  | ESelect Expr (Index Ident)
   | ERec Int Ident [Binding Expr] Expr -- rec delay |prev| -> expr
   | ECall String Expr Expr
 
@@ -80,7 +80,7 @@ data LBox
   | LBVar Ident
   | LBDelay Int BoxIndex
   | LBArr [BoxIndex]
-  | LBSelect [BoxIndex] [Index BoxIndex]
+  | LBSelect [BoxIndex] (Index BoxIndex)
   | LBCall String BoxIndex BoxIndex -- TODO: func must be pure
   deriving Show
 
