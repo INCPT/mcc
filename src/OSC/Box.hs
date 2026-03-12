@@ -120,8 +120,8 @@ data Type = TSimple | TArray Int
 data Expr
   = EConst Number
   | EVar Ident
-  | EArr [Int] [Expr]
-  | ESelect Expr [Index Expr]
+  | EArr [Int] [Expr] -- dims
+  | ESelect [Int] Expr [Index Expr] -- dims
   | ERec Int Ident Expr -- rec delay |prev| -> expr
   | ECall Ident [Expr]
 
@@ -185,7 +185,7 @@ data LBox
   = LBConst Number
   | LBVar Ident
   | LBArr [Int] [BoxIndex] -- dimensions
-  | LBSelect BoxIndex [Index BoxIndex] -- maximally drilled into
+  | LBSelect [Int] BoxIndex [Index BoxIndex] -- maximally drilled into
   | LBDelay Int BoxIndex
   | LBCall Ident [BoxIndex]
   deriving Show
@@ -201,10 +201,10 @@ exprToBox env (ERec delay n ret) = mdo
 exprToBox env (EArr dims es) = do
   labels <- traverse (exprToBox env) es
   newBox (LBArr dims labels)
-exprToBox env (ESelect e is) = do
+exprToBox env (ESelect dims e is) = do
   eBoxIndex <- exprToBox env e
   isBoxIndexs <- traverse (traverse (exprToBox env)) is
-  newBox (LBSelect eBoxIndex isBoxIndexs)
+  newBox (LBSelect dims eBoxIndex isBoxIndexs)
 exprToBox env (ECall n args) = do
   argBoxIndexs <- traverse (exprToBox env) args
   newBox (LBCall n argBoxIndexs)
@@ -222,11 +222,16 @@ newtype MemAddr = MemAddr Int
 data LocalSimple = LSimple LocalIndex
 data LocalArr = LArr LocalIndex MemAddr Int
 
+data BinOp = Plus | Mul
+
 data Instr
   = ILoadAddr LocalIndex Ident
-  -- | ILoadLocal LocalIndex LocalIndex -- local, value
+  | ILoadAddr'' LocalIndex MemAddr
+  | ILoadOffset LocalIndex LocalIndex Value -- local <- base[value]
+  | ILoadVal LocalIndex LocalIndex
   | IStore MemAddr Value -- local, index, value
   | ICall Ident [LocalSimple]
+  | IBinOp BinOp LocalIndex Value
   
 data Program = Program [Instr] (Either LocalSimple LocalArr) -- execute block, return local
 
@@ -248,6 +253,7 @@ localArray :: Int -> CodegenM (LocalIndex, MemAddr)
 localArray size = do
   (LocalIndex idx, MemAddr cur, values) <- ST.get
   ST.put (LocalIndex (idx + 4), MemAddr (cur + size * 4), values)
+  emit $ ILoadAddr'' (LocalIndex idx) (MemAddr cur)
   pure (LocalIndex idx, MemAddr cur)
 
 cache :: BoxIndex -> CodegenM Value -> CodegenM Value
@@ -263,14 +269,14 @@ cache box genValue = do
 emit :: Instr -> CodegenM ()
 emit = W.tell . pure
 
-data Value = RConst Number | RLocal LocalIndex
+data Value = VConst Number | VLocal LocalIndex
 
 boxToBlock :: Map BoxIndex LBox -> LBox -> CodegenM Value
-boxToBlock _ (LBConst n) = pure (RConst n)
+boxToBlock _ (LBConst n) = pure (VConst n)
 boxToBlock _ (LBVar n) = do
   lidx <- localSimple
   emit $ ILoadAddr lidx n
-  pure $ RLocal lidx
+  pure $ VLocal lidx
 boxToBlock env (LBArr dims boxes) = do
   (lidx, MemAddr mem) <- localArray (product dims)
   sequence_
@@ -280,4 +286,32 @@ boxToBlock env (LBArr dims boxes) = do
     | (index, boxIndex) <- zip [0..] boxes
     , Just box <- [ M.lookup boxIndex env ]
     ]
-  pure $ RLocal lidx
+  pure $ VLocal lidx
+boxToBlock env (LBSelect dims boxIndex indices)
+  | Just box <- M.lookup boxIndex env = do
+      bsel <- cache boxIndex (boxToBlock env box)
+      case bsel of
+        VConst _ -> error "select: bsel (this is a bug)"
+        VLocal bsel' -> do
+          lidx <- localSimple
+          res <- localSimple
+          sequence_
+            [ case idx of
+                IConst i -> emit $ IBinOp Plus lidx (VConst $ I (i * card))
+                IVar indexBoxIndex
+                  | Just indexBox <- M.lookup indexBoxIndex env -> do
+                      vidx <- cache indexBoxIndex (boxToBlock env indexBox)
+                      case vidx of
+                        VConst (I i) -> emit $ IBinOp Plus lidx (VConst $ I (i * card))
+                        VConst _ -> error "select: index not natural (this is a bug)"
+                        VLocal i -> do
+                          emit $ IBinOp Mul i (VConst $ I card)
+                          emit $ IBinOp Plus lidx (VLocal i)
+                  | otherwise -> error "select: index (this is a bug)"
+            | (card, idx) <- zip (scanl (*) 1 dims) indices
+            ]
+          emit $ ILoadOffset res bsel' (VLocal lidx)
+          pure $ VLocal res
+  | otherwise = error "select: box (this is a bug)"
+boxToBlock env (LBDelay delay box) = undefined
+boxToBlock env (LBCall n args) = undefined
