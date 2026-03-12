@@ -230,7 +230,7 @@ data Instr
   | ILoadOffset LocalIndex LocalIndex Value -- local <- base[value]
   | ILoadVal LocalIndex LocalIndex
   | IStore MemAddr Value -- local, index, value
-  | ICall Ident [LocalSimple]
+  | ICall LocalIndex Ident [Value]
   | IBinOp BinOp LocalIndex Value
   
 data Program = Program [Instr] (Either LocalSimple LocalArr) -- execute block, return local
@@ -319,18 +319,10 @@ boxToBlock _ delayMap k (LBDelay _ _)
 boxToBlock env delayMap _ (LBCall n argBoxes) = do
   argLocals <- sequence
     [ case M.lookup argBox env of
-        Just box -> do
-          value <- cache argBox (boxToBlock env delayMap argBox box)
-          case value of
-            VLocal lidx -> pure (LSimple lidx)
-            VConst c -> do
-              -- Materialize constant into a local
-              lidx <- localSimple
-              emit $ IBinOp Plus lidx (VConst c)  -- Load constant by adding to 0
-              pure (LSimple lidx)
+        Just box -> cache argBox (boxToBlock env delayMap argBox box)
         Nothing -> error "call: arg box not found (this is a bug)"
     | argBox <- argBoxes
     ]
-  resultLocal <- localSimple
-  emit $ ICall n argLocals
-  pure $ VLocal resultLocal
+  res <- localSimple
+  emit $ ICall res n argLocals
+  pure $ VLocal res
