@@ -257,7 +257,7 @@ data Instr
   | IDrop
   deriving Show
   
-type CodegenM = (StateT (LocalIndex, MemAddr, Map BoxIndex LocalIndex, [LocalIndex]) (Writer [Instr]))
+type CodegenM = StateT (LocalIndex, MemAddr, Map BoxIndex LocalIndex, [LocalIndex]) (Writer [Instr])
 
 reserve :: Int -> CodegenM MemAddr
 reserve bytes = do
@@ -344,6 +344,9 @@ boxToBlock env delayMap (LBSelect dims boxIndex indices)
       -- Calculate offset: sum of (index * cardinality) for each dimension
       sequence_
         [ case idx of
+            IdxConst 0 -> do
+              emit $ IConst (I 0)
+              emit $ ILocalSet offsetLocal
             IdxConst i -> do
               emit $ ILocalGet offsetLocal
               emit $ IConst (I (i * card))
@@ -364,6 +367,7 @@ boxToBlock env delayMap (LBSelect dims boxIndex indices)
       
       -- Load from base + offset
       res <- localSimple
+
       emit $ ILocalGet baseLocal
       emit $ ILocalGet offsetLocal
       emit $ IConst (I 4)  -- 4 bytes per element
@@ -409,8 +413,8 @@ codegen expr = (retLocal, localDecls ++ instrs)
     (boxIndex, (_, boxMap)) = ST.runState (exprToBox mempty expr) (BoxIndex 0, mempty)
     Just box = M.lookup boxIndex boxMap
 
-    ((retLocal, instrs), (_, _, _, declaredLocals)) = 
-      ST.runState (W.runWriterT gen) (LocalIndex 0, MemAddr 0, mempty, [])
+    ((retLocal, (_, _, _, declaredLocals)), instrs) = 
+      W.runWriter (ST.runStateT gen (LocalIndex 0, MemAddr 0, mempty, []))
     
     localDecls = map ILocal declaredLocals
 
