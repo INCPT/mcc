@@ -90,7 +90,6 @@ data Expr'
   | ESelect' Expr [Index Ident]
   | ERec' Int Ident [Binding Expr'] Expr' -- rec delay |prev| -> expr
 
--- the above gets expanded to:
 -- TODO: in ESelect the Expr is maximally drilled into
 --     Right box -> pure [box]
 --     Left (boxes, is') -> do
@@ -107,6 +106,11 @@ data Expr'
 --       pure <$> newBox (LBSelect boxes is'')
 --   where
 --     box = exprToBox env e
+
+-- TODO: expand as much as possible and maximally drill into Exprs
+-- TODO: idents in CallGraphs should be preserved so we can utilize the sharing when performing the shared component analysis
+expandExpr :: Expr' -> Expr
+expandExpr = undefined
 
 data Expr
   = EConst Number
@@ -162,15 +166,15 @@ flattenBox boxMap lbl
         _ -> (lbl, boxMap)
   | otherwise = (lbl, boxMap)
 
+--------------------------------------------------------------------------------
 
+type BoxGenM = State (BoxIndex, Map BoxIndex LBox)
 
-newBox :: LBox -> State (BoxIndex, Map BoxIndex LBox) BoxIndex
+newBox :: LBox -> BoxGenM BoxIndex
 newBox box = do
   (nextBoxIndex, boxes) <- ST.get
   ST.put (nextBoxIndex + 1, M.insert nextBoxIndex box boxes)
   return nextBoxIndex
-
---------------------------------------------------------------------------------
 
 data LBox
   = LBConst Number
@@ -181,9 +185,7 @@ data LBox
   | LBCall Ident [BoxIndex]
   deriving Show
 
-type Env = Map Ident BoxIndex
-
-exprToBox :: Env -> Expr -> State (BoxIndex, Map BoxIndex LBox) BoxIndex
+exprToBox :: Map Ident BoxIndex -> Expr -> BoxGenM BoxIndex
 exprToBox _ (EConst n) = newBox (LBConst n)
 exprToBox _ (EVar n) = newBox (LBVar n)
 exprToBox _ (ERec _ _ (EConst n)) = newBox (LBConst n)
@@ -212,15 +214,16 @@ newtype Addr = Addr Int
 data Local = Simple Addr | Array Addr Int
 
 data Block
-  = Local (Local -> Block)
-  | Load Local Ident
-  | Write Local Block -- local, value
-  | WriteArr Local Block Block -- local, index, value
-  | Call Ident [Local]
+  = BConst Number
+  | BLocal (Local -> Block)
+  | BLoad Local Ident
+  | BWrite Local Block -- local, value
+  | BWriteArr Local Block Block -- local, index, value
+  | BCall Ident [Local]
   
 data Program = Program [Block] Local -- execute block, return local
 
-type CodegenM = ST.State Addr
+type CodegenM = State Addr
 
 reserve :: Int -> CodegenM Addr
 reserve bytes = do
@@ -238,5 +241,5 @@ localArray size f = do
   addr <- reserve (size * 4)
   pure (f (Simple addr))
 
-codegen :: Env -> LBox -> CodegenM Program
+codegen :: Map BoxIndex LBox -> LBox -> CodegenM Program
 codegen = undefined
