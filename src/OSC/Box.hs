@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE RecursiveDo #-}
@@ -62,7 +63,7 @@ data Binding expr = Binding Ident expr
 -- TODO: after the shadow check/SSA pass all Idents are unique
 
 data Index a = IConst Int | IVar a
-  deriving Show
+  deriving (Show, Functor)
 
 data Expr'
   = EConst' Number
@@ -70,10 +71,26 @@ data Expr'
   | EGraphCall' Ident [Expr]
   | ECall' Ident [Expr]
   | EArr' [Expr']
-  | ESelect' Expr (Index Ident)
+  | ESelect' Expr [Index Ident]
   | ERec' Int Ident [Binding Expr'] Expr' -- rec delay |prev| -> expr
 
--- the above gets inlined to:
+-- the above gets expanded to:
+-- TODO: in ESelect the Expr is maximally drilled into
+--     Right box -> pure [box]
+--     Left (boxes, is') -> do
+--       is'' <- sequence
+--         [ case i of
+--             IConst n -> pure (IConst n)
+--             IVar expr -> do
+--               boxes' <- exprToBoxes env expr
+--               case boxes' of
+--                 [box] -> pure (IVar box)
+--                 _ -> error "index isn't a single box (this is a bug)"
+--         | i <- is'
+--         ]
+--       pure <$> newBox (LBSelect boxes is'')
+--   where
+--     box = exprToBox env e
 
 data Expr
   = EConst Number
@@ -91,10 +108,10 @@ newtype BoxIndex = BoxIndex Int
 data LBox
   = LBConst Number
   | LBVar Ident
-  | LBDelay Int BoxIndex
-  | LBArr [BoxIndex]
-  | LBSelect [BoxIndex] [Index BoxIndex]
-  | LBCall Ident [BoxIndex] -- TODO: func must be pure
+  | LBArr [LBox]
+  | LBSelect LBox [Index LBox]
+  | LBDelay Int LBox
+  | LBCall Ident [LBox] -- TODO: func must be pure
   deriving Show
 
 {-
@@ -117,6 +134,18 @@ inlineExpr env bindings expr = inline (env `M.union` bindingMap) expr
     inline env' (EArr es) = EArr (map (inline env') es)
 -}
 
+drill :: Map Ident LBox -> LBox -> [Index a] -> (LBox, [Index a])
+drill _ (LBArr boxes) [IConst n] = (boxes !! n, [])
+drill env (LBArr boxes) (IConst n:ns) = drill env (boxes !! n) ns
+drill _ boxes is = (boxes, is)
+
+-- drill :: Map BoxIndex LBox -> [BoxIndex] -> [Index a] -> Either ([BoxIndex], [Index a]) BoxIndex
+-- drill _ boxes [IConst n] = Right (boxes !! n)
+-- drill env boxes (IConst n:ns)
+--   | Just (LBArr boxes') <- M.lookup (boxes !! n) env = drill env boxes' ns
+-- drill _ boxes is = Left (boxes, is)
+
+
 newBox :: LBox -> State (Map BoxIndex LBox) BoxIndex
 newBox box = do
   boxes <- ST.get
@@ -125,63 +154,34 @@ newBox box = do
   return nextIdx
 
 data Env = Env
-  { identToBox :: Map Ident BoxIndex
+  { identToBox :: Map Ident LBox
   }
 
-exprToBoxes :: Env -> Expr -> State (Map BoxIndex LBox) [BoxIndex]
-exprToBoxes _ (EConst n) = pure <$> newBox (LBConst n)
-exprToBoxes env (EVar n)
-  | Just boxIndex <- M.lookup n env.identToBox = pure [boxIndex]
-  | otherwise = pure <$> newBox (LBVar n)
-exprToBoxes _ (ERec _ _ (EConst n)) = pure <$> newBox (LBConst n)
-exprToBoxes env (ERec delay n ret) = do
-  rec
-    retBoxes <- exprToBoxes
-      (env { identToBox = M.insert n argNode env.identToBox })
+exprToBox :: Env -> Expr -> LBox
+exprToBox _ (EConst n) = LBConst n
+exprToBox _ (EVar n) = LBVar n
+exprToBox _ (ERec _ _ (EConst n)) = LBConst n
+exprToBox env (ERec delay n ret) = retBox
+  where
+    retBox = exprToBox
+      (env { identToBox = M.insert n delayBox env.identToBox })
       ret
+    delayBox = LBDelay delay retBox
+exprToBox env (EArr es) = LBArr
+  [ flattenBox (exprToBox env expr)
+  | expr <- es
+  ]
+exprToBox env (ESelect e is) = LBSelect
+  (exprToBox env e)
+  (map (fmap (exprToBox env)) is)
 
-    delayBoxes <- traverse newBox $ map (LBDelay delay) retBoxes
-    argNode <- newBox (LBArr delayBoxes)
+exprToBox env (ECall n args) = LBCall n (map (flattenBox . exprToBox env) args)
 
-  pure retBoxes
-exprToBoxes env (EArr es) = do
-  elemBoxes <- sequence
-    [ exprToBoxes env expr >>= boxesToBox
-    | expr <- es
-    ]
-  pure <$> newBox (LBArr elemBoxes)
-exprToBoxes env (ESelect e is) = do
-  boxes <- exprToBoxes env e
-  boxMap <- ST.get
-  case drill boxMap boxes is of
-    Right box -> pure [box]
-    Left (boxes, is') -> do
-      is'' <- sequence
-        [ case i of
-            IConst n -> pure (IConst n)
-            IVar expr -> do
-              boxes' <- exprToBoxes env expr
-              case boxes' of
-                [box] -> pure (IVar box)
-                _ -> error "index isn't a single box (this is a bug)"
-        | i <- is'
-        ]
-      pure <$> newBox (LBSelect boxes is'')
-
-exprToBoxes env (ECall n args) = do
-  args' <- traverse (exprToBoxes env) args
-  box <- LBCall n <$> traverse boxesToBox args'
-  pure <$> newBox box
-
-drill :: Map BoxIndex LBox -> [BoxIndex] -> [Index a] -> Either ([BoxIndex], [Index a]) BoxIndex
-drill _ boxes [IConst n] = Right (boxes !! n)
-drill env boxes (IConst n:ns)
-  | Just (LBArr boxes') <- M.lookup (boxes !! n) env = drill env boxes' ns
-drill _ boxes is = Left (boxes, is)
-
-boxesToBox :: [BoxIndex] -> State (Map BoxIndex LBox) BoxIndex
-boxesToBox [index] = pure index
-boxesToBox indices = newBox (LBArr indices)
+flattenBox :: LBox -> LBox
+flattenBox (LBArr boxes) = case map flattenBox boxes of
+  [box] -> box
+  boxes -> LBArr boxes
+flattenBox box = box
 
 -- TODO: should this be legal: f: f32[4] -> f32, rec |prev| return (f prev)
 
