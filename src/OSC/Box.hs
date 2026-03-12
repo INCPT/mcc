@@ -55,6 +55,7 @@ b2 = res
 
 data Binding expr = Binding Ident expr
 
+-- TODO: allow simple arithmetic in range |i| syntax
 -- TODO: streams not in scope outside of graph
 -- TODO: normal functions/methods not in scope in graph (only variables are in scope)
 -- TODO: branch operation computes both branches
