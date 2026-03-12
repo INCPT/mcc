@@ -327,11 +327,17 @@ boxToBlock env delayMap (LBArr dims boxes) = do
   (lidx, _) <- localArray (product dims)
   sequence_
     [ do
-        valueLocal <- boxToBlockMemo env delayMap boxIndex box
-        -- Push base address, then value, then store with offset
-        emit $ ILocalGet lidx  -- base address on stack
-        emit $ ILocalGet valueLocal  -- value on stack
-        emit $ IStore (MemAddr (index * 4))  -- store to (stack_addr + offset)
+        -- For constants, emit directly without creating a local
+        case box of
+          LBConst n -> do
+            emit $ ILocalGet lidx  -- base address on stack
+            emit $ IConst n  -- value on stack
+            emit $ IStore (MemAddr (index * 4))  -- store to (stack_addr + offset)
+          _ -> do
+            valueLocal <- boxToBlockMemo env delayMap boxIndex box
+            emit $ ILocalGet lidx  -- base address on stack
+            emit $ ILocalGet valueLocal  -- value on stack
+            emit $ IStore (MemAddr (index * 4))  -- store to (stack_addr + offset)
     | (index, boxIndex) <- zip [0..] boxes
     , Just box <- [ M.lookup boxIndex env ]
     ]
