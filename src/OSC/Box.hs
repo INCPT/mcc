@@ -206,6 +206,9 @@ inlineRef n replace expr = inline expr
       | otherwise = ERec delay v (inline ret)
     inline (ECall f args) = ECall f (map inline args)
 
+mergeSelects :: Expr -> Expr
+mergeSelects = undefined
+
 exprToBox :: Map Ident BoxIndex -> Expr -> BoxGenM BoxIndex
 exprToBox _ (EConst n) = newBox (LBConst n)
 exprToBox env (EVar n)
