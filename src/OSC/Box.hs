@@ -211,7 +211,7 @@ exprToBox _ (EConst n) = newBox (LBConst n)
 exprToBox _ (EVar n) = newBox (LBVar n)
 exprToBox _ (ERec _ _ (EConst n)) = newBox (LBConst n)
 exprToBox env (ERec delay n ret) = mdo
-  retBoxIndex <- exprToBox (M.insert n delayBoxIndex env) ret
+  retBoxIndex <- exprToBox env ret
   delayBoxIndex <- newBox (LBDelay delay retBoxIndex)
   pure retBoxIndex
 exprToBox env (EArr dims es) = do
