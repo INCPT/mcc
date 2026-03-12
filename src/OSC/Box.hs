@@ -324,7 +324,7 @@ boxToBlock _ _ (LBVar n) = do
   emit $ ILocalSet lidx
   pure lidx
 boxToBlock env delayMap (LBArr dims boxes) = do
-  (lidx, baseAddr) <- localArray (product dims)
+  (lidx, _) <- localArray (product dims)
   sequence_
     [ do
         valueLocal <- boxToBlockMemo env delayMap boxIndex box
