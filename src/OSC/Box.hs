@@ -9,6 +9,7 @@
 
 module OSC.Box where
 
+import Control.Monad (when)
 import qualified Control.Monad.State as ST
 import Control.Monad.State.Lazy (State, StateT)
 import qualified Control.Monad.Writer.CPS as W
@@ -290,9 +291,9 @@ reserve bytes = do
 localSimple :: CodegenM LocalIndex
 localSimple = do
   env <- ST.get
-  let lidx@(LocalIndex idx) = env.nextLocal
-  ST.put $ env { nextLocal = LocalIndex (idx + 1), locals = env.locals ++ [lidx] }
-  pure lidx
+  let (LocalIndex idx) = env.nextLocal
+  ST.put $ env { nextLocal = LocalIndex (idx + 1), locals = env.locals ++ [env.nextLocal] }
+  pure env.nextLocal
 
 localArray :: Int -> CodegenM (LocalIndex, MemAddr)
 localArray size = do
@@ -388,8 +389,9 @@ boxToBlock env delayMap (LBSelect dims boxIndex indices)
                   idxLocal <- boxToBlockMemo env delayMap indexBoxIndex indexBox
                   emit $ ILocalGet offsetLocal
                   emit $ ILocalGet idxLocal
-                  emit $ IConst (I card)
-                  emit $ IBinOp Mul
+                  when (card > 1) $ do
+                    emit $ IConst (I card)
+                    emit $ IBinOp Mul
                   emit $ IBinOp Plus
                   emit $ ILocalSet offsetLocal
               | otherwise -> error "select: index (this is a bug)"
@@ -440,7 +442,7 @@ boxToBlockMemo env delayMap k lbox = memoBox k (boxToBlock env delayMap lbox)
 --------------------------------------------------------------------------------
 
 codegen :: Expr -> (LocalIndex, [Instr])
-codegen expr = (retLocal, localDecls ++ instrs)
+codegen expr = (retLocal, localDecls <> instrs)
   where
     -- Merge nested selects before generating boxes
     mergedExpr = mergeSelects expr
