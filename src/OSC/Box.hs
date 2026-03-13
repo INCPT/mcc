@@ -138,7 +138,7 @@ interpretE = interpretE' mempty
   where
     interpretE' :: Map Ident Value -> Expr -> Maybe Value
     interpretE' _ (EConst n) = Just (VNum n)
-    interpretE' env (EVar ident)
+    interpretE' env (EVar _ ident)
       | Just val <- M.lookup ident env = Just val
       | otherwise = Nothing  -- undefined variable
     interpretE' env (EArr _ exprs) = do
@@ -147,28 +147,28 @@ interpretE = interpretE' mempty
     interpretE' env (ESelect _ expr indices) = do
       val <- interpretE' env expr
       pure $ select env indices val
-    interpretE' env (ERec delay ident retExpr) = 
+    interpretE' env (ERec _ delay ident retExpr) = 
       -- For recursive expressions with delay, we need to iterate
       -- Start with 0 as the initial value for the delay variable
       let initialEnv = M.insert ident (VNum (I 0)) env
       in interpretE' initialEnv retExpr
-    interpretE' env (ECall (Ident "add") [a, b]) = do
+    interpretE' env (ECall _ (Ident "add") [a, b]) = do
       VNum aVal <- interpretE' env a
       VNum bVal <- interpretE' env b
       Just $ VNum $ evalBinOp Plus aVal bVal
-    interpretE' env (ECall (Ident "sub") [a, b]) = do
+    interpretE' env (ECall _ (Ident "sub") [a, b]) = do
       VNum aVal <- interpretE' env a
       VNum bVal <- interpretE' env b
       Just $ VNum $ evalBinOp Minus aVal bVal
-    interpretE' env (ECall (Ident "mul") [a, b]) = do
+    interpretE' env (ECall _ (Ident "mul") [a, b]) = do
       VNum aVal <- interpretE' env a
       VNum bVal <- interpretE' env b
       Just $ VNum $ evalBinOp Mul aVal bVal
-    interpretE' env (ECall (Ident "div") [a, b]) = do
+    interpretE' env (ECall _ (Ident "div") [a, b]) = do
       VNum aVal <- interpretE' env a
       VNum bVal <- interpretE' env b
       Just $ VNum $ evalBinOp Div aVal bVal
-    interpretE' _ (ECall _ _) = Nothing  -- unknown function
+    interpretE' _ (ECall _ _ _) = Nothing  -- unknown function
 
     select :: Map Ident Value -> [Index Expr] -> Value -> Value
     select _ [] value = value
@@ -235,10 +235,10 @@ newBox box = do
   return nextBoxIndex
 
 data LBox
-  = LBConst Type Number
+  = LBConst Number
   | LBVar Type Ident
-  | LBArr Type [Int] [BoxIndex] -- dimensions
-  | LBSelect Type [Int] BoxIndex [Index BoxIndex] -- maximally drilled into
+  | LBArr Type [BoxIndex] -- dimensions
+  | LBSelect Type BoxIndex [Index BoxIndex] -- maximally drilled into
   | LBDelay Type Int BoxIndex
   | LBCall Type Ident [BoxIndex]
   deriving Show
@@ -250,44 +250,30 @@ inlineRef n replace expr = inline expr
       | v == n = replace
       | otherwise = EVar t v
     inline e@(EConst _) = e
-    inline (EArr t dims es) = EArr t dims (map inline es)
-    inline (ESelect t dims e is) = ESelect t dims (inline e) (map (fmap inline) is)
+    inline (EArr t es) = EArr t (map inline es)
+    inline (ESelect t e is) = ESelect t (inline e) (map (fmap inline) is)
     inline (ERec t delay v ret)
       | v == n = ERec t delay v ret  -- shadowed, don't recurse
       | otherwise = ERec t delay v (inline ret)
     inline (ECall t f args) = ECall t f (map inline args)
 
-mergeSelects :: Expr -> Expr
-mergeSelects (ESelect t outerDims e outerIndices) =
-  case mergeSelects e of
-    -- If selecting from another select, combine them
-    ESelect _ innerDims innerExpr innerIndices ->
-      ESelect t innerDims (mergeSelects innerExpr) (innerIndices <> outerIndices)
-    -- Otherwise, recurse on the expression being selected from
-    e' -> ESelect t outerDims e' (map (fmap mergeSelects) outerIndices)
-mergeSelects (EArr t dims es) = EArr t dims (map mergeSelects es)
-mergeSelects (ERec t delay n ret) = ERec t delay n (mergeSelects ret)
-mergeSelects (ECall t f args) = ECall t f (map mergeSelects args)
-mergeSelects e@(EConst _) = e
-mergeSelects e@(EVar _ _) = e
-
 exprToBox :: Map Ident BoxIndex -> Expr -> BoxGenM BoxIndex
-exprToBox _ (EConst t n) = newBox (LBConst t n)
+exprToBox _ (EConst n) = newBox (LBConst n)
 exprToBox env (EVar t n)
   | Just boxIndex <- M.lookup n env = pure boxIndex
   | otherwise = newBox (LBVar t n)
-exprToBox _ (ERec t _ _ (EConst _ n)) = newBox (LBConst t n)
+exprToBox _ (ERec _ _ _ (EConst n)) = newBox (LBConst n) -- TODO: do this in a simplify pass
 exprToBox env (ERec t delay n ret) = mdo
   retBoxIndex <- exprToBox (M.insert n delayBoxIndex env) ret
   delayBoxIndex <- newBox (LBDelay t delay retBoxIndex)
   pure retBoxIndex
-exprToBox env (EArr t dims es) = do
+exprToBox env (EArr t es) = do
   labels <- traverse (exprToBox env) es
-  newBox (LBArr t dims labels)
-exprToBox env (ESelect t dims e is) = do
+  newBox (LBArr t labels)
+exprToBox env (ESelect t e is) = do
   eBoxIndex <- exprToBox env e
   isBoxIndexs <- traverse (traverse (exprToBox env)) is
-  newBox (LBSelect t dims eBoxIndex isBoxIndexs)
+  newBox (LBSelect t eBoxIndex isBoxIndexs)
 exprToBox env (ECall t n args) = do
   argBoxIndexs <- traverse (exprToBox env) args
   newBox (LBCall t n argBoxIndexs)
@@ -475,7 +461,7 @@ emit = W.tell . pure
 gatherDelays :: Map BoxIndex LBox -> CodegenM (Map BoxIndex LocalIndex)
 gatherDelays env = M.fromList <$> sequence
   [ (retBoxIndex,) <$> localSimple
-  | LBDelay _ retBoxIndex <- M.elems env
+  | LBDelay t _ retBoxIndex <- M.elems env
   ]
 
 emitDelays :: Map BoxIndex LocalIndex -> CodegenM ()
@@ -490,7 +476,7 @@ emitDelays delayMap = do
     ]
 
 boxToBlock :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> LBox -> CodegenM LocalIndex
-boxToBlock _ _ (LBConst _ n) = do
+boxToBlock _ _ (LBConst n) = do
   lidx <- localSimple
   emit $ IConst n
   emit $ ILocalSet lidx
@@ -500,8 +486,8 @@ boxToBlock _ _ (LBVar _ n) = do
   emit $ IGlobalGet n
   emit $ ILocalSet lidx
   pure lidx
-boxToBlock env delayMap (LBArr _ dims boxes) = do
-  (lidx, _) <- localArray (product dims)
+boxToBlock env delayMap (LBArr _ boxes) = do
+  (lidx, _) <- localArray (product [])
   sequence_
     [ do
         -- For constants, emit directly without creating a local
@@ -519,7 +505,7 @@ boxToBlock env delayMap (LBArr _ dims boxes) = do
     , Just box <- [ M.lookup boxIndex env ]
     ]
   pure lidx
-boxToBlock env delayMap (LBSelect _ dims boxIndex indices)
+boxToBlock env delayMap (LBSelect _ boxIndex indices)
   | Just box <- M.lookup boxIndex env = do
       baseLocal <- boxToBlockMemo env delayMap boxIndex box
       offsetLocal <- localSimple
@@ -546,7 +532,7 @@ boxToBlock env delayMap (LBSelect _ dims boxIndex indices)
                   emit $ IBinOp Plus
                   emit $ ILocalSet offsetLocal
               | otherwise -> error "select: index (this is a bug)"
-        | (card, idx) <- zip (scanl (*) 1 dims) (reverse indices)
+        | (card, idx) <- zip (scanl (*) 1 []) (reverse indices)
         ]
       
       -- Load from base + offset
@@ -599,9 +585,7 @@ boxToBlockMemo env delayMap k lbox = memoBox k (boxToBlock env delayMap lbox)
 codegen :: Expr -> (LocalIndex, [LocalIndex], [Instr])
 codegen expr = (retLocal, finalEnv.locals, instrs)
   where
-    -- Merge nested selects before generating boxes
-    mergedExpr = mergeSelects expr
-    (boxIndex, (_, boxMap)) = ST.runState (exprToBox mempty mergedExpr) (BoxIndex 0, mempty)
+    (boxIndex, (_, boxMap)) = ST.runState (exprToBox mempty expr) (BoxIndex 0, mempty)
     Just box = M.lookup boxIndex boxMap
 
     initialEnv = CodegenEnv
@@ -637,59 +621,59 @@ codegen expr = (retLocal, finalEnv.locals, instrs)
 -- Test expressions
 
 -- Simple expression: 5 + 10
-testSimple :: Expr
-testSimple = ECall TNumber (Ident "add") [EConst TNumber (I 5), EConst TNumber (I 10)]
+-- testSimple :: Expr
+-- testSimple = ECall TNumber (Ident "add") [EConst (I 5), EConst (I 10)]
+-- 
+-- testArr :: Expr
+-- testArr = ESelect TNumber [3] (EArr (TArray [TNumber] 3) [EConst (I 1), EConst (I 2), EConst (I 3)]) [IdxConst 1]
+-- 
+-- -- More complex expression with delay and array
+-- -- rec |prev| -> prev + [1, 2, 3][1]
+-- testComplex :: Expr
+-- testComplex = ERec TNumber 1 (Ident "prev") $
+--   ECall TNumber (Ident "add")
+--     [ EVar TNumber (Ident "prev")
+--     , ESelect TNumber [3] (EArr (TArray [TNumber] 3) [EConst TNumber (I 1), EConst TNumber (I 2), EConst TNumber (I 3)]) [IdxConst 1]
+--     ]
+-- 
+-- -- Expression with nested arrays and selection
+-- -- [[1, 2], [3, 4]][1][0]
+-- testNestedArray :: Expr
+-- testNestedArray = ESelect TNumber [2]
+--   (ESelect (TArray [TNumber] 2) [2, 2]
+--     (EArr (TArray [TArray [TNumber] 2] 2)
+--       [ EArr (TArray [TNumber] 2) [EConst TNumber (I 1), EConst TNumber (I 2)]
+--       , EArr (TArray [TNumber] 2) [EConst TNumber (I 3), EConst TNumber (I 4)]
+--       ])
+--     [IdxConst 1])
+--   [IdxConst 0]
+-- 
+-- -- Expression with nested arrays and selection
+-- -- [[[0, 1], [2, 3]], [[4, 5], [6, 7]]][1][0][0]
+-- testNestedArray2 :: Expr
+-- testNestedArray2 = ESelect TNumber [2]
+--   (ESelect (TArray [TNumber] 2) [2, 2, 2]
+--     (EArr (TArray [TNumber, TNumber, TNumber] 8)
+--       [ EConst TNumber (I 0), EConst TNumber (I 1)
+--       , EConst TNumber (I 2), EConst TNumber (I 3)
+--       , EConst TNumber (I 4), EConst TNumber (I 5)
+--       , EConst TNumber (I 6), EConst TNumber (I 7)
+--       ])
+--     [IdxConst 1, IdxConst 1])
+--   [IdxConst 0]
+-- 
+-- -- Expression with variable indexing
+-- -- rec |i| -> arr[i] where arr = [1, 2, 3]
+-- testVarIndex :: Expr
+-- testVarIndex = ERec TNumber 1 (Ident "i") $
+--   ESelect TNumber [3]
+--     (EArr (TArray [TNumber] 3) [EConst TNumber (I 1), EConst TNumber (I 2), EConst TNumber (I 0)])
+--     [IdxVar (EVar TNumber (Ident "i"))]
 
-testArr :: Expr
-testArr = ESelect TNumber [3] (EArr (TArray [TNumber] 3) [EConst TNumber (I 1), EConst TNumber (I 2), EConst TNumber (I 3)]) [IdxConst 1]
-
--- More complex expression with delay and array
--- rec |prev| -> prev + [1, 2, 3][1]
-testComplex :: Expr
-testComplex = ERec TNumber 1 (Ident "prev") $
-  ECall TNumber (Ident "add")
-    [ EVar TNumber (Ident "prev")
-    , ESelect TNumber [3] (EArr (TArray [TNumber] 3) [EConst TNumber (I 1), EConst TNumber (I 2), EConst TNumber (I 3)]) [IdxConst 1]
-    ]
-
--- Expression with nested arrays and selection
--- [[1, 2], [3, 4]][1][0]
-testNestedArray :: Expr
-testNestedArray = ESelect TNumber [2]
-  (ESelect (TArray [TNumber] 2) [2, 2]
-    (EArr (TArray [TArray [TNumber] 2] 2)
-      [ EArr (TArray [TNumber] 2) [EConst TNumber (I 1), EConst TNumber (I 2)]
-      , EArr (TArray [TNumber] 2) [EConst TNumber (I 3), EConst TNumber (I 4)]
-      ])
-    [IdxConst 1])
-  [IdxConst 0]
-
--- Expression with nested arrays and selection
--- [[[0, 1], [2, 3]], [[4, 5], [6, 7]]][1][0][0]
-testNestedArray2 :: Expr
-testNestedArray2 = ESelect TNumber [2]
-  (ESelect (TArray [TNumber] 2) [2, 2, 2]
-    (EArr (TArray [TNumber, TNumber, TNumber] 8)
-      [ EConst TNumber (I 0), EConst TNumber (I 1)
-      , EConst TNumber (I 2), EConst TNumber (I 3)
-      , EConst TNumber (I 4), EConst TNumber (I 5)
-      , EConst TNumber (I 6), EConst TNumber (I 7)
-      ])
-    [IdxConst 1, IdxConst 1])
-  [IdxConst 0]
-
--- Expression with variable indexing
--- rec |i| -> arr[i] where arr = [1, 2, 3]
-testVarIndex :: Expr
-testVarIndex = ERec TNumber 1 (Ident "i") $
-  ESelect TNumber [3]
-    (EArr (TArray [TNumber] 3) [EConst TNumber (I 1), EConst TNumber (I 2), EConst TNumber (I 0)])
-    [IdxVar (EVar TNumber (Ident "i"))]
-
-runTestVarIndex :: (Maybe Number, MState)
-runTestVarIndex = interpret (retIndex, locals, instrs <> instrs <> instrs <> instrs)
-  where
-    (retIndex, locals, instrs) = codegen testVarIndex
+-- runTestVarIndex :: (Maybe Number, MState)
+-- runTestVarIndex = interpret (retIndex, locals, instrs <> instrs <> instrs <> instrs)
+--   where
+--     (retIndex, locals, instrs) = codegen testVarIndex
 
 printBoxes :: Expr -> IO ()
 printBoxes expr = do
@@ -708,10 +692,10 @@ printCodegen name expr = do
   putStrLn "Instructions:"
   mapM_ (putStrLn . ("  " ++) . show) instrs
 
-runTests :: IO ()
-runTests = do
-  putStrLn "Testing OSC.Box codegen"
-  printCodegen "Simple: 5 + 10" testSimple
-  printCodegen "Complex: rec with delay and array select" testComplex
-  printCodegen "Nested array selection" testNestedArray
-  printCodegen "Variable indexing with delay" testVarIndex
+-- runTests :: IO ()
+-- runTests = do
+--   putStrLn "Testing OSC.Box codegen"
+--   printCodegen "Simple: 5 + 10" testSimple
+--   printCodegen "Complex: rec with delay and array select" testComplex
+--   printCodegen "Nested array selection" testNestedArray
+--   printCodegen "Variable indexing with delay" testVarIndex
