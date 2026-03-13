@@ -118,7 +118,7 @@ data Expr'
 expandExpr :: Expr' -> Expr
 expandExpr = undefined
 
-data Type = TSimple | TArray Int
+data Type = TNumber | TArray [Type] Int
   deriving Show
 
 data Expr
@@ -130,7 +130,7 @@ data Expr
   | ECall Ident [Expr]
   deriving Show
 
-data Value = VNum Number | VArr [Int] [Int] [Value]
+data Value = VNum Number | VArr [Value] -- start, length, unused dims
   deriving Show
 
 interpretE :: Expr -> Maybe Value
@@ -141,10 +141,10 @@ interpretE = interpretE' mempty
     interpretE' env (EVar ident)
       | Just val <- M.lookup ident env = Just val
       | otherwise = Nothing  -- undefined variable
-    interpretE' env (EArr dims exprs) = do
+    interpretE' env (EArr _ exprs) = do
       vals <- traverse (interpretE' env) exprs
-      Just (VArr [] dims vals)
-    interpretE' env (ESelect dims expr indices) = do
+      Just (VArr vals)
+    interpretE' env (ESelect _ expr indices) = do
       val <- interpretE' env expr
       pure $ select env indices val
     interpretE' env (ERec delay ident retExpr) = 
@@ -171,35 +171,12 @@ interpretE = interpretE' mempty
     interpretE' _ (ECall _ _) = Nothing  -- unknown function
 
     select :: Map Ident Value -> [Index Expr] -> Value -> Value
-    select env indices (VArr accessedDims remainingDims vals) =
-      case indices of
-        [] -> VArr accessedDims remainingDims vals
-        (idx:restIndices) ->
-          let indexVal = case idx of
-                IdxConst n -> n
-                IdxVar expr -> case interpretE' env expr of
-                  Just (VNum (I n)) -> n
-                  Just (VNum (F n)) -> floor n
-                  _ -> error "select: index isn't a number"
-              -- Calculate the size of each element in the current dimension
-              elemSize = product remainingDims
-              -- Calculate the starting position in the flat array
-              startPos = indexVal * elemSize
-              -- Extract the subregion
-              subVals = take elemSize (drop startPos vals)
-          in case remainingDims of
-               [] -> error "select"
-               [_] -> 
-                 -- Last dimension, return a single value
-                 case subVals of
-                   [v] -> select env restIndices v
-                   _ -> VNum (I 0)  -- fallback
-               (_:restDims) ->
-                 -- More dimensions remain
-                 let newAccessedDims = accessedDims ++ [indexVal]
-                     result = VArr newAccessedDims restDims subVals
-                 in select env restIndices result
-    select _ _ val = val  -- For VNum, just return it
+    select _ [] value = value
+    select env (IdxConst n:is) (VArr arr) = select env is (arr !! n)
+    select env (IdxVar expr:is) (VArr arr)
+      | Just (VNum (I n)) <- interpretE' env expr = select env is (arr !! n)
+      | otherwise = error "select: index not an integer"
+    select _ _ _ = error "select: not an array"
 
 data Graph = Graph [Binding Expr] Expr
 
@@ -681,8 +658,8 @@ testNestedArray :: Expr
 testNestedArray = ESelect [2]
   (ESelect [2, 2]
     (EArr [2, 2]
-      [ EConst (I 1), EConst (I 2)
-      , EConst (I 3), EConst (I 4)
+      [ EArr [2] [EConst (I 1), EConst (I 2)]
+      , EArr [2] [EConst (I 3), EConst (I 4)]
       ])
     [IdxConst 1])
   [IdxConst 0]
