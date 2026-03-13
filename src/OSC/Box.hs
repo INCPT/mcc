@@ -130,72 +130,67 @@ data Expr
   | ECall Ident [Expr]
   deriving Show
 
-interpretE :: Expr -> Maybe Number
+data Value = VNum Number | VArr [Value]
+  deriving Show
+
+interpretE :: Expr -> Maybe Value
 interpretE = interpretE' mempty
   where
-    interpretE' :: Map Ident Number -> Expr -> Maybe Number
-    interpretE' _ (EConst n) = Just n
+    interpretE' :: Map Ident Value -> Expr -> Maybe Value
+    interpretE' _ (EConst n) = Just (VNum n)
     interpretE' env (EVar ident)
       | Just val <- M.lookup ident env = Just val
       | otherwise = Nothing  -- undefined variable
-    interpretE' env (EArr _ exprs) = 
-      -- For arrays, we can't return a single number
-      -- This would need to return a list or array type
-      -- For now, return Nothing as arrays aren't single values
-      Nothing
+    interpretE' env (EArr _ exprs) = do
+      vals <- traverse (interpretE' env) exprs
+      Just (VArr vals)
     interpretE' env (ESelect _ expr indices) = do
-      -- First check if we're selecting from an array
-      case expr of
-        EArr dims exprs -> do
+      val <- interpretE' env expr
+      case val of
+        VArr vals -> do
           -- Calculate the flat index from multi-dimensional indices
-          let flatIndex = calculateFlatIndex dims indices env
-          -- Get the expression at that index
-          if flatIndex >= 0 && flatIndex < length exprs
-            then interpretE' env (exprs !! flatIndex)
+          let flatIndex = calculateFlatIndex indices env
+          if flatIndex >= 0 && flatIndex < length vals
+            then Just (vals !! flatIndex)
             else Nothing
-        _ -> do
-          -- If selecting from a non-array expression, evaluate it first
-          -- This shouldn't normally happen with well-formed expressions
-          interpretE' env expr
+        VNum _ -> Just val  -- selecting from non-array returns the value itself
     interpretE' env (ERec delay ident retExpr) = 
       -- For recursive expressions with delay, we need to iterate
       -- Start with 0 as the initial value for the delay variable
-      let initialEnv = M.insert ident (I 0) env
+      let initialEnv = M.insert ident (VNum (I 0)) env
       in interpretE' initialEnv retExpr
     interpretE' env (ECall (Ident "add") [a, b]) = do
-      aVal <- interpretE' env a
-      bVal <- interpretE' env b
-      Just $ evalBinOp Plus aVal bVal
+      VNum aVal <- interpretE' env a
+      VNum bVal <- interpretE' env b
+      Just $ VNum $ evalBinOp Plus aVal bVal
     interpretE' env (ECall (Ident "sub") [a, b]) = do
-      aVal <- interpretE' env a
-      bVal <- interpretE' env b
-      Just $ evalBinOp Minus aVal bVal
+      VNum aVal <- interpretE' env a
+      VNum bVal <- interpretE' env b
+      Just $ VNum $ evalBinOp Minus aVal bVal
     interpretE' env (ECall (Ident "mul") [a, b]) = do
-      aVal <- interpretE' env a
-      bVal <- interpretE' env b
-      Just $ evalBinOp Mul aVal bVal
+      VNum aVal <- interpretE' env a
+      VNum bVal <- interpretE' env b
+      Just $ VNum $ evalBinOp Mul aVal bVal
     interpretE' env (ECall (Ident "div") [a, b]) = do
-      aVal <- interpretE' env a
-      bVal <- interpretE' env b
-      Just $ evalBinOp Div aVal bVal
+      VNum aVal <- interpretE' env a
+      VNum bVal <- interpretE' env b
+      Just $ VNum $ evalBinOp Div aVal bVal
     interpretE' _ (ECall _ _) = Nothing  -- unknown function
 
-    calculateFlatIndex :: [Int] -> [Index Expr] -> Map Ident Number -> Int
-    calculateFlatIndex dims indices env = 
-      sum $ zipWith (*) indexValues cardinalities
+    calculateFlatIndex :: [Index Expr] -> Map Ident Value -> Int
+    calculateFlatIndex indices env = 
+      sum $ zipWith (*) indexValues [1, 1..]  -- cardinalities computed on the fly
       where
         -- Evaluate each index to an integer
         indexValues = reverse $ map evalIndex indices
-        -- Calculate cardinality for each dimension (product of remaining dimensions)
-        cardinalities = scanl (*) 1 dims
         
         evalIndex :: Index Expr -> Int
         evalIndex (IdxConst i) = i
         evalIndex (IdxVar expr) = 
           case interpretE' env expr of
-            Just (I i) -> i
-            Just (F f) -> floor f
-            Nothing -> 0  -- default to 0 if can't evaluate
+            Just (VNum (I i)) -> i
+            Just (VNum (F f)) -> floor f
+            _ -> 0  -- default to 0 if can't evaluate
 
 data Graph = Graph [Binding Expr] Expr
 
