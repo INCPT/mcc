@@ -611,16 +611,18 @@ testNestedArray = ESelect [2]
   [IdxConst 0]
 
 -- Expression with nested arrays and selection
--- [[[0, 1], [2, 3]], [[4, 5], [5, 6]]][1][0][2]
+-- [[[0, 1], [2, 3]], [[4, 5], [5, 6]]][1][0][1]
 testNestedArray2 :: Expr
 testNestedArray2 = ESelect [2]
   (ESelect [2, 2]
-    (EArr [2, 2]
-      [ EConst (I 1), EConst (I 2)
-      , EConst (I 3), EConst (I 4)
+    (EArr [2, 2, 2]
+      [ EConst (I 0), EConst (I 1)
+      , EConst (I 2), EConst (I 3)
+      , EConst (I 4), EConst (I 5)
+      , EConst (I 5), EConst (I 6)
       ])
-    [IdxConst 1])
-  [IdxConst 0]
+    [IdxConst 1, IdxConst 0])
+  [IdxConst 1]
 
 -- Expression with variable indexing
 -- rec |i| -> arr[i] where arr = [10, 20, 30]
