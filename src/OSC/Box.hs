@@ -605,6 +605,8 @@ boxToBlockMemo env delayMap k lbox = memoBox k (boxToBlock env delayMap lbox)
 --------------------------------------------------------------------------------
 
 -- TODO: figure out nested indices
+-- TODO: generate random but valid Exprs and compare output with codegen
+-- TODO: be able to specify iterations too (for recursive outputs)
 
 codegen :: Expr -> (LocalIndex, [LocalIndex], [Instr])
 codegen expr = (retLocal, finalEnv.locals, instrs)
