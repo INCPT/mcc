@@ -271,8 +271,110 @@ data Instr
   | ICall Ident    -- call function, args already on stack
   deriving Show
 
+data Result = Result
+  { locals :: Map LocalIndex Number
+  , stack :: [Number]
+  , memory :: Map MemAddr Number
+  , globals :: Map Ident Number
+  , returnValue :: Maybe Number
+  }
+  deriving Show
+
+emptyResult :: Result
+emptyResult = Result
+  { locals = mempty
+  , stack = []
+  , memory = mempty
+  , globals = mempty
+  , returnValue = Nothing
+  }
+
 interpet :: [Instr] -> Result
-interpet = undefined
+interpet instrs = go emptyResult instrs
+  where
+    go :: Result -> [Instr] -> Result
+    go res [] = res
+    go res (instr:rest) = case instr of
+      ILocal idx ->
+        -- Declare a local variable, initialize to 0
+        go (res { locals = M.insert idx (I 0) res.locals }) rest
+      
+      ILocalGet idx ->
+        case M.lookup idx res.locals of
+          Just val -> go (res { stack = val : res.stack }) rest
+          Nothing -> error $ "Local not found: " ++ show idx
+      
+      ILocalSet idx ->
+        case res.stack of
+          (val:stackRest) ->
+            go (res { locals = M.insert idx val res.locals, stack = stackRest }) rest
+          [] -> error "Stack underflow on ILocalSet"
+      
+      ILocalTee idx ->
+        case res.stack of
+          (val:_) ->
+            go (res { locals = M.insert idx val res.locals }) rest
+          [] -> error "Stack underflow on ILocalTee"
+      
+      IConst n ->
+        go (res { stack = n : res.stack }) rest
+      
+      IGlobalGet ident ->
+        case M.lookup ident res.globals of
+          Just val -> go (res { stack = val : res.stack }) rest
+          Nothing -> error $ "Global not found: " ++ show ident
+      
+      IGlobalSet ident ->
+        case res.stack of
+          (val:stackRest) ->
+            go (res { globals = M.insert ident val res.globals, stack = stackRest }) rest
+          [] -> error "Stack underflow on IGlobalSet"
+      
+      ILoad (MemAddr offset) ->
+        case res.stack of
+          (I baseAddr:stackRest) ->
+            let addr = MemAddr (baseAddr + offset)
+            in case M.lookup addr res.memory of
+              Just val -> go (res { stack = val : stackRest }) rest
+              Nothing -> go (res { stack = I 0 : stackRest }) rest  -- uninitialized memory reads as 0
+          _ -> error "Stack underflow or type error on ILoad"
+      
+      IStore (MemAddr offset) ->
+        case res.stack of
+          (val:I baseAddr:stackRest) ->
+            let addr = MemAddr (baseAddr + offset)
+            in go (res { memory = M.insert addr val res.memory, stack = stackRest }) rest
+          _ -> error "Stack underflow or type error on IStore"
+      
+      IBinOp op ->
+        case res.stack of
+          (b:a:stackRest) ->
+            let result = evalBinOp op a b
+            in go (res { stack = result : stackRest }) rest
+          _ -> error "Stack underflow on IBinOp"
+      
+      ICall _ident ->
+        -- For now, just pop arguments and push a dummy result
+        -- In a real implementation, this would look up and execute the function
+        go res rest
+
+evalBinOp :: BinOp -> Number -> Number -> Number
+evalBinOp Plus (I a) (I b) = I (a + b)
+evalBinOp Plus (F a) (F b) = F (a + b)
+evalBinOp Plus (I a) (F b) = F (fromIntegral a + b)
+evalBinOp Plus (F a) (I b) = F (a + fromIntegral b)
+evalBinOp Minus (I a) (I b) = I (a - b)
+evalBinOp Minus (F a) (F b) = F (a - b)
+evalBinOp Minus (I a) (F b) = F (fromIntegral a - b)
+evalBinOp Minus (F a) (I b) = F (a - fromIntegral b)
+evalBinOp Mul (I a) (I b) = I (a * b)
+evalBinOp Mul (F a) (F b) = F (a * b)
+evalBinOp Mul (I a) (F b) = F (fromIntegral a * b)
+evalBinOp Mul (F a) (I b) = F (a * fromIntegral b)
+evalBinOp Div (I a) (I b) = I (a `div` b)
+evalBinOp Div (F a) (F b) = F (a / b)
+evalBinOp Div (I a) (F b) = F (fromIntegral a / b)
+evalBinOp Div (F a) (I b) = F (a / fromIntegral b)
 
 --------------------------------------------------------------------------------
 
