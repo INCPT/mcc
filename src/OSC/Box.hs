@@ -335,7 +335,7 @@ emitDelays delayMap = do
         emit $ ILocalGet retLocal
         emit $ ILocalSet delayLocal
     | (retBoxIndex, delayLocal) <- M.toList delayMap
-    , Just retLocal <- [M.lookup retBoxIndex env.values]
+    , Just retLocal <- [ M.lookup retBoxIndex env.values ]
     ]
 
 boxToBlock :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> LBox -> CodegenM LocalIndex
@@ -411,23 +411,8 @@ boxToBlock env delayMap (LBSelect dims boxIndex indices)
       emit $ ILocalSet res
       pure res
   | otherwise = error "select: box (this is a bug)"
-boxToBlock env delayMap (LBDelay _ retBoxIndex)
-  | Just delayLocal <- M.lookup retBoxIndex delayMap
-  , Just retBox <- M.lookup retBoxIndex env = do
-      -- Compute the value that will be delayed
-      -- _retLocal <- boxToBlockMemo env delayMap retBoxIndex retBox
-      env <- ST.get
-      ST.put $ env { values = M.insert retBoxIndex delayLocal env.values }
-  -- case M.lookup boxIndex env.values of
-  --   Just local -> pure local
-  --   Nothing -> mdo
-  --     -- This works because the state is lazy; we update the state first here because
-  --     -- genLocal is recursive and won't return and thus the state will be updated
-  --     -- only at the end
-  --     ST.put $ env { values = M.insert boxIndex local env.values }
-  --     local <- genLocal
-      -- Return the delay local (which holds the previous value)
-      pure delayLocal
+boxToBlock _ delayMap (LBDelay _ retBoxIndex)
+  | Just delayLocal <- M.lookup retBoxIndex delayMap = pure delayLocal
   | otherwise = error "delay (this is a bug)"
 boxToBlock env delayMap (LBCall n argBoxIndices) = do
   -- Evaluate all arguments to locals first
@@ -484,7 +469,7 @@ codegen expr = (retLocal, localDecls <> instrs)
             emit $ ILocalSet delayLocal
         | delayLocal <- M.elems delayMap
         ]
-      retLocal <- boxToBlock boxMap delayMap box
+      retLocal <- boxToBlockMemo boxMap delayMap boxIndex box
       emitDelays delayMap
       pure retLocal
 
