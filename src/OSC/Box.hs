@@ -649,15 +649,15 @@ testSimple :: Expr
 testSimple = ECall (Ident "add") [EConst (I 5), EConst (I 10)]
 
 testArr :: Expr
-testArr = ESelect [3] (EArr [3] [EConst (I 1), EConst (I 2), EConst (I 3)]) [IdxConst 0]
+testArr = ESelect [3] (EArr [3] [EConst (I 1), EConst (I 2), EConst (I 3)]) [IdxConst 1]
 
 -- More complex expression with delay and array
--- rec |prev| -> prev + [1, 2, 3][0]
+-- rec |prev| -> prev + [1, 2, 3][1]
 testComplex :: Expr
 testComplex = ERec 1 (Ident "prev") $
   ECall (Ident "add")
     [ EVar (Ident "prev")
-    , ESelect [3] (EArr [3] [EConst (I 1), EConst (I 2), EConst (I 3)]) [IdxConst 0]
+    , ESelect [3] (EArr [3] [EConst (I 1), EConst (I 2), EConst (I 3)]) [IdxConst 1]
     ]
 
 -- Expression with nested arrays and selection
@@ -687,7 +687,7 @@ testNestedArray2 = ESelect [2]
   [IdxConst 0]
 
 -- Expression with variable indexing
--- rec |i| -> arr[i] where arr = [10, 20, 30]
+-- rec |i| -> arr[i] where arr = [1, 2, 3]
 testVarIndex :: Expr
 testVarIndex = ERec 1 (Ident "i") $
   ESelect [3]
