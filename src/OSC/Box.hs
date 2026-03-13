@@ -130,6 +130,9 @@ data Expr
   | ECall Ident [Expr]
   deriving Show
 
+interpretE :: Expr -> Maybe Number
+interpretE = undefined
+
 data Graph = Graph [Binding Expr] Expr
 
 newtype BoxIndex = BoxIndex Int
@@ -214,7 +217,7 @@ mergeSelects (ESelect outerDims e outerIndices) =
   case mergeSelects e of
     -- If selecting from another select, combine them
     ESelect innerDims innerExpr innerIndices ->
-      ESelect innerDims (mergeSelects innerExpr) (outerIndices <> innerIndices)
+      ESelect innerDims (mergeSelects innerExpr) (innerIndices <> outerIndices)
     -- Otherwise, recurse on the expression being selected from
     e' -> ESelect outerDims e' (map (fmap mergeSelects) outerIndices)
 mergeSelects (EArr dims es) = EArr dims (map mergeSelects es)
@@ -498,7 +501,7 @@ boxToBlock env delayMap (LBSelect dims boxIndex indices)
                   emit $ IBinOp Plus
                   emit $ ILocalSet offsetLocal
               | otherwise -> error "select: index (this is a bug)"
-        | (card, idx) <- zip (scanl (*) 1 dims) indices
+        | (card, idx) <- zip (scanl (*) 1 dims) (reverse indices)
         ]
       
       -- Load from base + offset
@@ -611,7 +614,7 @@ testNestedArray = ESelect [2]
   [IdxConst 0]
 
 -- Expression with nested arrays and selection
--- [[[0, 1], [2, 3]], [[4, 5], [5, 6]]][1][0][1]
+-- [[[0, 1], [2, 3]], [[4, 5], [6, 7]]][1][0][0]
 testNestedArray2 :: Expr
 testNestedArray2 = ESelect [2]
   (ESelect [2, 2]
@@ -619,10 +622,10 @@ testNestedArray2 = ESelect [2]
       [ EConst (I 0), EConst (I 1)
       , EConst (I 2), EConst (I 3)
       , EConst (I 4), EConst (I 5)
-      , EConst (I 5), EConst (I 6)
+      , EConst (I 6), EConst (I 7)
       ])
-    [IdxConst 1, IdxConst 0])
-  [IdxConst 1]
+    [IdxConst 1, IdxConst 1])
+  [IdxConst 0]
 
 -- Expression with variable indexing
 -- rec |i| -> arr[i] where arr = [10, 20, 30]
