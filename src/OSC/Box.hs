@@ -333,7 +333,11 @@ interpret (retValue, locals, instrs) = (result, state)
       Stack -> case state.stack of
         (val:_) -> Just val
         [] -> Nothing
-      BasePtr ptr -> M.lookup ptr state.memory
+      BasePtr localIdx -> 
+        -- The local contains the base address, look it up in memory
+        case M.lookup localIdx state.locals of
+          Just (I addr) -> M.lookup (MemAddr addr) state.memory
+          _ -> Nothing
 
     go :: MState -> [Instr] -> MState
     go res [] = res
