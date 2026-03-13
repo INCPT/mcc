@@ -604,6 +604,8 @@ boxToBlockMemo env delayMap k lbox = memoBox k (boxToBlock env delayMap lbox)
 
 --------------------------------------------------------------------------------
 
+-- TODO: test nested recs etc
+
 -- TODO: figure out nested indices
 -- TODO: generate random but valid Exprs and compare output with codegen
 -- TODO: be able to specify iterations too (for recursive outputs)
