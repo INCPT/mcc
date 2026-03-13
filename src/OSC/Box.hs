@@ -16,6 +16,7 @@ import qualified Control.Monad.State as ST
 import Control.Monad.State.Lazy (State, StateT)
 import qualified Control.Monad.Writer.CPS as W
 import Control.Monad.Writer.CPS (Writer)
+import Data.Maybe (isJust)
 
 import qualified Data.Map as M
 import Data.Map (Map)
@@ -297,6 +298,7 @@ data Instr
   = ILocalGet LocalIndex
   | ILocalSet LocalIndex
   | ILocalTee LocalIndex  -- set and leave value on stack
+  | Swap  -- swap top two stack values
   | IConst Number
   | IGlobalGet Ident
   | IGlobalSet Ident
@@ -501,38 +503,64 @@ emitDelays boxMap ctx returnMap = do
     , Just delayLocal <- [M.lookup retBoxIndex ctx.delayMap]
     ]
 
-data Return = Stack | BasePtr MemAddr
+sizeOfType :: Type -> Int
+sizeOfType TNumber = 4
+sizeOfType (TArray _ dims) = product dims * 4
 
-boxToBlock :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> LBox -> CodegenM LocalIndex
-boxToBlock _ _ (LBConst n) = do
-  lidx <- localSimple
-  emit $ IConst n
-  emit $ ILocalSet lidx
-  pure lidx
-boxToBlock _ _ (LBVar _ n) = do
-  lidx <- localSimple
-  emit $ IGlobalGet n
-  emit $ ILocalSet lidx
-  pure lidx
-boxToBlock env delayMap (LBArr _ boxes) = do
-  (lidx, _) <- localArray (product [])
+isSimpleType :: Type -> Bool
+isSimpleType TNumber = True
+isSimpleType (TArray _ _) = False
+
+boxToBlock :: Map BoxIndex LBox -> EvalContext -> LBox -> CodegenM Return
+boxToBlock _ ctx (LBConst n) = 
+  case ctx.arrayBasePtr of
+    Nothing -> do
+      -- Put value on stack
+      emit $ IConst n
+      pure Stack
+    Just basePtr -> do
+      -- Write to array
+      emit $ ILocalGet basePtr
+      emit $ IConst n
+      emit $ IStore (MemAddr 0)
+      pure $ BasePtr basePtr
+
+boxToBlock _ ctx (LBVar _ ident) = 
+  case ctx.arrayBasePtr of
+    Nothing -> do
+      -- Put value on stack
+      emit $ IGlobalGet ident
+      pure Stack
+    Just basePtr -> do
+      -- Write to array
+      emit $ ILocalGet basePtr
+      emit $ IGlobalGet ident
+      emit $ IStore (MemAddr 0)
+      pure $ BasePtr basePtr
+boxToBlock env ctx (LBArr arrayType boxes) = do
+  let totalSize = sizeOfType arrayType
+  basePtr <- case ctx.arrayBasePtr of
+    Nothing -> fst <$> localArray totalSize
+    Just ptr -> pure ptr
+  
+  -- Evaluate elements with array context
   sequence_
     [ do
-        -- For constants, emit directly without creating a local
-        case box of
-          LBConst n -> do
-            emit $ ILocalGet lidx  -- base address on stack
-            emit $ IConst n  -- value on stack
-            emit $ IStore (MemAddr (index * 4))  -- store to (stack_addr + offset)
-          _ -> do
-            valueLocal <- boxToBlockMemo env delayMap boxIndex box
-            emit $ ILocalGet lidx  -- base address on stack
-            emit $ ILocalGet valueLocal  -- value on stack
-            emit $ IStore (MemAddr (index * 4))  -- store to (stack_addr + offset)
-    | (index, boxIndex) <- zip [0..] boxes
-    , Just box <- [ M.lookup boxIndex env ]
+        let offset = idx * 4  -- 4 bytes per element for now
+        offsetPtr <- localSimple
+        emit $ ILocalGet basePtr
+        emit $ IConst (I offset)
+        emit $ IBinOp Plus
+        emit $ ILocalSet offsetPtr
+        
+        let elemCtx = ctx { arrayBasePtr = Just offsetPtr }
+        case M.lookup boxIndex env of
+          Just box -> boxToBlockMemo env elemCtx boxIndex box
+          Nothing -> error "LBArr: box not found (this is a bug)"
+    | (idx, boxIndex) <- zip [0..] boxes
     ]
-  pure lidx
+  
+  pure $ BasePtr basePtr
 boxToBlock env delayMap (LBSelect _ boxIndex indices)
   | Just box <- M.lookup boxIndex env = do
       baseLocal <- boxToBlockMemo env delayMap boxIndex box
@@ -576,31 +604,47 @@ boxToBlock env delayMap (LBSelect _ boxIndex indices)
       emit $ ILocalSet res
       pure res
   | otherwise = error "select: box (this is a bug)"
-boxToBlock _ delayMap (LBDelay _ _ retBoxIndex)
-  | Just delayLocal <- M.lookup retBoxIndex delayMap = pure delayLocal
-  | otherwise = error "delay (this is a bug)"
-boxToBlock env delayMap (LBCall _ n argBoxIndices) = do
-  -- Evaluate all arguments to locals first
-  argLocals <- sequence
+boxToBlock _ ctx (LBDelay _ _ retBoxIndex)
+  | Just delayLocal <- M.lookup retBoxIndex ctx.delayMap = 
+      case ctx.arrayBasePtr of
+        Nothing -> do
+          emit $ ILocalGet delayLocal
+          pure Stack
+        Just basePtr -> do
+          emit $ ILocalGet basePtr
+          emit $ ILocalGet delayLocal
+          emit $ IStore (MemAddr 0)
+          pure $ BasePtr basePtr
+  | otherwise -> error "delay: not found in delayMap (this is a bug)"
+boxToBlock env ctx (LBCall _ ident argBoxIndices) = do
+  -- Evaluate all arguments (they should be simple types on stack)
+  sequence_
     [ case M.lookup argBoxIndex env of
-        Just box -> boxToBlockMemo env delayMap argBoxIndex box
+        Just box -> do
+          let argCtx = ctx { arrayBasePtr = Nothing }
+          ret <- boxToBlockMemo env argCtx argBoxIndex box
+          case ret of
+            Stack -> pure ()  -- Already on stack
+            _ -> error "call: argument must be simple type (this is a bug)"
         Nothing -> error "call: arg box not found (this is a bug)"
     | argBoxIndex <- argBoxIndices
     ]
   
-  -- Push all arguments onto the stack right before the call
-  sequence_ [emit $ ILocalGet argLocal | argLocal <- argLocals]
+  -- Call function (args are on stack, result will be on stack)
+  emit $ ICall ident
   
-  -- Call function (args are on stack)
-  emit $ ICall n
-  
-  -- Store result
-  res <- localSimple
-  emit $ ILocalSet res
-  pure res
+  case ctx.arrayBasePtr of
+    Nothing -> pure Stack
+    Just basePtr -> do
+      -- Store result to array
+      emit $ ILocalGet basePtr
+      emit $ Swap  -- TODO: might need a temp local instead
+      emit $ IStore (MemAddr 0)
+      pure $ BasePtr basePtr
 
-boxToBlockMemo :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> BoxIndex -> LBox -> CodegenM LocalIndex
-boxToBlockMemo env delayMap k lbox = memoBox k (boxToBlock env delayMap lbox)
+boxToBlockMemo :: Map BoxIndex LBox -> EvalContext -> BoxIndex -> LBox -> CodegenM Return
+boxToBlockMemo env ctx boxIndex lbox = 
+  memoBox boxIndex (isJust ctx.arrayBasePtr) (boxToBlock env ctx lbox)
 
 --------------------------------------------------------------------------------
 
