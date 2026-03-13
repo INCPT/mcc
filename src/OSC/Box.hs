@@ -505,7 +505,7 @@ emitDelays boxMap ctx returnMap = do
 
 sizeOfType :: Type -> Int
 sizeOfType TNumber = 4
-sizeOfType (TArray _ dims) = product dims * 4
+sizeOfType (TArray _ dims) = undefined
 
 isSimpleType :: Type -> Bool
 isSimpleType TNumber = True
@@ -653,7 +653,7 @@ boxToBlock env ctx (LBSelect selectType boxIndex indices)
             
             let adjustedCtx = ctx { arrayBasePtr = Just adjustedDestPtr }
             boxToBlockMemo env adjustedCtx boxIndex box
-  | otherwise -> error "select: box not found (this is a bug)"
+  | otherwise = error "select: box not found (this is a bug)"
 boxToBlock _ ctx (LBDelay _ _ retBoxIndex)
   | Just delayLocal <- M.lookup retBoxIndex ctx.delayMap = 
       case ctx.arrayBasePtr of
@@ -665,7 +665,7 @@ boxToBlock _ ctx (LBDelay _ _ retBoxIndex)
           emit $ ILocalGet delayLocal
           emit $ IStore (MemAddr 0)
           pure $ BasePtr basePtr
-  | otherwise -> error "delay: not found in delayMap (this is a bug)"
+  | otherwise = error "delay: not found in delayMap (this is a bug)"
 boxToBlock env ctx (LBCall _ ident argBoxIndices) = do
   -- Evaluate all arguments (they should be simple types on stack)
   sequence_
