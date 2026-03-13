@@ -269,8 +269,12 @@ data Instr
   | IStore MemAddr -- i32.store offset: store to (stack_addr + offset)
   | IBinOp BinOp   -- consumes two stack values, produces one
   | ICall Ident    -- call function, args already on stack
-  | IDrop
   deriving Show
+
+interpet :: [Instr] -> Result
+interpet = undefined
+
+--------------------------------------------------------------------------------
 
 data CodegenEnv = CodegenEnv
   { nextLocal :: LocalIndex
