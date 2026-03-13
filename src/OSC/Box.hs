@@ -93,7 +93,7 @@ data Expr'
   | EGraphCall' Ident [Expr]
   | ECall' Ident [Expr]
   | EArr' [Expr']
-  | ESelect' Expr [Index Ident]
+  | ESelect' Expr (Index Ident)
   | ERec' Int Ident [Binding Expr'] Expr' -- rec delay |prev| -> expr
 
 -- TODO: in ESelect the Expr is maximally drilled into
@@ -118,7 +118,7 @@ data Expr'
 expandExpr :: Expr' -> Expr
 expandExpr = undefined
 
-data Type = TNumber | TArray [Type] Int
+data Type = TNumber | TArray [Type] Int -- dimension
   deriving Show
 
 data Expr
@@ -144,9 +144,9 @@ interpretE = interpretE' mempty
     interpretE' env (EArr _ exprs) = do
       vals <- traverse (interpretE' env) exprs
       Just (VArr vals)
-    interpretE' env (ESelect _ expr indices) = do
+    interpretE' env (ESelect _ expr index) = do
       val <- interpretE' env expr
-      pure $ select env indices val
+      pure $ select env index val
     interpretE' env (ERec _ delay ident retExpr) = 
       -- For recursive expressions with delay, we need to iterate
       -- Start with 0 as the initial value for the delay variable
@@ -461,7 +461,7 @@ emit = W.tell . pure
 gatherDelays :: Map BoxIndex LBox -> CodegenM (Map BoxIndex LocalIndex)
 gatherDelays env = M.fromList <$> sequence
   [ (retBoxIndex,) <$> localSimple
-  | LBDelay t _ retBoxIndex <- M.elems env
+  | LBDelay _ _ retBoxIndex <- M.elems env
   ]
 
 emitDelays :: Map BoxIndex LocalIndex -> CodegenM ()
@@ -474,6 +474,8 @@ emitDelays delayMap = do
     | (retBoxIndex, delayLocal) <- M.toList delayMap
     , Just retLocal <- [ M.lookup retBoxIndex env.values ]
     ]
+
+data Return = Stack | BasePtr MemAddr
 
 boxToBlock :: Map BoxIndex LBox -> Map BoxIndex LocalIndex -> LBox -> CodegenM LocalIndex
 boxToBlock _ _ (LBConst n) = do
