@@ -119,7 +119,7 @@ data Expr'
 expandExpr :: Expr' -> Expr
 expandExpr = undefined
 
-data Type = TNumber | TArray [Type] Int -- dimension
+data Type = TNumber | TArray Type Int -- dimension
   deriving Show
 
 data Expr
@@ -509,7 +509,7 @@ emitDelays boxMap ctx returnMap = do
 
 sizeOfType :: Type -> Int
 sizeOfType TNumber = 4
-sizeOfType (TArray _ dims) = undefined
+sizeOfType (TArray t dim) = sizeOfType t * dim
 
 isSimpleType :: Type -> Bool
 isSimpleType TNumber = True
