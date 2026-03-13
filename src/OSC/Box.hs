@@ -1,10 +1,12 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeApplications #-}
 {-# OPTIONS_GHC -fno-defer-type-errors #-}
 
 module OSC.Box where
@@ -212,7 +214,7 @@ mergeSelects (ESelect outerDims e outerIndices) =
   case mergeSelects e of
     -- If selecting from another select, combine them
     ESelect innerDims innerExpr innerIndices ->
-      ESelect innerDims (mergeSelects innerExpr) (innerIndices ++ outerIndices)
+      ESelect innerDims (mergeSelects innerExpr) (outerIndices <> innerIndices)
     -- Otherwise, recurse on the expression being selected from
     e' -> ESelect outerDims e' (map (fmap mergeSelects) outerIndices)
 mergeSelects (EArr dims es) = EArr dims (map mergeSelects es)
@@ -247,19 +249,18 @@ exprToBox env (ECall n args) = do
 -- TODO: after component clustering, if a component is called only once, inline
 
 newtype LocalIndex = LocalIndex Int
-  deriving (Num, Show)
+  deriving (Num, Eq, Ord, Show)
 
 newtype MemAddr = MemAddr Int
-  deriving (Num, Show)
+  deriving (Num, Eq, Ord, Show)
 
-data LocalSimple = LSimple LocalIndex deriving Show
-data LocalArr = LArr LocalIndex MemAddr Int deriving Show
+data LocalSimple = LSimple LocalIndex deriving (Eq, Ord, Show)
+data LocalArr = LArr LocalIndex MemAddr Int deriving (Eq, Ord, Show)
 
 data BinOp = Plus | Mul | Minus | Div deriving Show
 
 data Instr
-  = ILocal LocalIndex
-  | ILocalGet LocalIndex
+  = ILocalGet LocalIndex
   | ILocalSet LocalIndex
   | ILocalTee LocalIndex  -- set and leave value on stack
   | IConst Number
@@ -271,34 +272,30 @@ data Instr
   | ICall Ident    -- call function, args already on stack
   deriving Show
 
-data Result = Result
+data MState = MState
   { locals :: Map LocalIndex Number
   , stack :: [Number]
   , memory :: Map MemAddr Number
   , globals :: Map Ident Number
-  , returnValue :: Maybe Number
   }
   deriving Show
 
-emptyResult :: Result
-emptyResult = Result
+emptyMState :: MState
+emptyMState = MState
   { locals = mempty
   , stack = []
   , memory = mempty
   , globals = mempty
-  , returnValue = Nothing
   }
 
-interpet :: [Instr] -> Result
-interpet instrs = go emptyResult instrs
+interpet :: (LocalIndex, [LocalIndex], [Instr]) -> (Maybe Number, MState)
+interpet (retIndex, locals, instrs) = (M.lookup retIndex state.locals, state)
   where
-    go :: Result -> [Instr] -> Result
+    state = go (emptyMState { locals = M.fromList (fmap (, I 0) locals) }) instrs
+
+    go :: MState -> [Instr] -> MState
     go res [] = res
     go res (instr:rest) = case instr of
-      ILocal idx ->
-        -- Declare a local variable, initialize to 0
-        go (res { locals = M.insert idx (I 0) res.locals }) rest
-      
       ILocalGet idx ->
         case M.lookup idx res.locals of
           Just val -> go (res { stack = val : res.stack }) rest
@@ -545,8 +542,8 @@ boxToBlockMemo env delayMap k lbox = memoBox k (boxToBlock env delayMap lbox)
 
 --------------------------------------------------------------------------------
 
-codegen :: Expr -> (LocalIndex, [Instr])
-codegen expr = (retLocal, localDecls <> instrs)
+codegen :: Expr -> (LocalIndex, [LocalIndex], [Instr])
+codegen expr = (retLocal, finalEnv.locals, instrs)
   where
     -- Merge nested selects before generating boxes
     mergedExpr = mergeSelects expr
@@ -562,19 +559,22 @@ codegen expr = (retLocal, localDecls <> instrs)
 
     ((retLocal, finalEnv), instrs) = 
       W.runWriter (ST.runStateT gen initialEnv)
-    
-    localDecls = map ILocal finalEnv.locals
 
     gen :: CodegenM LocalIndex
     gen = do
       delayMap <- gatherDelays boxMap
       -- Initialize delay variables to 0
-      sequence_
-        [ do
-            emit $ IConst (I 0)
-            emit $ ILocalSet delayLocal
-        | delayLocal <- M.elems delayMap
-        ]
+
+      -- TODO: not sure if needed, but in any case, do in a separate INIT sections
+      -- otherwise we'll clear the delays every frame
+
+      -- sequence_
+      --   [ do
+      --       emit $ IConst (I 0)
+      --       emit $ ILocalSet delayLocal
+      --   | delayLocal <- M.elems delayMap
+      --   ]
+
       retLocal <- boxToBlockMemo boxMap delayMap boxIndex box
       emitDelays delayMap
       pure retLocal
@@ -585,6 +585,9 @@ codegen expr = (retLocal, localDecls <> instrs)
 -- Simple expression: 5 + 10
 testSimple :: Expr
 testSimple = ECall (Ident "add") [EConst (I 5), EConst (I 10)]
+
+testArr :: Expr
+testArr = ESelect [3] (EArr [3] [EConst (I 1), EConst (I 2), EConst (I 3)]) [IdxConst 0]
 
 -- More complex expression with delay and array
 -- rec |prev| -> prev + [1, 2, 3][0]
@@ -612,8 +615,13 @@ testNestedArray = ESelect [2]
 testVarIndex :: Expr
 testVarIndex = ERec 1 (Ident "i") $
   ESelect [3]
-    (EArr [3] [EConst (I 10), EConst (I 20), EConst (I 30)])
+    (EArr [3] [EConst (I 1), EConst (I 2), EConst (I 0)])
     [IdxVar (EVar (Ident "i"))]
+
+runTestVarIndex :: (Maybe Number, MState)
+runTestVarIndex = interpet (retIndex, locals, instrs <> instrs <> instrs <> instrs)
+  where
+    (retIndex, locals, instrs) = codegen testVarIndex
 
 printBoxes :: Expr -> IO ()
 printBoxes expr = do
@@ -627,7 +635,7 @@ printCodegen :: String -> Expr -> IO ()
 printCodegen name expr = do
   putStrLn $ "\n=== " ++ name ++ " ==="
   putStrLn $ "Expression: " ++ show expr
-  let (LocalIndex retIdx, instrs) = codegen expr
+  let (LocalIndex retIdx, _, instrs) = codegen expr
   putStrLn $ "Return local: " ++ show retIdx
   putStrLn "Instructions:"
   mapM_ (putStrLn . ("  " ++) . show) instrs
