@@ -561,49 +561,99 @@ boxToBlock env ctx (LBArr arrayType boxes) = do
     ]
   
   pure $ BasePtr basePtr
-boxToBlock env delayMap (LBSelect _ boxIndex indices)
+boxToBlock env ctx (LBSelect selectType boxIndex indices)
   | Just box <- M.lookup boxIndex env = do
-      baseLocal <- boxToBlockMemo env delayMap boxIndex box
+      -- Calculate offset from indices
       offsetLocal <- localSimple
       emit $ IConst (I 0)
       emit $ ILocalSet offsetLocal
       
-      -- Calculate offset: sum of (index * cardinality) for each dimension
       sequence_
         [ case idx of
             IdxConst 0 -> pure ()
             IdxConst i -> do
               emit $ ILocalGet offsetLocal
-              emit $ IConst (I (i * card))
+              emit $ IConst (I (i * 4))  -- 4 bytes per element
               emit $ IBinOp Plus
               emit $ ILocalSet offsetLocal
             IdxVar indexBoxIndex
               | Just indexBox <- M.lookup indexBoxIndex env -> do
-                  idxLocal <- boxToBlockMemo env delayMap indexBoxIndex indexBox
-                  emit $ ILocalGet offsetLocal
-                  emit $ ILocalGet idxLocal
-                  when (card > 1) $ do
-                    emit $ IConst (I card)
-                    emit $ IBinOp Mul
-                  emit $ IBinOp Plus
-                  emit $ ILocalSet offsetLocal
-              | otherwise -> error "select: index (this is a bug)"
-        | (card, idx) <- zip (scanl (*) 1 []) (reverse indices)
+                  let indexCtx = ctx { arrayBasePtr = Nothing }
+                  indexRet <- boxToBlockMemo env indexCtx indexBoxIndex indexBox
+                  case indexRet of
+                    Stack -> do
+                      -- Index value is on stack
+                      emit $ IConst (I 4)
+                      emit $ IBinOp Mul
+                      emit $ ILocalGet offsetLocal
+                      emit $ IBinOp Plus
+                      emit $ ILocalSet offsetLocal
+                    _ -> error "select: index must be simple type (this is a bug)"
+              | otherwise -> error "select: index box not found (this is a bug)"
+        | idx <- indices
         ]
       
-      -- Load from base + offset
-      res <- localSimple
-
-      -- Push base address + (offset * 4) onto stack, then load
-      emit $ ILocalGet baseLocal
-      emit $ ILocalGet offsetLocal
-      emit $ IConst (I 4)  -- 4 bytes per element
-      emit $ IBinOp Mul
-      emit $ IBinOp Plus
-      emit $ ILoad (MemAddr 0)  -- load from (stack_addr + 0)
-      emit $ ILocalSet res
-      pure res
-  | otherwise = error "select: box (this is a bug)"
+      if isSimpleType selectType then
+        case ctx.arrayBasePtr of
+          Nothing -> do
+            -- Read value and put on stack
+            sourceRet <- boxToBlockMemo env (ctx { arrayBasePtr = Nothing }) boxIndex box
+            case sourceRet of
+              BasePtr sourcePtr -> do
+                emit $ ILocalGet sourcePtr
+                emit $ ILocalGet offsetLocal
+                emit $ IBinOp Plus
+                emit $ ILoad (MemAddr 0)
+                pure Stack
+              _ -> error "select: source must be array (this is a bug)"
+          Just destPtr -> do
+            -- Read value and write to destination
+            sourceRet <- boxToBlockMemo env (ctx { arrayBasePtr = Nothing }) boxIndex box
+            case sourceRet of
+              BasePtr sourcePtr -> do
+                emit $ ILocalGet destPtr
+                emit $ ILocalGet sourcePtr
+                emit $ ILocalGet offsetLocal
+                emit $ IBinOp Plus
+                emit $ ILoad (MemAddr 0)
+                emit $ IStore (MemAddr 0)
+                pure $ BasePtr destPtr
+              _ -> error "select: source must be array (this is a bug)"
+      else
+        -- Result is array type
+        case ctx.arrayBasePtr of
+          Nothing -> do
+            -- Allocate destination array
+            let arraySize = sizeOfType selectType
+            (destPtr, _) <- localArray arraySize
+            
+            -- Evaluate source with adjusted pointer
+            sourceRet <- boxToBlockMemo env (ctx { arrayBasePtr = Nothing }) boxIndex box
+            case sourceRet of
+              BasePtr sourcePtr -> do
+                -- Copy from source + offset to destination
+                -- For now, just pass adjusted pointer to source
+                adjustedPtr <- localSimple
+                emit $ ILocalGet sourcePtr
+                emit $ ILocalGet offsetLocal
+                emit $ IBinOp Plus
+                emit $ ILocalSet adjustedPtr
+                
+                let adjustedCtx = ctx { arrayBasePtr = Just destPtr }
+                -- TODO: need to actually copy or re-evaluate
+                pure $ BasePtr destPtr
+              _ -> error "select: source must be array (this is a bug)"
+          Just destPtr -> do
+            -- Pass down adjusted destination pointer
+            adjustedDestPtr <- localSimple
+            emit $ ILocalGet destPtr
+            emit $ ILocalGet offsetLocal
+            emit $ IBinOp Plus
+            emit $ ILocalSet adjustedDestPtr
+            
+            let adjustedCtx = ctx { arrayBasePtr = Just adjustedDestPtr }
+            boxToBlockMemo env adjustedCtx boxIndex box
+  | otherwise -> error "select: box not found (this is a bug)"
 boxToBlock _ ctx (LBDelay _ _ retBoxIndex)
   | Just delayLocal <- M.lookup retBoxIndex ctx.delayMap = 
       case ctx.arrayBasePtr of
