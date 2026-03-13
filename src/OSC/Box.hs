@@ -180,7 +180,7 @@ interpretE = interpretE' mempty
                 IdxVar expr -> case interpretE' env expr of
                   Just (VNum (I n)) -> n
                   Just (VNum (F n)) -> floor n
-                  _ -> 0  -- fallback for invalid index
+                  _ -> error "select: index isn't a number"
               -- Calculate the size of each element in the current dimension
               elemSize = product remainingDims
               -- Calculate the starting position in the flat array
@@ -188,7 +188,7 @@ interpretE = interpretE' mempty
               -- Extract the subregion
               subVals = take elemSize (drop startPos vals)
           in case remainingDims of
-               [] -> VNum (I 0)  -- shouldn't happen, but handle gracefully
+               [] -> error "select"
                [_] -> 
                  -- Last dimension, return a single value
                  case subVals of
