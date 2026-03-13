@@ -7,7 +7,7 @@
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
-{-# OPTIONS_GHC -fno-defer-type-errors #-}
+-- {-# OPTIONS_GHC -fno-defer-type-errors #-}
 
 module OSC.Box where
 
@@ -126,7 +126,7 @@ data Expr
   = EConst Number
   | EVar Type Ident
   | EArr Type [Expr]
-  | ESelect Type Expr [Index Expr] -- dims
+  | ESelect Type Expr (Index Expr)
   | ERec Type Int Ident Expr -- rec delay |prev| -> expr
   | ECall Type Ident [Expr]
   deriving Show
@@ -148,7 +148,7 @@ interpretE = interpretE' mempty
     interpretE' env (ESelect _ expr index) = do
       val <- interpretE' env expr
       pure $ select env index val
-    interpretE' env (ERec _ delay ident retExpr) = 
+    interpretE' env (ERec _ _ ident retExpr) = 
       -- For recursive expressions with delay, we need to iterate
       -- Start with 0 as the initial value for the delay variable
       let initialEnv = M.insert ident (VNum (I 0)) env
@@ -171,11 +171,10 @@ interpretE = interpretE' mempty
       Just $ VNum $ evalBinOp Div aVal bVal
     interpretE' _ (ECall _ _ _) = Nothing  -- unknown function
 
-    select :: Map Ident Value -> [Index Expr] -> Value -> Value
-    select _ [] value = value
-    select env (IdxConst n:is) (VArr arr) = select env is (arr !! n)
-    select env (IdxVar expr:is) (VArr arr)
-      | Just (VNum (I n)) <- interpretE' env expr = select env is (arr !! n)
+    select :: Map Ident Value -> Index Expr -> Value -> Value
+    select _ (IdxConst n) (VArr arr) = arr !! n
+    select env (IdxVar expr) (VArr arr)
+      | Just (VNum (I n)) <- interpretE' env expr = arr !! n
       | otherwise = error "select: index not an integer"
     select _ _ _ = error "select: not an array"
 
@@ -238,45 +237,45 @@ newBox box = do
 data LBox
   = LBConst Number
   | LBVar Type Ident
-  | LBArr Type [BoxIndex] -- dimensions
-  | LBSelect Type BoxIndex [Index BoxIndex] -- maximally drilled into
-  | LBDelay Type Int BoxIndex
+  | LBArr Type [BoxIndex]
+  | LBSelect Type BoxIndex (Index BoxIndex)
+  | LBRec Type Int Ident BoxIndex
   | LBCall Type Ident [BoxIndex]
   deriving Show
 
-inlineRef :: Ident -> Expr -> Expr -> Expr
-inlineRef n replace expr = inline expr
-  where
-    inline (EVar t v)
-      | v == n = replace
-      | otherwise = EVar t v
-    inline e@(EConst _) = e
-    inline (EArr t es) = EArr t (map inline es)
-    inline (ESelect t e is) = ESelect t (inline e) (map (fmap inline) is)
-    inline (ERec t delay v ret)
-      | v == n = ERec t delay v ret  -- shadowed, don't recurse
-      | otherwise = ERec t delay v (inline ret)
-    inline (ECall t f args) = ECall t f (map inline args)
+-- inlineRef :: Ident -> Expr -> Expr -> Expr
+-- inlineRef n replace expr = inline expr
+--   where
+--     inline (EVar t v)
+--       | v == n = replace
+--       | otherwise = EVar t v
+--     inline e@(EConst _) = e
+--     inline (EArr t es) = EArr t (map inline es)
+--     inline (ESelect t e is) = ESelect t (inline e) (map (fmap inline) is)
+--     inline (ERec t delay v ret)
+--       | v == n = ERec t delay v ret  -- shadowed, don't recurse
+--       | otherwise = ERec t delay v (inline ret)
+--     inline (ECall t f args) = ECall t f (map inline args)
 
-exprToBox :: Map Ident BoxIndex -> Expr -> BoxGenM BoxIndex
-exprToBox _ (EConst n) = newBox (LBConst n)
-exprToBox env (EVar t n)
-  | Just boxIndex <- M.lookup n env = pure boxIndex
-  | otherwise = newBox (LBVar t n)
-exprToBox _ (ERec _ _ _ (EConst n)) = newBox (LBConst n) -- TODO: do this in a simplify pass
-exprToBox env (ERec t delay n ret) = mdo
-  retBoxIndex <- exprToBox (M.insert n delayBoxIndex env) ret
-  delayBoxIndex <- newBox (LBDelay t delay retBoxIndex)
-  pure retBoxIndex
-exprToBox env (EArr t es) = do
-  labels <- traverse (exprToBox env) es
+exprToBox :: Expr -> BoxGenM BoxIndex
+exprToBox (EConst n) = newBox (LBConst n)
+exprToBox (EVar t n) = newBox (LBVar t n)
+exprToBox (ERec _ _ _ (EConst n)) = newBox (LBConst n) -- TODO: do this in a simplify pass
+exprToBox (ERec t delay n ret) = mdo
+  retBoxIndex <- exprToBox ret
+  newBox (LBRec t delay n retBoxIndex)
+exprToBox (EArr t es) = do
+  labels <- traverse exprToBox es
   newBox (LBArr t labels)
-exprToBox env (ESelect t e is) = do
-  eBoxIndex <- exprToBox env e
-  isBoxIndexs <- traverse (traverse (exprToBox env)) is
-  newBox (LBSelect t eBoxIndex isBoxIndexs)
-exprToBox env (ECall t n args) = do
-  argBoxIndexs <- traverse (exprToBox env) args
+exprToBox (ESelect t e idx) = do
+  boxIndex <- exprToBox e
+  case idx of
+    IdxConst n -> newBox (LBSelect t boxIndex (IdxConst n))
+    IdxVar idx -> do
+      selIndex <- exprToBox idx
+      newBox (LBSelect t boxIndex (IdxVar selIndex))
+exprToBox (ECall t n args) = do
+  argBoxIndexs <- traverse exprToBox args
   newBox (LBCall t n argBoxIndexs)
 
 --------------------------------------------------------------------------------
@@ -485,22 +484,27 @@ memoBox boxIndex inArrayCtx genReturn = do
 emit :: Instr -> CodegenM ()
 emit = W.tell . pure
 
-gatherDelays :: Map BoxIndex LBox -> CodegenM (Map BoxIndex LocalIndex)
-gatherDelays boxMap = M.fromList <$> sequence
-  [ (retBoxIndex,) <$> localSimple
-  | LBDelay _ _ retBoxIndex <- M.elems boxMap
-  ]
-
-emitDelays :: Map BoxIndex LBox -> EvalContext -> Map BoxIndex Return -> CodegenM ()
-emitDelays boxMap ctx returnMap = do
-  sequence_
-    [ case M.lookup retBoxIndex returnMap of
-        Just Stack -> emit $ ILocalSet delayLocal
-        Just _ -> error "emitDelays: return value is not on the stack (this is a bug)"
-        Nothing -> error "emitDelays: return value not found (this is a bug)"
-    | LBDelay _ _ retBoxIndex <- M.elems boxMap
-    , Just delayLocal <- [M.lookup retBoxIndex ctx.delayMap]
-    ]
+-- gatherDelays :: Map BoxIndex LBox -> CodegenM (Map BoxIndex LocalIndex)
+-- gatherDelays boxMap = M.fromList <$> sequence
+--   [ (retBoxIndex,) <$> localSimple
+--   | LBDelay _ _ retBoxIndex <- M.elems boxMap
+--   ]
+-- 
+-- emitDelays :: Map BoxIndex LBox -> EvalContext -> Map BoxIndex Return -> CodegenM ()
+-- emitDelays boxMap ctx returnMap = do
+--   sequence_
+--     [ case M.lookup retBoxIndex returnMap of
+--         Just Stack -> do
+--           -- Value is on stack, store it in delay local
+--           emit $ ILocalSet delayLocal
+--         Just (BasePtr ptr) -> do
+--           -- Array pointer, store it in delay local
+--           emit $ ILocalGet ptr
+--           emit $ ILocalSet delayLocal
+--         Nothing -> error "emitDelays: return value not found (this is a bug)"
+--     | LBDelay _ _ retBoxIndex <- M.elems boxMap
+--     , Just delayLocal <- [M.lookup retBoxIndex ctx.delayMap]
+--     ]
 
 sizeOfType :: Type -> Int
 sizeOfType TNumber = 4
@@ -524,19 +528,18 @@ boxToBlock _ ctx (LBConst n) =
       emit $ IStore (MemAddr 0)
       pure $ BasePtr basePtr
 
--- NOTE: LBVars should be eliminated before this stage
-boxToBlock _ _ (LBVar _ _) = error "boxToBlock: LBVar (this is a bug)"
---   case ctx.arrayBasePtr of
---     Nothing -> do
---       -- Put value on stack
---       emit $ IGlobalGet ident
---       pure Stack
---     Just basePtr -> do
---       -- Write to array
---       emit $ ILocalGet basePtr
---       emit $ IGlobalGet ident
---       emit $ IStore (MemAddr 0)
---       pure $ BasePtr basePtr
+boxToBlock _ ctx (LBVar _ ident) = 
+  case ctx.arrayBasePtr of
+    Nothing -> do
+      -- Put value on stack
+      emit $ IGlobalGet ident
+      pure Stack
+    Just basePtr -> do
+      -- Write to array
+      emit $ ILocalGet basePtr
+      emit $ IGlobalGet ident
+      emit $ IStore (MemAddr 0)
+      pure $ BasePtr basePtr
 boxToBlock env ctx (LBArr arrayType boxes) = do
   let totalSize = sizeOfType arrayType
   basePtr <- case ctx.arrayBasePtr of
@@ -546,7 +549,7 @@ boxToBlock env ctx (LBArr arrayType boxes) = do
   -- Evaluate elements with array context
   sequence_
     [ do
-        let offset = idx * 4  -- TODO: 4 bytes per element for now
+        let offset = idx * 4  -- 4 bytes per element for now
         offsetPtr <- localSimple
         emit $ ILocalGet basePtr
         emit $ IConst (I offset)
@@ -561,111 +564,112 @@ boxToBlock env ctx (LBArr arrayType boxes) = do
     ]
   
   pure $ BasePtr basePtr
-boxToBlock env ctx (LBSelect selectType boxIndex indices)
-  | Just box <- M.lookup boxIndex env = do
-      -- Calculate offset from indices
-      offsetLocal <- localSimple
-      emit $ IConst (I 0)
-      emit $ ILocalSet offsetLocal
-      
-      sequence_
-        [ case idx of
-            IdxConst 0 -> pure ()
-            IdxConst i -> do
-              emit $ ILocalGet offsetLocal
-              emit $ IConst (I (i * 4))  -- 4 bytes per element
-              emit $ IBinOp Plus
-              emit $ ILocalSet offsetLocal
-            IdxVar indexBoxIndex
-              | Just indexBox <- M.lookup indexBoxIndex env -> do
-                  let indexCtx = ctx { arrayBasePtr = Nothing }
-                  indexRet <- boxToBlockMemo env indexCtx indexBoxIndex indexBox
-                  case indexRet of
-                    Stack -> do
-                      -- Index value is on stack
-                      emit $ IConst (I 4)
-                      emit $ IBinOp Mul
-                      emit $ ILocalGet offsetLocal
-                      emit $ IBinOp Plus
-                      emit $ ILocalSet offsetLocal
-                    _ -> error "select: index must be simple type (this is a bug)"
-              | otherwise -> error "select: index box not found (this is a bug)"
-        | idx <- indices
-        ]
-      
-      if isSimpleType selectType then
-        case ctx.arrayBasePtr of
-          Nothing -> do
-            -- Read value and put on stack
-            sourceRet <- boxToBlockMemo env (ctx { arrayBasePtr = Nothing }) boxIndex box
-            case sourceRet of
-              BasePtr sourcePtr -> do
-                emit $ ILocalGet sourcePtr
-                emit $ ILocalGet offsetLocal
-                emit $ IBinOp Plus
-                emit $ ILoad (MemAddr 0)
-                pure Stack
-              _ -> error "select: source must be array (this is a bug)"
-          Just destPtr -> do
-            -- Read value and write to destination
-            sourceRet <- boxToBlockMemo env (ctx { arrayBasePtr = Nothing }) boxIndex box
-            case sourceRet of
-              BasePtr sourcePtr -> do
-                emit $ ILocalGet destPtr
-                emit $ ILocalGet sourcePtr
-                emit $ ILocalGet offsetLocal
-                emit $ IBinOp Plus
-                emit $ ILoad (MemAddr 0)
-                emit $ IStore (MemAddr 0)
-                pure $ BasePtr destPtr
-              _ -> error "select: source must be array (this is a bug)"
-      else
-        -- Result is array type
-        case ctx.arrayBasePtr of
-          Nothing -> do
-            -- Allocate destination array
-            let arraySize = sizeOfType selectType
-            (destPtr, _) <- localArray arraySize
-            
-            -- Evaluate source with adjusted pointer
-            sourceRet <- boxToBlockMemo env (ctx { arrayBasePtr = Nothing }) boxIndex box
-            case sourceRet of
-              BasePtr sourcePtr -> do
-                -- Copy from source + offset to destination
-                -- For now, just pass adjusted pointer to source
-                adjustedPtr <- localSimple
-                emit $ ILocalGet sourcePtr
-                emit $ ILocalGet offsetLocal
-                emit $ IBinOp Plus
-                emit $ ILocalSet adjustedPtr
-                
-                let adjustedCtx = ctx { arrayBasePtr = Just destPtr }
-                -- TODO: need to actually copy or re-evaluate
-                pure $ BasePtr destPtr
-              _ -> error "select: source must be array (this is a bug)"
-          Just destPtr -> do
-            -- Pass down adjusted destination pointer
-            adjustedDestPtr <- localSimple
-            emit $ ILocalGet destPtr
-            emit $ ILocalGet offsetLocal
-            emit $ IBinOp Plus
-            emit $ ILocalSet adjustedDestPtr
-            
-            let adjustedCtx = ctx { arrayBasePtr = Just adjustedDestPtr }
-            boxToBlockMemo env adjustedCtx boxIndex box
-  | otherwise = error "select: box not found (this is a bug)"
-boxToBlock _ ctx (LBDelay _ _ retBoxIndex)
-  | Just delayLocal <- M.lookup retBoxIndex ctx.delayMap = 
-      case ctx.arrayBasePtr of
-        Nothing -> do
-          emit $ ILocalGet delayLocal
-          pure Stack
-        Just basePtr -> do
-          emit $ ILocalGet basePtr
-          emit $ ILocalGet delayLocal
-          emit $ IStore (MemAddr 0)
-          pure $ BasePtr basePtr
-  | otherwise = error "delay: not found in delayMap (this is a bug)"
+
+-- boxToBlock env ctx (LBSelect selectType boxIndex indices)
+--   | Just box <- M.lookup boxIndex env = do
+--       -- Calculate offset from indices
+--       offsetLocal <- localSimple
+--       emit $ IConst (I 0)
+--       emit $ ILocalSet offsetLocal
+--       
+--       sequence_
+--         [ case idx of
+--             IdxConst 0 -> pure ()
+--             IdxConst i -> do
+--               emit $ ILocalGet offsetLocal
+--               emit $ IConst (I (i * 4))  -- 4 bytes per element
+--               emit $ IBinOp Plus
+--               emit $ ILocalSet offsetLocal
+--             IdxVar indexBoxIndex
+--               | Just indexBox <- M.lookup indexBoxIndex env -> do
+--                   let indexCtx = ctx { arrayBasePtr = Nothing }
+--                   indexRet <- boxToBlockMemo env indexCtx indexBoxIndex indexBox
+--                   case indexRet of
+--                     Stack -> do
+--                       -- Index value is on stack
+--                       emit $ IConst (I 4)
+--                       emit $ IBinOp Mul
+--                       emit $ ILocalGet offsetLocal
+--                       emit $ IBinOp Plus
+--                       emit $ ILocalSet offsetLocal
+--                     _ -> error "select: index must be simple type (this is a bug)"
+--               | otherwise -> error "select: index box not found (this is a bug)"
+--         | idx <- indices
+--         ]
+--       
+--       if isSimpleType selectType then
+--         case ctx.arrayBasePtr of
+--           Nothing -> do
+--             -- Read value and put on stack
+--             sourceRet <- boxToBlockMemo env (ctx { arrayBasePtr = Nothing }) boxIndex box
+--             case sourceRet of
+--               BasePtr sourcePtr -> do
+--                 emit $ ILocalGet sourcePtr
+--                 emit $ ILocalGet offsetLocal
+--                 emit $ IBinOp Plus
+--                 emit $ ILoad (MemAddr 0)
+--                 pure Stack
+--               _ -> error "select: source must be array (this is a bug)"
+--           Just destPtr -> do
+--             -- Read value and write to destination
+--             sourceRet <- boxToBlockMemo env (ctx { arrayBasePtr = Nothing }) boxIndex box
+--             case sourceRet of
+--               BasePtr sourcePtr -> do
+--                 emit $ ILocalGet destPtr
+--                 emit $ ILocalGet sourcePtr
+--                 emit $ ILocalGet offsetLocal
+--                 emit $ IBinOp Plus
+--                 emit $ ILoad (MemAddr 0)
+--                 emit $ IStore (MemAddr 0)
+--                 pure $ BasePtr destPtr
+--               _ -> error "select: source must be array (this is a bug)"
+--       else
+--         -- Result is array type
+--         case ctx.arrayBasePtr of
+--           Nothing -> do
+--             -- Allocate destination array
+--             let arraySize = sizeOfType selectType
+--             (destPtr, _) <- localArray arraySize
+--             
+--             -- Evaluate source with adjusted pointer
+--             sourceRet <- boxToBlockMemo env (ctx { arrayBasePtr = Nothing }) boxIndex box
+--             case sourceRet of
+--               BasePtr sourcePtr -> do
+--                 -- Copy from source + offset to destination
+--                 -- For now, just pass adjusted pointer to source
+--                 adjustedPtr <- localSimple
+--                 emit $ ILocalGet sourcePtr
+--                 emit $ ILocalGet offsetLocal
+--                 emit $ IBinOp Plus
+--                 emit $ ILocalSet adjustedPtr
+--                 
+--                 let adjustedCtx = ctx { arrayBasePtr = Just destPtr }
+--                 -- TODO: need to actually copy or re-evaluate
+--                 pure $ BasePtr destPtr
+--               _ -> error "select: source must be array (this is a bug)"
+--           Just destPtr -> do
+--             -- Pass down adjusted destination pointer
+--             adjustedDestPtr <- localSimple
+--             emit $ ILocalGet destPtr
+--             emit $ ILocalGet offsetLocal
+--             emit $ IBinOp Plus
+--             emit $ ILocalSet adjustedDestPtr
+--             
+--             let adjustedCtx = ctx { arrayBasePtr = Just adjustedDestPtr }
+--             boxToBlockMemo env adjustedCtx boxIndex box
+--   | otherwise = error "select: box not found (this is a bug)"
+-- boxToBlock _ ctx (LBDelay _ _ retBoxIndex)
+--   | Just delayLocal <- M.lookup retBoxIndex ctx.delayMap = 
+--       case ctx.arrayBasePtr of
+--         Nothing -> do
+--           emit $ ILocalGet delayLocal
+--           pure Stack
+--         Just basePtr -> do
+--           emit $ ILocalGet basePtr
+--           emit $ ILocalGet delayLocal
+--           emit $ IStore (MemAddr 0)
+--           pure $ BasePtr basePtr
+--   | otherwise = error "delay: not found in delayMap (this is a bug)"
 boxToBlock env ctx (LBCall _ ident argBoxIndices) = do
   -- Evaluate all arguments (they should be simple types on stack)
   sequence_
