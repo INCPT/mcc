@@ -495,13 +495,8 @@ emitDelays :: Map BoxIndex LBox -> EvalContext -> Map BoxIndex Return -> Codegen
 emitDelays boxMap ctx returnMap = do
   sequence_
     [ case M.lookup retBoxIndex returnMap of
-        Just Stack -> do
-          -- Value is on stack, store it in delay local
-          emit $ ILocalSet delayLocal
-        Just (BasePtr ptr) -> do
-          -- Array pointer, store it in delay local
-          emit $ ILocalGet ptr
-          emit $ ILocalSet delayLocal
+        Just Stack -> emit $ ILocalSet delayLocal
+        Just _ -> error "emitDelays: return value is not on the stack (this is a bug)"
         Nothing -> error "emitDelays: return value not found (this is a bug)"
     | LBDelay _ _ retBoxIndex <- M.elems boxMap
     , Just delayLocal <- [M.lookup retBoxIndex ctx.delayMap]
