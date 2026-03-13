@@ -604,6 +604,8 @@ boxToBlockMemo env delayMap k lbox = memoBox k (boxToBlock env delayMap lbox)
 
 --------------------------------------------------------------------------------
 
+-- TODO: figure out nested indices
+
 codegen :: Expr -> (LocalIndex, [LocalIndex], [Instr])
 codegen expr = (retLocal, finalEnv.locals, instrs)
   where
