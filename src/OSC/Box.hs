@@ -130,7 +130,7 @@ data Expr
   | ECall Ident [Expr]
   deriving Show
 
-data Value = VNum Number | VArr [Value]
+data Value = VNum Number | VArr [Int] [Int] [Value]
   deriving Show
 
 interpretE :: Expr -> Maybe Value
@@ -141,19 +141,12 @@ interpretE = interpretE' mempty
     interpretE' env (EVar ident)
       | Just val <- M.lookup ident env = Just val
       | otherwise = Nothing  -- undefined variable
-    interpretE' env (EArr _ exprs) = do
+    interpretE' env (EArr dims exprs) = do
       vals <- traverse (interpretE' env) exprs
-      Just (VArr vals)
-    interpretE' env (ESelect _ expr indices) = do
+      Just (VArr [] dims vals)
+    interpretE' env (ESelect dims expr indices) = do
       val <- interpretE' env expr
-      case val of
-        VArr vals -> do
-          -- Calculate the flat index from multi-dimensional indices
-          let flatIndex = calculateFlatIndex indices env
-          if flatIndex >= 0 && flatIndex < length vals
-            then Just (vals !! flatIndex)
-            else Nothing
-        VNum _ -> Just val  -- selecting from non-array returns the value itself
+      pure $ select env indices val
     interpretE' env (ERec delay ident retExpr) = 
       -- For recursive expressions with delay, we need to iterate
       -- Start with 0 as the initial value for the delay variable
@@ -177,20 +170,8 @@ interpretE = interpretE' mempty
       Just $ VNum $ evalBinOp Div aVal bVal
     interpretE' _ (ECall _ _) = Nothing  -- unknown function
 
-    calculateFlatIndex :: [Index Expr] -> Map Ident Value -> Int
-    calculateFlatIndex indices env = 
-      sum $ zipWith (*) indexValues [1, 1..]  -- cardinalities computed on the fly
-      where
-        -- Evaluate each index to an integer
-        indexValues = reverse $ map evalIndex indices
-        
-        evalIndex :: Index Expr -> Int
-        evalIndex (IdxConst i) = i
-        evalIndex (IdxVar expr) = 
-          case interpretE' env expr of
-            Just (VNum (I i)) -> i
-            Just (VNum (F f)) -> floor f
-            _ -> 0  -- default to 0 if can't evaluate
+    select :: Map Ident Value -> [Index Expr] -> Value -> Value
+    select dims = undefined
 
 data Graph = Graph [Binding Expr] Expr
 
@@ -682,7 +663,7 @@ testNestedArray = ESelect [2]
 -- [[[0, 1], [2, 3]], [[4, 5], [6, 7]]][1][0][0]
 testNestedArray2 :: Expr
 testNestedArray2 = ESelect [2]
-  (ESelect [2, 2]
+  (ESelect [2, 2, 2]
     (EArr [2, 2, 2]
       [ EConst (I 0), EConst (I 1)
       , EConst (I 2), EConst (I 3)
