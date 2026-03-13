@@ -524,18 +524,19 @@ boxToBlock _ ctx (LBConst n) =
       emit $ IStore (MemAddr 0)
       pure $ BasePtr basePtr
 
-boxToBlock _ ctx (LBVar _ ident) = 
-  case ctx.arrayBasePtr of
-    Nothing -> do
-      -- Put value on stack
-      emit $ IGlobalGet ident
-      pure Stack
-    Just basePtr -> do
-      -- Write to array
-      emit $ ILocalGet basePtr
-      emit $ IGlobalGet ident
-      emit $ IStore (MemAddr 0)
-      pure $ BasePtr basePtr
+-- NOTE: LBVars should be eliminated before this stage
+boxToBlock _ _ (LBVar _ _) = error "boxToBlock: LBVar (this is a bug)"
+--   case ctx.arrayBasePtr of
+--     Nothing -> do
+--       -- Put value on stack
+--       emit $ IGlobalGet ident
+--       pure Stack
+--     Just basePtr -> do
+--       -- Write to array
+--       emit $ ILocalGet basePtr
+--       emit $ IGlobalGet ident
+--       emit $ IStore (MemAddr 0)
+--       pure $ BasePtr basePtr
 boxToBlock env ctx (LBArr arrayType boxes) = do
   let totalSize = sizeOfType arrayType
   basePtr <- case ctx.arrayBasePtr of
@@ -545,7 +546,7 @@ boxToBlock env ctx (LBArr arrayType boxes) = do
   -- Evaluate elements with array context
   sequence_
     [ do
-        let offset = idx * 4  -- 4 bytes per element for now
+        let offset = idx * 4  -- TODO: 4 bytes per element for now
         offsetPtr <- localSimple
         emit $ ILocalGet basePtr
         emit $ IConst (I offset)
