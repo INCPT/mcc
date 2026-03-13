@@ -350,8 +350,8 @@ emptyMState = MState
   , globals = mempty
   }
 
-interpet :: (LocalIndex, [LocalIndex], [Instr]) -> (Maybe Number, MState)
-interpet (retIndex, locals, instrs) = (M.lookup retIndex state.locals, state)
+interpret :: (LocalIndex, [LocalIndex], [Instr]) -> (Maybe Number, MState)
+interpret (retIndex, locals, instrs) = (M.lookup retIndex state.locals, state)
   where
     state = go (emptyMState { locals = M.fromList (fmap (, I 0) locals) }) instrs
 
@@ -695,7 +695,7 @@ testVarIndex = ERec 1 (Ident "i") $
     [IdxVar (EVar (Ident "i"))]
 
 runTestVarIndex :: (Maybe Number, MState)
-runTestVarIndex = interpet (retIndex, locals, instrs <> instrs <> instrs <> instrs)
+runTestVarIndex = interpret (retIndex, locals, instrs <> instrs <> instrs <> instrs)
   where
     (retIndex, locals, instrs) = codegen testVarIndex
 
