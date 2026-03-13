@@ -123,11 +123,11 @@ data Type = TNumber | TArray [Type] Int
 
 data Expr
   = EConst Number
-  | EVar Ident
-  | EArr [Int] [Expr] -- dims
-  | ESelect [Int] Expr [Index Expr] -- dims
-  | ERec Int Ident Expr -- rec delay |prev| -> expr
-  | ECall Ident [Expr]
+  | EVar Type Ident
+  | EArr Type [Expr]
+  | ESelect Type Expr [Index Expr] -- dims
+  | ERec Type Int Ident Expr -- rec delay |prev| -> expr
+  | ECall Type Ident [Expr]
   deriving Show
 
 data Value = VNum Number | VArr [Value] -- start, length, unused dims
