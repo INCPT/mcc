@@ -288,8 +288,8 @@ newtype LocalIndex = LocalIndex Int
 newtype MemAddr = MemAddr Int
   deriving (Num, Eq, Ord, Show)
 
-data LocalSimple = LSimple LocalIndex deriving (Eq, Ord, Show)
-data LocalArr = LArr LocalIndex MemAddr Int deriving (Eq, Ord, Show)
+data Return = Stack | BasePtr LocalIndex
+  deriving (Eq, Show)
 
 data BinOp = Plus | Mul | Minus | Div deriving Show
 
@@ -322,10 +322,16 @@ emptyMState = MState
   , globals = mempty
   }
 
-interpret :: (LocalIndex, [LocalIndex], [Instr]) -> (Maybe Number, MState)
-interpret (retIndex, locals, instrs) = (M.lookup retIndex state.locals, state)
+interpret :: (Return, [LocalIndex], [Instr]) -> (Maybe Number, MState)
+interpret (retValue, locals, instrs) = (result, state)
   where
     state = go (emptyMState { locals = M.fromList (fmap (, I 0) locals) }) instrs
+    
+    result = case retValue of
+      Stack -> case state.stack of
+        (val:_) -> Just val
+        [] -> Nothing
+      BasePtr ptr -> M.lookup ptr state.memory
 
     go :: MState -> [Instr] -> MState
     go res [] = res
@@ -384,6 +390,12 @@ interpret (retIndex, locals, instrs) = (M.lookup retIndex state.locals, state)
             in go (res { stack = result : stackRest }) rest
           _ -> error "Stack underflow on IBinOp"
       
+      Swap ->
+        case res.stack of
+          (a:b:stackRest) ->
+            go (res { stack = b : a : stackRest }) rest
+          _ -> error "Stack underflow on Swap"
+      
       ICall _ident ->
         -- For now, just pop arguments and push a dummy result
         -- In a real implementation, this would look up and execute the function
@@ -409,10 +421,18 @@ evalBinOp Div (F a) (I b) = F (a / fromIntegral b)
 
 --------------------------------------------------------------------------------
 
+data EvalContext = EvalContext
+  { arrayBasePtr :: Maybe LocalIndex
+  , delayMap :: Map BoxIndex LocalIndex
+  }
+
+data MemoKey = MemoKey BoxIndex Bool
+  deriving (Eq, Ord)
+
 data CodegenEnv = CodegenEnv
   { nextLocal :: LocalIndex
   , nextMem :: MemAddr
-  , values :: Map BoxIndex LocalIndex
+  , values :: Map MemoKey Return
   , locals :: [LocalIndex]
   }
   
@@ -442,37 +462,43 @@ localArray size = do
   emit $ ILocalSet lidx
   pure (lidx, addr)
 
-memoBox :: BoxIndex -> CodegenM LocalIndex -> CodegenM LocalIndex
-memoBox boxIndex genLocal = do
+memoBox :: BoxIndex -> Bool -> CodegenM Return -> CodegenM Return
+memoBox boxIndex inArrayCtx genReturn = do
   env <- ST.get
-  case M.lookup boxIndex env.values of
-    Just local -> pure local
+  let key = MemoKey boxIndex inArrayCtx
+  case M.lookup key env.values of
+    Just ret -> pure ret
     Nothing -> mdo
       -- This works because the state is lazy; we update the state first here because
-      -- genLocal is recursive and won't return and thus the state will be updated
+      -- genReturn is recursive and won't return and thus the state will be updated
       -- only at the end
-      ST.put $ env { values = M.insert boxIndex local env.values }
-      local <- genLocal
-      pure local
+      ST.put $ env { values = M.insert key ret env.values }
+      ret <- genReturn
+      pure ret
 
 emit :: Instr -> CodegenM ()
 emit = W.tell . pure
 
 gatherDelays :: Map BoxIndex LBox -> CodegenM (Map BoxIndex LocalIndex)
-gatherDelays env = M.fromList <$> sequence
+gatherDelays boxMap = M.fromList <$> sequence
   [ (retBoxIndex,) <$> localSimple
-  | LBDelay _ _ retBoxIndex <- M.elems env
+  | LBDelay _ _ retBoxIndex <- M.elems boxMap
   ]
 
-emitDelays :: Map BoxIndex LocalIndex -> CodegenM ()
-emitDelays delayMap = do
-  env <- ST.get
+emitDelays :: Map BoxIndex LBox -> EvalContext -> Map BoxIndex Return -> CodegenM ()
+emitDelays boxMap ctx returnMap = do
   sequence_
-    [ do
-        emit $ ILocalGet retLocal
-        emit $ ILocalSet delayLocal
-    | (retBoxIndex, delayLocal) <- M.toList delayMap
-    , Just retLocal <- [ M.lookup retBoxIndex env.values ]
+    [ case M.lookup retBoxIndex returnMap of
+        Just Stack -> do
+          -- Value is on stack, store it in delay local
+          emit $ ILocalSet delayLocal
+        Just (BasePtr ptr) -> do
+          -- Array pointer, store it in delay local
+          emit $ ILocalGet ptr
+          emit $ ILocalSet delayLocal
+        Nothing -> error "emitDelays: return value not found (this is a bug)"
+    | LBDelay _ _ retBoxIndex <- M.elems boxMap
+    , Just delayLocal <- [M.lookup retBoxIndex ctx.delayMap]
     ]
 
 data Return = Stack | BasePtr MemAddr
@@ -584,8 +610,8 @@ boxToBlockMemo env delayMap k lbox = memoBox k (boxToBlock env delayMap lbox)
 -- TODO: generate random but valid Exprs and compare output with codegen
 -- TODO: be able to specify iterations too (for recursive outputs)
 
-codegen :: Expr -> (LocalIndex, [LocalIndex], [Instr])
-codegen expr = (retLocal, finalEnv.locals, instrs)
+codegen :: Expr -> (Return, [LocalIndex], [Instr])
+codegen expr = (retValue, finalEnv.locals, instrs)
   where
     (boxIndex, (_, boxMap)) = ST.runState (exprToBox mempty expr) (BoxIndex 0, mempty)
     Just box = M.lookup boxIndex boxMap
@@ -597,27 +623,29 @@ codegen expr = (retLocal, finalEnv.locals, instrs)
       , locals = []
       }
 
-    ((retLocal, finalEnv), instrs) = 
+    ((retValue, finalEnv), instrs) = 
       W.runWriter (ST.runStateT gen initialEnv)
 
-    gen :: CodegenM LocalIndex
+    gen :: CodegenM Return
     gen = do
       delayMap <- gatherDelays boxMap
-      -- Initialize delay variables to 0
-
-      -- TODO: not sure if needed, but in any case, do in a separate INIT sections
-      -- otherwise we'll clear the delays every frame
-
-      -- sequence_
-      --   [ do
-      --       emit $ IConst (I 0)
-      --       emit $ ILocalSet delayLocal
-      --   | delayLocal <- M.elems delayMap
-      --   ]
-
-      retLocal <- boxToBlockMemo boxMap delayMap boxIndex box
-      emitDelays delayMap
-      pure retLocal
+      
+      let ctx = EvalContext
+            { arrayBasePtr = Nothing
+            , delayMap = delayMap
+            }
+      
+      retValue <- boxToBlockMemo boxMap ctx boxIndex box
+      
+      -- Collect all return values for delay emission
+      returnMap <- ST.gets values
+      let returnsByBox = M.fromList
+            [ (bi, ret)
+            | (MemoKey bi _, ret) <- M.toList returnMap
+            ]
+      
+      emitDelays boxMap ctx returnsByBox
+      pure retValue
 
 --------------------------------------------------------------------------------
 -- Test expressions
@@ -689,8 +717,8 @@ printCodegen :: String -> Expr -> IO ()
 printCodegen name expr = do
   putStrLn $ "\n=== " ++ name ++ " ==="
   putStrLn $ "Expression: " ++ show expr
-  let (LocalIndex retIdx, _, instrs) = codegen expr
-  putStrLn $ "Return local: " ++ show retIdx
+  let (retValue, _, instrs) = codegen expr
+  putStrLn $ "Return value: " ++ show retValue
   putStrLn "Instructions:"
   mapM_ (putStrLn . ("  " ++) . show) instrs
 
