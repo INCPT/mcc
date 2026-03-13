@@ -171,7 +171,35 @@ interpretE = interpretE' mempty
     interpretE' _ (ECall _ _) = Nothing  -- unknown function
 
     select :: Map Ident Value -> [Index Expr] -> Value -> Value
-    select dims = undefined
+    select env indices (VArr accessedDims remainingDims vals) =
+      case indices of
+        [] -> VArr accessedDims remainingDims vals
+        (idx:restIndices) ->
+          let indexVal = case idx of
+                IdxConst n -> n
+                IdxVar expr -> case interpretE' env expr of
+                  Just (VNum (I n)) -> n
+                  Just (VNum (F n)) -> floor n
+                  _ -> 0  -- fallback for invalid index
+              -- Calculate the size of each element in the current dimension
+              elemSize = product remainingDims
+              -- Calculate the starting position in the flat array
+              startPos = indexVal * elemSize
+              -- Extract the subregion
+              subVals = take elemSize (drop startPos vals)
+          in case remainingDims of
+               [] -> VNum (I 0)  -- shouldn't happen, but handle gracefully
+               [_] -> 
+                 -- Last dimension, return a single value
+                 case subVals of
+                   [v] -> select env restIndices v
+                   _ -> VNum (I 0)  -- fallback
+               (_:restDims) ->
+                 -- More dimensions remain
+                 let newAccessedDims = accessedDims ++ [indexVal]
+                     result = VArr newAccessedDims restDims subVals
+                 in select env restIndices result
+    select _ _ val = val  -- For VNum, just return it
 
 data Graph = Graph [Binding Expr] Expr
 
