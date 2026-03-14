@@ -12,6 +12,8 @@
 module OSC.Box where
 
 import Control.Monad (when)
+import qualified Control.Monad.Reader as R
+import Control.Monad.Reader (ReaderT)
 import qualified Control.Monad.State as ST
 import Control.Monad.State.Lazy (State, StateT)
 import qualified Control.Monad.Writer.CPS as W
@@ -268,15 +270,92 @@ exprToBox (EArr t es) = do
   labels <- traverse exprToBox es
   newBox (LBArr t labels)
 exprToBox (ESelect t e idx) = do
-  boxIndex <- exprToBox e
-  case idx of
-    IdxConst n -> newBox (LBSelect t boxIndex (IdxConst n))
-    IdxVar idx -> do
-      selIndex <- exprToBox idx
-      newBox (LBSelect t boxIndex (IdxVar selIndex))
+  newBox =<< (LBSelect <$> pure t <*> exprToBox e <*> sequenceA (fmap exprToBox idx))
 exprToBox (ECall t n args) = do
   argBoxIndexs <- traverse exprToBox args
   newBox (LBCall t n argBoxIndexs)
+
+--------------------------------------------------------------------------------
+
+data Ref
+  = RefLocal LocalIndex
+  | RefMem {- base address -} MemAddr {- length in bytes -} Int
+
+boxToA :: BoxIndex -> AGenM ()
+boxToA boxIndex = do
+  box <- getBox boxIndex
+  case box of
+    LBConst n -> putConstOnStack n
+    LBVar _ n -> do
+      env <- R.ask
+      case M.lookup n env.aDelayMap of
+        Just (RefLocal retLocal) -> readLocalToStack retLocal
+        Just (RefMem retMem _) -> readMemToStack retMem 0
+        Nothing -> error "TODO: escaped LVar"
+    -- select expects the base pointer on the stack
+    -- only arrays alloc arrays? if elems are simple, great; otherwise -> array ctx
+    LBSelect t selIndex (IdxConst idx) -> do
+      boxToA selIndex
+      undefined
+    LBRec TNumber delay ident retIndex -> do
+      retLocal <- allocLocal
+      valueLocal <- allocLocal
+      ST.modify $ \st -> st { aDelays = (delay, RefLocal valueLocal, RefLocal retLocal):st.aDelays }
+      R.local (\env -> env { aDelayMap = M.insert ident (RefLocal retLocal) env.aDelayMap }) $ do
+        boxToA retIndex
+        -- Result is now on the stack
+        storeStackToLocalAndLeaveOnStack valueLocal
+
+-- data AGenEnv = AGenEnv
+--   { boxMap :: Map BoxIndex LBox
+--   }
+
+data AGenSt = AGenSt
+  { aNextLocal :: LocalIndex
+  , aNextMem :: MemAddr
+  , aDelays :: [(Int, Ref, Ref)]
+  }
+
+data AGenEnv = AGenEnv
+  { aBoxMap :: Map BoxIndex LBox
+  , aDelayMap :: Map Ident Ref
+  }
+
+type AGenM = ReaderT AGenEnv (State AGenSt)
+
+getBox :: BoxIndex -> AGenM LBox
+getBox idx = do
+  m <- R.ask
+  case M.lookup idx m.aBoxMap of
+    Just box -> pure box
+    Nothing -> error "getBox (this is a bug)"
+
+putConstOnStack :: Number -> AGenM ()
+putConstOnStack = undefined
+
+readLocalToStack :: LocalIndex -> AGenM ()
+readLocalToStack = undefined
+
+readMemToStack :: MemAddr -> Int -> AGenM ()
+readMemToStack = undefined
+
+storeStackToLocalAndLeaveOnStack :: LocalIndex -> AGenM ()
+storeStackToLocalAndLeaveOnStack = undefined
+
+allocArray :: Int -> AGenM MemAddr
+allocArray = undefined
+
+allocLocal :: AGenM LocalIndex
+allocLocal = undefined
+
+-- data RNoRet
+-- data RStack
+-- 
+-- data AMachine f a
+--   = AMAllocArray Int (MemAddr -> f (AMachine f RNoRet))
+--   | AMAllocLocal (LocalIndex -> f (AMachine f ()))
+--   | AReadArrayAndPutOnStack MemAddr (f (AMachine f a))
+--   | PutOnStack Number
 
 --------------------------------------------------------------------------------
 
@@ -514,316 +593,316 @@ isSimpleType :: Type -> Bool
 isSimpleType TNumber = True
 isSimpleType (TArray _ _) = False
 
-boxToBlock :: Map BoxIndex LBox -> EvalContext -> LBox -> CodegenM Return
-boxToBlock _ ctx (LBConst n) = 
-  case ctx.arrayBasePtr of
-    Nothing -> do
-      -- Put value on stack
-      emit $ IConst n
-      pure Stack
-    Just basePtr -> do
-      -- Write to array
-      emit $ ILocalGet basePtr
-      emit $ IConst n
-      emit $ IStore (MemAddr 0)
-      pure $ BasePtr basePtr
-
-boxToBlock _ ctx (LBVar _ ident) = 
-  case ctx.arrayBasePtr of
-    Nothing -> do
-      -- Put value on stack
-      emit $ IGlobalGet ident
-      pure Stack
-    Just basePtr -> do
-      -- Write to array
-      emit $ ILocalGet basePtr
-      emit $ IGlobalGet ident
-      emit $ IStore (MemAddr 0)
-      pure $ BasePtr basePtr
-boxToBlock env ctx (LBArr arrayType boxes) = do
-  let totalSize = sizeOfType arrayType
-  basePtr <- case ctx.arrayBasePtr of
-    Nothing -> fst <$> localArray totalSize
-    Just ptr -> pure ptr
-  
-  -- Evaluate elements with array context
-  sequence_
-    [ do
-        let offset = idx * 4  -- 4 bytes per element for now
-        offsetPtr <- localSimple
-        emit $ ILocalGet basePtr
-        emit $ IConst (I offset)
-        emit $ IBinOp Plus
-        emit $ ILocalSet offsetPtr
-        
-        let elemCtx = ctx { arrayBasePtr = Just offsetPtr }
-        case M.lookup boxIndex env of
-          Just box -> boxToBlockMemo env elemCtx boxIndex box
-          Nothing -> error "LBArr: box not found (this is a bug)"
-    | (idx, boxIndex) <- zip [0..] boxes
-    ]
-  
-  pure $ BasePtr basePtr
-
--- boxToBlock env ctx (LBSelect selectType boxIndex indices)
---   | Just box <- M.lookup boxIndex env = do
---       -- Calculate offset from indices
---       offsetLocal <- localSimple
---       emit $ IConst (I 0)
---       emit $ ILocalSet offsetLocal
---       
---       sequence_
---         [ case idx of
---             IdxConst 0 -> pure ()
---             IdxConst i -> do
---               emit $ ILocalGet offsetLocal
---               emit $ IConst (I (i * 4))  -- 4 bytes per element
---               emit $ IBinOp Plus
---               emit $ ILocalSet offsetLocal
---             IdxVar indexBoxIndex
---               | Just indexBox <- M.lookup indexBoxIndex env -> do
---                   let indexCtx = ctx { arrayBasePtr = Nothing }
---                   indexRet <- boxToBlockMemo env indexCtx indexBoxIndex indexBox
---                   case indexRet of
---                     Stack -> do
---                       -- Index value is on stack
---                       emit $ IConst (I 4)
---                       emit $ IBinOp Mul
---                       emit $ ILocalGet offsetLocal
---                       emit $ IBinOp Plus
---                       emit $ ILocalSet offsetLocal
---                     _ -> error "select: index must be simple type (this is a bug)"
---               | otherwise -> error "select: index box not found (this is a bug)"
---         | idx <- indices
---         ]
---       
---       if isSimpleType selectType then
---         case ctx.arrayBasePtr of
---           Nothing -> do
---             -- Read value and put on stack
---             sourceRet <- boxToBlockMemo env (ctx { arrayBasePtr = Nothing }) boxIndex box
---             case sourceRet of
---               BasePtr sourcePtr -> do
---                 emit $ ILocalGet sourcePtr
---                 emit $ ILocalGet offsetLocal
---                 emit $ IBinOp Plus
---                 emit $ ILoad (MemAddr 0)
---                 pure Stack
---               _ -> error "select: source must be array (this is a bug)"
---           Just destPtr -> do
---             -- Read value and write to destination
---             sourceRet <- boxToBlockMemo env (ctx { arrayBasePtr = Nothing }) boxIndex box
---             case sourceRet of
---               BasePtr sourcePtr -> do
---                 emit $ ILocalGet destPtr
---                 emit $ ILocalGet sourcePtr
---                 emit $ ILocalGet offsetLocal
---                 emit $ IBinOp Plus
---                 emit $ ILoad (MemAddr 0)
---                 emit $ IStore (MemAddr 0)
---                 pure $ BasePtr destPtr
---               _ -> error "select: source must be array (this is a bug)"
---       else
---         -- Result is array type
---         case ctx.arrayBasePtr of
---           Nothing -> do
---             -- Allocate destination array
---             let arraySize = sizeOfType selectType
---             (destPtr, _) <- localArray arraySize
---             
---             -- Evaluate source with adjusted pointer
---             sourceRet <- boxToBlockMemo env (ctx { arrayBasePtr = Nothing }) boxIndex box
---             case sourceRet of
---               BasePtr sourcePtr -> do
---                 -- Copy from source + offset to destination
---                 -- For now, just pass adjusted pointer to source
---                 adjustedPtr <- localSimple
---                 emit $ ILocalGet sourcePtr
---                 emit $ ILocalGet offsetLocal
---                 emit $ IBinOp Plus
---                 emit $ ILocalSet adjustedPtr
---                 
---                 let adjustedCtx = ctx { arrayBasePtr = Just destPtr }
---                 -- TODO: need to actually copy or re-evaluate
---                 pure $ BasePtr destPtr
---               _ -> error "select: source must be array (this is a bug)"
---           Just destPtr -> do
---             -- Pass down adjusted destination pointer
---             adjustedDestPtr <- localSimple
---             emit $ ILocalGet destPtr
---             emit $ ILocalGet offsetLocal
---             emit $ IBinOp Plus
---             emit $ ILocalSet adjustedDestPtr
---             
---             let adjustedCtx = ctx { arrayBasePtr = Just adjustedDestPtr }
---             boxToBlockMemo env adjustedCtx boxIndex box
---   | otherwise = error "select: box not found (this is a bug)"
--- boxToBlock _ ctx (LBDelay _ _ retBoxIndex)
---   | Just delayLocal <- M.lookup retBoxIndex ctx.delayMap = 
---       case ctx.arrayBasePtr of
---         Nothing -> do
---           emit $ ILocalGet delayLocal
---           pure Stack
---         Just basePtr -> do
---           emit $ ILocalGet basePtr
---           emit $ ILocalGet delayLocal
---           emit $ IStore (MemAddr 0)
---           pure $ BasePtr basePtr
---   | otherwise = error "delay: not found in delayMap (this is a bug)"
-boxToBlock env ctx (LBCall _ ident argBoxIndices) = do
-  -- Evaluate all arguments (they should be simple types on stack)
-  sequence_
-    [ case M.lookup argBoxIndex env of
-        Just box -> do
-          let argCtx = ctx { arrayBasePtr = Nothing }
-          ret <- boxToBlockMemo env argCtx argBoxIndex box
-          case ret of
-            Stack -> pure ()  -- Already on stack
-            _ -> error "call: argument must be simple type (this is a bug)"
-        Nothing -> error "call: arg box not found (this is a bug)"
-    | argBoxIndex <- argBoxIndices
-    ]
-  
-  -- Call function (args are on stack, result will be on stack)
-  emit $ ICall ident
-  
-  case ctx.arrayBasePtr of
-    Nothing -> pure Stack
-    Just basePtr -> do
-      -- Store result to array
-      emit $ ILocalGet basePtr
-      emit $ Swap  -- TODO: might need a temp local instead
-      emit $ IStore (MemAddr 0)
-      pure $ BasePtr basePtr
-
-boxToBlockMemo :: Map BoxIndex LBox -> EvalContext -> BoxIndex -> LBox -> CodegenM Return
-boxToBlockMemo env ctx boxIndex lbox = 
-  memoBox boxIndex (isJust ctx.arrayBasePtr) (boxToBlock env ctx lbox)
-
---------------------------------------------------------------------------------
-
--- TODO: test nested recs etc
-
--- TODO: figure out nested indices
--- TODO: generate random but valid Exprs and compare output with codegen
--- TODO: be able to specify iterations too (for recursive outputs)
-
-codegen :: Expr -> (Return, [LocalIndex], [Instr])
-codegen expr = (retValue, finalEnv.locals, instrs)
-  where
-    (boxIndex, (_, boxMap)) = ST.runState (exprToBox mempty expr) (BoxIndex 0, mempty)
-    Just box = M.lookup boxIndex boxMap
-
-    initialEnv = CodegenEnv
-      { nextLocal = LocalIndex 0
-      , nextMem = MemAddr 0
-      , values = mempty
-      , locals = []
-      }
-
-    ((retValue, finalEnv), instrs) = 
-      W.runWriter (ST.runStateT gen initialEnv)
-
-    gen :: CodegenM Return
-    gen = do
-      delayMap <- gatherDelays boxMap
-      
-      let ctx = EvalContext
-            { arrayBasePtr = Nothing
-            , delayMap = delayMap
-            }
-      
-      retValue <- boxToBlockMemo boxMap ctx boxIndex box
-      
-      -- Collect all return values for delay emission
-      returnMap <- ST.gets values
-      let returnsByBox = M.fromList
-            [ (bi, ret)
-            | (MemoKey bi _, ret) <- M.toList returnMap
-            ]
-      
-      emitDelays boxMap ctx returnsByBox
-      pure retValue
-
---------------------------------------------------------------------------------
--- Test expressions
-
--- Simple expression: 5 + 10
--- testSimple :: Expr
--- testSimple = ECall TNumber (Ident "add") [EConst (I 5), EConst (I 10)]
+-- boxToBlock :: Map BoxIndex LBox -> EvalContext -> LBox -> CodegenM Return
+-- boxToBlock _ ctx (LBConst n) = 
+--   case ctx.arrayBasePtr of
+--     Nothing -> do
+--       -- Put value on stack
+--       emit $ IConst n
+--       pure Stack
+--     Just basePtr -> do
+--       -- Write to array
+--       emit $ ILocalGet basePtr
+--       emit $ IConst n
+--       emit $ IStore (MemAddr 0)
+--       pure $ BasePtr basePtr
 -- 
--- testArr :: Expr
--- testArr = ESelect TNumber [3] (EArr (TArray [TNumber] 3) [EConst (I 1), EConst (I 2), EConst (I 3)]) [IdxConst 1]
--- 
--- -- More complex expression with delay and array
--- -- rec |prev| -> prev + [1, 2, 3][1]
--- testComplex :: Expr
--- testComplex = ERec TNumber 1 (Ident "prev") $
---   ECall TNumber (Ident "add")
---     [ EVar TNumber (Ident "prev")
---     , ESelect TNumber [3] (EArr (TArray [TNumber] 3) [EConst TNumber (I 1), EConst TNumber (I 2), EConst TNumber (I 3)]) [IdxConst 1]
+-- boxToBlock _ ctx (LBVar _ ident) = 
+--   case ctx.arrayBasePtr of
+--     Nothing -> do
+--       -- Put value on stack
+--       emit $ IGlobalGet ident
+--       pure Stack
+--     Just basePtr -> do
+--       -- Write to array
+--       emit $ ILocalGet basePtr
+--       emit $ IGlobalGet ident
+--       emit $ IStore (MemAddr 0)
+--       pure $ BasePtr basePtr
+-- boxToBlock env ctx (LBArr arrayType boxes) = do
+--   let totalSize = sizeOfType arrayType
+--   basePtr <- case ctx.arrayBasePtr of
+--     Nothing -> fst <$> localArray totalSize
+--     Just ptr -> pure ptr
+--   
+--   -- Evaluate elements with array context
+--   sequence_
+--     [ do
+--         let offset = idx * 4  -- 4 bytes per element for now
+--         offsetPtr <- localSimple
+--         emit $ ILocalGet basePtr
+--         emit $ IConst (I offset)
+--         emit $ IBinOp Plus
+--         emit $ ILocalSet offsetPtr
+--         
+--         let elemCtx = ctx { arrayBasePtr = Just offsetPtr }
+--         case M.lookup boxIndex env of
+--           Just box -> boxToBlockMemo env elemCtx boxIndex box
+--           Nothing -> error "LBArr: box not found (this is a bug)"
+--     | (idx, boxIndex) <- zip [0..] boxes
 --     ]
+--   
+--   pure $ BasePtr basePtr
 -- 
--- -- Expression with nested arrays and selection
--- -- [[1, 2], [3, 4]][1][0]
--- testNestedArray :: Expr
--- testNestedArray = ESelect TNumber [2]
---   (ESelect (TArray [TNumber] 2) [2, 2]
---     (EArr (TArray [TArray [TNumber] 2] 2)
---       [ EArr (TArray [TNumber] 2) [EConst TNumber (I 1), EConst TNumber (I 2)]
---       , EArr (TArray [TNumber] 2) [EConst TNumber (I 3), EConst TNumber (I 4)]
---       ])
---     [IdxConst 1])
---   [IdxConst 0]
+-- -- boxToBlock env ctx (LBSelect selectType boxIndex indices)
+-- --   | Just box <- M.lookup boxIndex env = do
+-- --       -- Calculate offset from indices
+-- --       offsetLocal <- localSimple
+-- --       emit $ IConst (I 0)
+-- --       emit $ ILocalSet offsetLocal
+-- --       
+-- --       sequence_
+-- --         [ case idx of
+-- --             IdxConst 0 -> pure ()
+-- --             IdxConst i -> do
+-- --               emit $ ILocalGet offsetLocal
+-- --               emit $ IConst (I (i * 4))  -- 4 bytes per element
+-- --               emit $ IBinOp Plus
+-- --               emit $ ILocalSet offsetLocal
+-- --             IdxVar indexBoxIndex
+-- --               | Just indexBox <- M.lookup indexBoxIndex env -> do
+-- --                   let indexCtx = ctx { arrayBasePtr = Nothing }
+-- --                   indexRet <- boxToBlockMemo env indexCtx indexBoxIndex indexBox
+-- --                   case indexRet of
+-- --                     Stack -> do
+-- --                       -- Index value is on stack
+-- --                       emit $ IConst (I 4)
+-- --                       emit $ IBinOp Mul
+-- --                       emit $ ILocalGet offsetLocal
+-- --                       emit $ IBinOp Plus
+-- --                       emit $ ILocalSet offsetLocal
+-- --                     _ -> error "select: index must be simple type (this is a bug)"
+-- --               | otherwise -> error "select: index box not found (this is a bug)"
+-- --         | idx <- indices
+-- --         ]
+-- --       
+-- --       if isSimpleType selectType then
+-- --         case ctx.arrayBasePtr of
+-- --           Nothing -> do
+-- --             -- Read value and put on stack
+-- --             sourceRet <- boxToBlockMemo env (ctx { arrayBasePtr = Nothing }) boxIndex box
+-- --             case sourceRet of
+-- --               BasePtr sourcePtr -> do
+-- --                 emit $ ILocalGet sourcePtr
+-- --                 emit $ ILocalGet offsetLocal
+-- --                 emit $ IBinOp Plus
+-- --                 emit $ ILoad (MemAddr 0)
+-- --                 pure Stack
+-- --               _ -> error "select: source must be array (this is a bug)"
+-- --           Just destPtr -> do
+-- --             -- Read value and write to destination
+-- --             sourceRet <- boxToBlockMemo env (ctx { arrayBasePtr = Nothing }) boxIndex box
+-- --             case sourceRet of
+-- --               BasePtr sourcePtr -> do
+-- --                 emit $ ILocalGet destPtr
+-- --                 emit $ ILocalGet sourcePtr
+-- --                 emit $ ILocalGet offsetLocal
+-- --                 emit $ IBinOp Plus
+-- --                 emit $ ILoad (MemAddr 0)
+-- --                 emit $ IStore (MemAddr 0)
+-- --                 pure $ BasePtr destPtr
+-- --               _ -> error "select: source must be array (this is a bug)"
+-- --       else
+-- --         -- Result is array type
+-- --         case ctx.arrayBasePtr of
+-- --           Nothing -> do
+-- --             -- Allocate destination array
+-- --             let arraySize = sizeOfType selectType
+-- --             (destPtr, _) <- localArray arraySize
+-- --             
+-- --             -- Evaluate source with adjusted pointer
+-- --             sourceRet <- boxToBlockMemo env (ctx { arrayBasePtr = Nothing }) boxIndex box
+-- --             case sourceRet of
+-- --               BasePtr sourcePtr -> do
+-- --                 -- Copy from source + offset to destination
+-- --                 -- For now, just pass adjusted pointer to source
+-- --                 adjustedPtr <- localSimple
+-- --                 emit $ ILocalGet sourcePtr
+-- --                 emit $ ILocalGet offsetLocal
+-- --                 emit $ IBinOp Plus
+-- --                 emit $ ILocalSet adjustedPtr
+-- --                 
+-- --                 let adjustedCtx = ctx { arrayBasePtr = Just destPtr }
+-- --                 -- TODO: need to actually copy or re-evaluate
+-- --                 pure $ BasePtr destPtr
+-- --               _ -> error "select: source must be array (this is a bug)"
+-- --           Just destPtr -> do
+-- --             -- Pass down adjusted destination pointer
+-- --             adjustedDestPtr <- localSimple
+-- --             emit $ ILocalGet destPtr
+-- --             emit $ ILocalGet offsetLocal
+-- --             emit $ IBinOp Plus
+-- --             emit $ ILocalSet adjustedDestPtr
+-- --             
+-- --             let adjustedCtx = ctx { arrayBasePtr = Just adjustedDestPtr }
+-- --             boxToBlockMemo env adjustedCtx boxIndex box
+-- --   | otherwise = error "select: box not found (this is a bug)"
+-- -- boxToBlock _ ctx (LBDelay _ _ retBoxIndex)
+-- --   | Just delayLocal <- M.lookup retBoxIndex ctx.delayMap = 
+-- --       case ctx.arrayBasePtr of
+-- --         Nothing -> do
+-- --           emit $ ILocalGet delayLocal
+-- --           pure Stack
+-- --         Just basePtr -> do
+-- --           emit $ ILocalGet basePtr
+-- --           emit $ ILocalGet delayLocal
+-- --           emit $ IStore (MemAddr 0)
+-- --           pure $ BasePtr basePtr
+-- --   | otherwise = error "delay: not found in delayMap (this is a bug)"
+-- boxToBlock env ctx (LBCall _ ident argBoxIndices) = do
+--   -- Evaluate all arguments (they should be simple types on stack)
+--   sequence_
+--     [ case M.lookup argBoxIndex env of
+--         Just box -> do
+--           let argCtx = ctx { arrayBasePtr = Nothing }
+--           ret <- boxToBlockMemo env argCtx argBoxIndex box
+--           case ret of
+--             Stack -> pure ()  -- Already on stack
+--             _ -> error "call: argument must be simple type (this is a bug)"
+--         Nothing -> error "call: arg box not found (this is a bug)"
+--     | argBoxIndex <- argBoxIndices
+--     ]
+--   
+--   -- Call function (args are on stack, result will be on stack)
+--   emit $ ICall ident
+--   
+--   case ctx.arrayBasePtr of
+--     Nothing -> pure Stack
+--     Just basePtr -> do
+--       -- Store result to array
+--       emit $ ILocalGet basePtr
+--       emit $ Swap  -- TODO: might need a temp local instead
+--       emit $ IStore (MemAddr 0)
+--       pure $ BasePtr basePtr
 -- 
--- -- Expression with nested arrays and selection
--- -- [[[0, 1], [2, 3]], [[4, 5], [6, 7]]][1][0][0]
--- testNestedArray2 :: Expr
--- testNestedArray2 = ESelect TNumber [2]
---   (ESelect (TArray [TNumber] 2) [2, 2, 2]
---     (EArr (TArray [TNumber, TNumber, TNumber] 8)
---       [ EConst TNumber (I 0), EConst TNumber (I 1)
---       , EConst TNumber (I 2), EConst TNumber (I 3)
---       , EConst TNumber (I 4), EConst TNumber (I 5)
---       , EConst TNumber (I 6), EConst TNumber (I 7)
---       ])
---     [IdxConst 1, IdxConst 1])
---   [IdxConst 0]
+-- boxToBlockMemo :: Map BoxIndex LBox -> EvalContext -> BoxIndex -> LBox -> CodegenM Return
+-- boxToBlockMemo env ctx boxIndex lbox = 
+--   memoBox boxIndex (isJust ctx.arrayBasePtr) (boxToBlock env ctx lbox)
 -- 
--- -- Expression with variable indexing
--- -- rec |i| -> arr[i] where arr = [1, 2, 3]
--- testVarIndex :: Expr
--- testVarIndex = ERec TNumber 1 (Ident "i") $
---   ESelect TNumber [3]
---     (EArr (TArray [TNumber] 3) [EConst TNumber (I 1), EConst TNumber (I 2), EConst TNumber (I 0)])
---     [IdxVar (EVar TNumber (Ident "i"))]
-
--- runTestVarIndex :: (Maybe Number, MState)
--- runTestVarIndex = interpret (retIndex, locals, instrs <> instrs <> instrs <> instrs)
+-- --------------------------------------------------------------------------------
+-- 
+-- -- TODO: test nested recs etc
+-- 
+-- -- TODO: figure out nested indices
+-- -- TODO: generate random but valid Exprs and compare output with codegen
+-- -- TODO: be able to specify iterations too (for recursive outputs)
+-- 
+-- codegen :: Expr -> (Return, [LocalIndex], [Instr])
+-- codegen expr = (retValue, finalEnv.locals, instrs)
 --   where
---     (retIndex, locals, instrs) = codegen testVarIndex
-
-printBoxes :: Expr -> IO ()
-printBoxes expr = do
-  putStrLn $ "Box index: " ++ show boxIndex
-  putStrLn "Boxes:"
-  mapM_ (putStrLn . ("  " ++) . show) (M.toList boxMap)
-  where
-    (boxIndex, (_, boxMap)) = ST.runState (exprToBox mempty expr) (BoxIndex 0, mempty)
-
-printCodegen :: String -> Expr -> IO ()
-printCodegen name expr = do
-  putStrLn $ "\n=== " ++ name ++ " ==="
-  putStrLn $ "Expression: " ++ show expr
-  let (retValue, _, instrs) = codegen expr
-  putStrLn $ "Return value: " ++ show retValue
-  putStrLn "Instructions:"
-  mapM_ (putStrLn . ("  " ++) . show) instrs
-
--- runTests :: IO ()
--- runTests = do
---   putStrLn "Testing OSC.Box codegen"
---   printCodegen "Simple: 5 + 10" testSimple
---   printCodegen "Complex: rec with delay and array select" testComplex
---   printCodegen "Nested array selection" testNestedArray
---   printCodegen "Variable indexing with delay" testVarIndex
+--     (boxIndex, (_, boxMap)) = ST.runState (exprToBox mempty expr) (BoxIndex 0, mempty)
+--     Just box = M.lookup boxIndex boxMap
+-- 
+--     initialEnv = CodegenEnv
+--       { nextLocal = LocalIndex 0
+--       , nextMem = MemAddr 0
+--       , values = mempty
+--       , locals = []
+--       }
+-- 
+--     ((retValue, finalEnv), instrs) = 
+--       W.runWriter (ST.runStateT gen initialEnv)
+-- 
+--     gen :: CodegenM Return
+--     gen = do
+--       delayMap <- gatherDelays boxMap
+--       
+--       let ctx = EvalContext
+--             { arrayBasePtr = Nothing
+--             , delayMap = delayMap
+--             }
+--       
+--       retValue <- boxToBlockMemo boxMap ctx boxIndex box
+--       
+--       -- Collect all return values for delay emission
+--       returnMap <- ST.gets values
+--       let returnsByBox = M.fromList
+--             [ (bi, ret)
+--             | (MemoKey bi _, ret) <- M.toList returnMap
+--             ]
+--       
+--       emitDelays boxMap ctx returnsByBox
+--       pure retValue
+-- 
+-- --------------------------------------------------------------------------------
+-- -- Test expressions
+-- 
+-- -- Simple expression: 5 + 10
+-- -- testSimple :: Expr
+-- -- testSimple = ECall TNumber (Ident "add") [EConst (I 5), EConst (I 10)]
+-- -- 
+-- -- testArr :: Expr
+-- -- testArr = ESelect TNumber [3] (EArr (TArray [TNumber] 3) [EConst (I 1), EConst (I 2), EConst (I 3)]) [IdxConst 1]
+-- -- 
+-- -- -- More complex expression with delay and array
+-- -- -- rec |prev| -> prev + [1, 2, 3][1]
+-- -- testComplex :: Expr
+-- -- testComplex = ERec TNumber 1 (Ident "prev") $
+-- --   ECall TNumber (Ident "add")
+-- --     [ EVar TNumber (Ident "prev")
+-- --     , ESelect TNumber [3] (EArr (TArray [TNumber] 3) [EConst TNumber (I 1), EConst TNumber (I 2), EConst TNumber (I 3)]) [IdxConst 1]
+-- --     ]
+-- -- 
+-- -- -- Expression with nested arrays and selection
+-- -- -- [[1, 2], [3, 4]][1][0]
+-- -- testNestedArray :: Expr
+-- -- testNestedArray = ESelect TNumber [2]
+-- --   (ESelect (TArray [TNumber] 2) [2, 2]
+-- --     (EArr (TArray [TArray [TNumber] 2] 2)
+-- --       [ EArr (TArray [TNumber] 2) [EConst TNumber (I 1), EConst TNumber (I 2)]
+-- --       , EArr (TArray [TNumber] 2) [EConst TNumber (I 3), EConst TNumber (I 4)]
+-- --       ])
+-- --     [IdxConst 1])
+-- --   [IdxConst 0]
+-- -- 
+-- -- -- Expression with nested arrays and selection
+-- -- -- [[[0, 1], [2, 3]], [[4, 5], [6, 7]]][1][0][0]
+-- -- testNestedArray2 :: Expr
+-- -- testNestedArray2 = ESelect TNumber [2]
+-- --   (ESelect (TArray [TNumber] 2) [2, 2, 2]
+-- --     (EArr (TArray [TNumber, TNumber, TNumber] 8)
+-- --       [ EConst TNumber (I 0), EConst TNumber (I 1)
+-- --       , EConst TNumber (I 2), EConst TNumber (I 3)
+-- --       , EConst TNumber (I 4), EConst TNumber (I 5)
+-- --       , EConst TNumber (I 6), EConst TNumber (I 7)
+-- --       ])
+-- --     [IdxConst 1, IdxConst 1])
+-- --   [IdxConst 0]
+-- -- 
+-- -- -- Expression with variable indexing
+-- -- -- rec |i| -> arr[i] where arr = [1, 2, 3]
+-- -- testVarIndex :: Expr
+-- -- testVarIndex = ERec TNumber 1 (Ident "i") $
+-- --   ESelect TNumber [3]
+-- --     (EArr (TArray [TNumber] 3) [EConst TNumber (I 1), EConst TNumber (I 2), EConst TNumber (I 0)])
+-- --     [IdxVar (EVar TNumber (Ident "i"))]
+-- 
+-- -- runTestVarIndex :: (Maybe Number, MState)
+-- -- runTestVarIndex = interpret (retIndex, locals, instrs <> instrs <> instrs <> instrs)
+-- --   where
+-- --     (retIndex, locals, instrs) = codegen testVarIndex
+-- 
+-- printBoxes :: Expr -> IO ()
+-- printBoxes expr = do
+--   putStrLn $ "Box index: " ++ show boxIndex
+--   putStrLn "Boxes:"
+--   mapM_ (putStrLn . ("  " ++) . show) (M.toList boxMap)
+--   where
+--     (boxIndex, (_, boxMap)) = ST.runState (exprToBox mempty expr) (BoxIndex 0, mempty)
+-- 
+-- printCodegen :: String -> Expr -> IO ()
+-- printCodegen name expr = do
+--   putStrLn $ "\n=== " ++ name ++ " ==="
+--   putStrLn $ "Expression: " ++ show expr
+--   let (retValue, _, instrs) = codegen expr
+--   putStrLn $ "Return value: " ++ show retValue
+--   putStrLn "Instructions:"
+--   mapM_ (putStrLn . ("  " ++) . show) instrs
+-- 
+-- -- runTests :: IO ()
+-- -- runTests = do
+-- --   putStrLn "Testing OSC.Box codegen"
+-- --   printCodegen "Simple: 5 + 10" testSimple
+-- --   printCodegen "Complex: rec with delay and array select" testComplex
+-- --   printCodegen "Nested array selection" testNestedArray
+-- --   printCodegen "Variable indexing with delay" testVarIndex
