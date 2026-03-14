@@ -292,8 +292,13 @@ boxToA boxIndex = do
         Just (RefLocal retLocal) -> readLocalToStack retLocal
         Just (RefMem retMem _) -> readMemToStack retMem 0
         Nothing -> error "TODO: escaped LVar"
-    -- select expects the base pointer on the stack
-    -- only arrays alloc arrays? if elems are simple, great; otherwise -> array ctx
+    -- if select in array context:
+      -- if the result type of an lbselect is an array it must allocate an array
+      -- and then insert instructions to copy the relevant parts into the parent array,
+      -- which must be there since we return an array (e.g. in an array context)
+    -- if not then it means the return type is simple
+      -- again, allocate array, and then select the element to return on the stack
+    -- simple optimizations: check if selection and/or index are constants
     LBSelect t selIndex (IdxConst idx) -> do
       boxToA selIndex
       undefined
