@@ -259,10 +259,18 @@ data LBox
 --       | otherwise = ERec t delay v (inline ret)
 --     inline (ECall t f args) = ECall t f (map inline args)
 
+-- TODO: steps
+-- * typecheck
+-- * var names -> indices, SSA
+-- * check for recursion
+-- * simplify, fusion rules, find fixpoint, e.g. (ERec _ _ _ (EConst n)) = n
+-- * cluster common subexpressions
+-- * codegen
+
 exprToBox :: Expr -> BoxGenM BoxIndex
 exprToBox (EConst n) = newBox (LBConst n)
 exprToBox (EVar t n) = newBox (LBVar t n)
-exprToBox (ERec _ _ _ (EConst n)) = newBox (LBConst n) -- TODO: do this in a simplify pass
+-- exprToBox (ERec _ _ _ (EConst n)) = newBox (LBConst n) -- TODO: do this in a simplify pass
 exprToBox (ERec t delay n ret) = mdo
   retBoxIndex <- exprToBox ret
   newBox (LBRec t delay n retBoxIndex)
@@ -276,6 +284,20 @@ exprToBox (ECall t n args) = do
   newBox (LBCall t n argBoxIndexs)
 
 --------------------------------------------------------------------------------
+
+data R
+  = RConst Number
+  | RArray Type [R]
+  | RCall Type Ident [R]
+  | RVar Type Ident
+  | RSelect Type R R
+
+howMuchSpace :: R -> Int
+howMuchSpace (RConst _) = 4
+howMuchSpace (RArray t _) = sizeOfType t
+howMuchSpace (RCall t _ _) = sizeOfType t
+howMuchSpace (RVar t _) = sizeOfType t
+howMuchSpace (RSelect t _ _) = sizeOfType t
 
 data Ref
   = RefLocal LocalIndex
@@ -310,7 +332,8 @@ boxToA boxIndex = do
         boxToA retIndex
         -- Result is now on the stack
         storeStackToLocalAndLeaveOnStack valueLocal
-
+    _ -> undefined
+  
 -- data AGenEnv = AGenEnv
 --   { boxMap :: Map BoxIndex LBox
 --   }
