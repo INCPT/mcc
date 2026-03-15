@@ -265,6 +265,7 @@ data LBox
 -- * check for recursion
 -- * simplify, fusion rules, find fixpoint, e.g. (ERec _ _ _ (EConst n)) = n
 -- * cluster common subexpressions
+-- * if cluster referenced only once, inline
 -- * codegen
 
 exprToBox :: Expr -> BoxGenM BoxIndex
@@ -285,19 +286,11 @@ exprToBox (ECall t n args) = do
 
 --------------------------------------------------------------------------------
 
+data RIdx
+
 data R
   = RConst Number
-  | RArray Type [R]
-  | RCall Type Ident [R]
-  | RVar Type Ident
-  | RSelect Type R R
-
-howMuchSpace :: R -> Int
-howMuchSpace (RConst _) = 4
-howMuchSpace (RArray t _) = sizeOfType t
-howMuchSpace (RCall t _ _) = sizeOfType t
-howMuchSpace (RVar t _) = sizeOfType t
-howMuchSpace (RSelect t _ _) = sizeOfType t
+  | RArray [R]
 
 data Ref
   = RefLocal LocalIndex
