@@ -264,7 +264,9 @@ data LBox
 -- * typecheck
 -- * var names -> indices, SSA
 -- * check for recursion
--- * simplify, fusion rules, find fixpoint, e.g. (ERec _ _ _ (EConst n)) = n
+-- * simplify, fusion rules, find fixpoint,
+-- ** (ERec _ _ _ (EConst n)) = n
+-- ** (ESelect [a, b, c])[1] = b
 -- * cluster common subexpressions
 -- * if cluster referenced only once, inline
 -- * if something is not referenced in delay, don't alloc delay box and compute it lazily in e.g. select
@@ -288,10 +290,28 @@ exprToBox (ECall t n args) = do
 
 --------------------------------------------------------------------------------
 
-data Ctx
+data V = VConst Number | VGlobal Ident [V] | VSelect [V] V
 
-withArrayCtx :: (Ctx -> AGenM ()) -> AGenM ()
-withArrayCtx = undefined
+expect1 :: [a] -> a
+expect1 = undefined
+
+deforest :: Expr -> [V]
+deforest (ESelect (TArray _ dim) (EArr _ es) (IdxVar idx))
+  = [ VSelect e' didx
+    | i <- [0..dim-1]
+    , let e' = concat
+            [ deforest (ESelect undefined e (IdxConst i))
+            | e <- es
+            ]
+    ]
+  where
+    didx = expect1 (deforest idx)
+deforest (ESelect (TArray _ dim) (EVar _ n) (IdxVar idx))
+  = [ VGlobal n [didx, VConst (I i)]
+    | i <- [0..dim-1]
+    ]
+  where
+    didx = expect1 (deforest idx)
 
 data Ref
   = RefLocal LocalIndex
