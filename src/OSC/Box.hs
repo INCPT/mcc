@@ -126,6 +126,7 @@ data Type = TNumber | TArray Type Int -- dimension
 
 data Expr
   = EConst Number
+  | EEmbedGraph Type Ident [Expr]
   | EVar Type Ident
   | EArr Type [Expr]
   | ESelect Type Expr (Index Expr)
@@ -238,11 +239,11 @@ newBox box = do
 
 data LBox
   = LBConst Number
-  | LBVar Type Ident
+  | LBGlobal Type Ident [BoxIndex] -- indices; no indices means value
   | LBArr Type [BoxIndex]
   | LBSelect Type BoxIndex (Index BoxIndex)
   | LBRec Type Int Ident BoxIndex
-  | LBCall Type Ident [BoxIndex]
+  -- | LBCall Type Ident [BoxIndex]
   deriving Show
 
 -- inlineRef :: Ident -> Expr -> Expr -> Expr
@@ -266,6 +267,7 @@ data LBox
 -- * simplify, fusion rules, find fixpoint, e.g. (ERec _ _ _ (EConst n)) = n
 -- * cluster common subexpressions
 -- * if cluster referenced only once, inline
+-- * if something is not referenced in delay, don't alloc delay box and compute it lazily in e.g. select
 -- * codegen
 
 exprToBox :: Expr -> BoxGenM BoxIndex
@@ -286,46 +288,45 @@ exprToBox (ECall t n args) = do
 
 --------------------------------------------------------------------------------
 
-data RIdx
+data Ctx
 
-data R
-  = RConst Number
-  | RArray [R]
+withArrayCtx :: (Ctx -> AGenM ()) -> AGenM ()
+withArrayCtx = undefined
 
 data Ref
   = RefLocal LocalIndex
   | RefMem {- base address -} MemAddr {- length in bytes -} Int
 
-boxToA :: BoxIndex -> AGenM ()
-boxToA boxIndex = do
-  box <- getBox boxIndex
-  case box of
-    LBConst n -> putConstOnStack n
-    LBVar _ n -> do
-      env <- R.ask
-      case M.lookup n env.aDelayMap of
-        Just (RefLocal retLocal) -> readLocalToStack retLocal
-        Just (RefMem retMem _) -> readMemToStack retMem 0
-        Nothing -> error "TODO: escaped LVar"
-    -- if select in array context:
-      -- if the result type of an lbselect is an array it must allocate an array
-      -- and then insert instructions to copy the relevant parts into the parent array,
-      -- which must be there since we return an array (e.g. in an array context)
-    -- if not then it means the return type is simple
-      -- again, allocate array, and then select the element to return on the stack
-    -- simple optimizations: check if selection and/or index are constants
-    LBSelect t selIndex (IdxConst idx) -> do
-      boxToA selIndex
-      undefined
-    LBRec TNumber delay ident retIndex -> do
-      retLocal <- allocLocal
-      valueLocal <- allocLocal
-      ST.modify $ \st -> st { aDelays = (delay, RefLocal valueLocal, RefLocal retLocal):st.aDelays }
-      R.local (\env -> env { aDelayMap = M.insert ident (RefLocal retLocal) env.aDelayMap }) $ do
-        boxToA retIndex
-        -- Result is now on the stack
-        storeStackToLocalAndLeaveOnStack valueLocal
-    _ -> undefined
+-- boxToA :: BoxIndex -> AGenM ()
+-- boxToA boxIndex = do
+--   box <- getBox boxIndex
+--   case box of
+--     LBConst n -> putConstOnStack n
+--     LBVar _ n -> do
+--       env <- R.ask
+--       case M.lookup n env.aDelayMap of
+--         Just (RefLocal retLocal) -> readLocalToStack retLocal
+--         Just (RefMem retMem _) -> readMemToStack retMem 0
+--         Nothing -> error "TODO: escaped LVar"
+--     -- if select in array context:
+--       -- if the result type of an lbselect is an array it must allocate an array
+--       -- and then insert instructions to copy the relevant parts into the parent array,
+--       -- which must be there since we return an array (e.g. in an array context)
+--     -- if not then it means the return type is simple
+--       -- again, allocate array, and then select the element to return on the stack
+--     -- simple optimizations: check if selection and/or index are constants
+--     LBSelect t selIndex (IdxConst idx) -> do
+--       boxToA selIndex
+--       undefined
+--     LBRec TNumber delay ident retIndex -> do
+--       retLocal <- allocLocal
+--       valueLocal <- allocLocal
+--       ST.modify $ \st -> st { aDelays = (delay, RefLocal valueLocal, RefLocal retLocal):st.aDelays }
+--       R.local (\env -> env { aDelayMap = M.insert ident (RefLocal retLocal) env.aDelayMap }) $ do
+--         boxToA retIndex
+--         -- Result is now on the stack
+--         storeStackToLocalAndLeaveOnStack valueLocal
+--     _ -> undefined
   
 -- data AGenEnv = AGenEnv
 --   { boxMap :: Map BoxIndex LBox
