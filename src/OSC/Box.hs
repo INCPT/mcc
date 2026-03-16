@@ -243,7 +243,7 @@ data LBox
   | LBArr Type [BoxIndex]
   | LBSelect Type BoxIndex (Index BoxIndex)
   | LBRec Type Int Ident BoxIndex
-  -- | LBCall Type Ident [BoxIndex]
+  | LBCall Type Ident [BoxIndex]
   deriving Show
 
 -- inlineRef :: Ident -> Expr -> Expr -> Expr
@@ -289,6 +289,12 @@ exprToBox (ECall t n args) = do
   newBox (LBCall t n argBoxIndexs)
 
 --------------------------------------------------------------------------------
+
+-- TODO: AGenM should have two instances
+-- ** one with locals
+-- ** one with memory
+
+-- this way the same (pure) function can be used in graph and normal code
 
 peelOff :: Type -> Type
 peelOff TNumber = error "peelOff: number"
