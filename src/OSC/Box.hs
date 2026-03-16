@@ -239,7 +239,7 @@ newBox box = do
 
 data LBox
   = LBConst Number
-  | LBGlobal Type Ident [BoxIndex] -- indices; no indices means value
+  | LBGlobal Type Ident [Index BoxIndex] -- indices; no indices means value
   | LBArr Type [BoxIndex]
   | LBSelect Type BoxIndex (Index BoxIndex)
   | LBRec Type Int Ident BoxIndex
@@ -290,114 +290,87 @@ exprToBox (ECall t n args) = do
 
 --------------------------------------------------------------------------------
 
-data V = VConst Number | VGlobal Ident [V] | VSelect [V] V
+peelOff :: Type -> Type
+peelOff TNumber = error "peelOff: number"
+peelOff (TArray t _) = t
 
-expect1 :: [a] -> a
-expect1 = undefined
+boxToA :: LBox -> AGenM Number ()
+boxToA (LBConst n) = write n
+boxToA (LBSelect (TArray _ dim) innerIndex (IdxVar idx)) = do
+  inner <- getBox innerIndex
 
-deforest :: Expr -> [V]
-deforest (ESelect (TArray _ dim) (EArr _ es) (IdxVar idx))
-  = [ VSelect e' didx
-    | i <- [0..dim-1]
-    , let e' = concat
-            [ deforest (ESelect undefined e (IdxConst i))
-            | e <- es
-            ]
-    ]
-  where
-    didx = expect1 (deforest idx)
-deforest (ESelect (TArray _ dim) (EVar _ n) (IdxVar idx))
-  = [ VGlobal n [didx, VConst (I i)]
-    | i <- [0..dim-1]
-    ]
-  where
-    didx = expect1 (deforest idx)
+  case inner of
+    LBConst _ -> error "select: const"
+    LBGlobal t n indices -> sequence_
+      [ at i $ boxToA (LBGlobal (peelOff t) n (indices <> [IdxConst i]))
+      | i <- [0..dim-1] 
+      ]
+    LBArr _ elems -> do
+      frefs <- sequence
+        [ funcRef elemIndex (boxToA =<< getBox elemIndex)
+        | elemIndex <- elems
+        ]
 
-data Ref
-  = RefLocal LocalIndex
-  | RefMem {- base address -} MemAddr {- length in bytes -} Int
+      onStack $ boxToA =<< getBox idx
+      goto frefs
+    LBSelect t innerIndex' idx -> do
+      undefined
 
--- boxToA :: BoxIndex -> AGenM ()
--- boxToA boxIndex = do
---   box <- getBox boxIndex
---   case box of
---     LBConst n -> putConstOnStack n
---     LBVar _ n -> do
---       env <- R.ask
---       case M.lookup n env.aDelayMap of
---         Just (RefLocal retLocal) -> readLocalToStack retLocal
---         Just (RefMem retMem _) -> readMemToStack retMem 0
---         Nothing -> error "TODO: escaped LVar"
---     -- if select in array context:
---       -- if the result type of an lbselect is an array it must allocate an array
---       -- and then insert instructions to copy the relevant parts into the parent array,
---       -- which must be there since we return an array (e.g. in an array context)
---     -- if not then it means the return type is simple
---       -- again, allocate array, and then select the element to return on the stack
---     -- simple optimizations: check if selection and/or index are constants
---     LBSelect t selIndex (IdxConst idx) -> do
---       boxToA selIndex
---       undefined
---     LBRec TNumber delay ident retIndex -> do
---       retLocal <- allocLocal
---       valueLocal <- allocLocal
---       ST.modify $ \st -> st { aDelays = (delay, RefLocal valueLocal, RefLocal retLocal):st.aDelays }
---       R.local (\env -> env { aDelayMap = M.insert ident (RefLocal retLocal) env.aDelayMap }) $ do
---         boxToA retIndex
---         -- Result is now on the stack
---         storeStackToLocalAndLeaveOnStack valueLocal
---     _ -> undefined
+  undefined
+    -- LBRec TNumber delay ident retIndex -> do
+    --   retLocal <- allocLocal
+    --   valueLocal <- allocLocal
+    --   ST.modify $ \st -> st { aDelays = (delay, RefLocal valueLocal, RefLocal retLocal):st.aDelays }
+    --   R.local (\env -> env { aDelayMap = M.insert ident (RefLocal retLocal) env.aDelayMap }) $ do
+    --     boxToA retIndex
+    --     -- Result is now on the stack
+    --     storeStackToLocalAndLeaveOnStack valueLocal
+    -- _ -> undefined
   
 -- data AGenEnv = AGenEnv
 --   { boxMap :: Map BoxIndex LBox
 --   }
 
-data AGenSt = AGenSt
-  { aNextLocal :: LocalIndex
-  , aNextMem :: MemAddr
-  , aDelays :: [(Int, Ref, Ref)]
-  }
+-- data AGenSt = AGenSt
+--   { aNextLocal :: LocalIndex
+--   , aNextMem :: MemAddr
+--   , aDelays :: [(Int, Ref, Ref)]
+--   }
+-- 
+-- data AGenEnv = AGenEnv
+--   { aBoxMap :: Map BoxIndex LBox
+--   , aDelayMap :: Map Ident Ref
+--   }
 
-data AGenEnv = AGenEnv
-  { aBoxMap :: Map BoxIndex LBox
-  , aDelayMap :: Map Ident Ref
-  }
+data FuncRef
 
-type AGenM = ReaderT AGenEnv (State AGenSt)
+data AGenM t a = AGenM
 
-getBox :: BoxIndex -> AGenM LBox
+write :: t -> AGenM t ()
+write = undefined
+
+at :: Int -> AGenM t () -> AGenM t ()
+at = undefined
+
+onStack :: AGenM t () -> AGenM t ()
+onStack = undefined
+
+-- creates and caches a func ref
+-- the created function expects the array context as an argument so the function can be called from different contexts
+funcRef :: BoxIndex -> AGenM t () -> AGenM t FuncRef
+funcRef = undefined
+
+-- expects the selector to be on the stack
+-- passes the array context to each funcref
+goto :: [FuncRef] -> AGenM t ()
+goto = undefined
+
+getBox :: BoxIndex -> AGenM t LBox
 getBox idx = do
   m <- R.ask
   case M.lookup idx m.aBoxMap of
     Just box -> pure box
     Nothing -> error "getBox (this is a bug)"
-
-putConstOnStack :: Number -> AGenM ()
-putConstOnStack = undefined
-
-readLocalToStack :: LocalIndex -> AGenM ()
-readLocalToStack = undefined
-
-readMemToStack :: MemAddr -> Int -> AGenM ()
-readMemToStack = undefined
-
-storeStackToLocalAndLeaveOnStack :: LocalIndex -> AGenM ()
-storeStackToLocalAndLeaveOnStack = undefined
-
-allocArray :: Int -> AGenM MemAddr
-allocArray = undefined
-
-allocLocal :: AGenM LocalIndex
-allocLocal = undefined
-
--- data RNoRet
--- data RStack
--- 
--- data AMachine f a
---   = AMAllocArray Int (MemAddr -> f (AMachine f RNoRet))
---   | AMAllocLocal (LocalIndex -> f (AMachine f ()))
---   | AReadArrayAndPutOnStack MemAddr (f (AMachine f a))
---   | PutOnStack Number
 
 --------------------------------------------------------------------------------
 
