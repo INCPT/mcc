@@ -302,6 +302,8 @@ exprToBox (ECall t n args) = do
 -- array returns baseAddrs are knowb statically as well; inline in codegen
 -- in case of function calls (e.g. something can't be inlined), pass and return array baseAddrs on stack
 
+-- FTree doesn't care about calling conventions! but inlcude the types so the AGenM monad can then generate calling convention code
+
 data FTree r e
   = FLeaf r [FTree r e] {- separate eval trees -}
   | FTree [FTree r e] (FTree r e) {- separate eval tree -}
