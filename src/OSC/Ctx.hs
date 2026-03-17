@@ -18,8 +18,6 @@ data Ident = Ident String
 data Index a = IdxConst Int | IdxVar a
   deriving (Show, Functor, Foldable, Traversable)
 
-data Binding e = Binding Ident e
-
 data Expr
   = EConst Number
   | EEmbed Type Expr [Expr]
