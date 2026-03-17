@@ -307,20 +307,18 @@ exprToBox (ECall t n args) = do
 
 -- FTree doesn't care about calling conventions! but inlcude the types so the AGenM monad can then generate calling convention code
 
-data FTree r e
-  = FLeaf r [FTree r e] {- separate eval trees -}
-  | FTree [FTree r e] (FTree r e) {- separate eval tree -}
+data FTree r e = FLeaf r | FChoice [FTree r e] r
 
-data R = RConst Number | RCall Ident
+data R = RConst Number | RArr [R] | RCall Ident [R]
 
 one (fidx :| []) = fidx
 one _ = error "funcrefs: ESelect: one (this is a bug)"
 
 funcrefs :: Expr -> NE.NonEmpty (FTree R Expr)
 funcrefs e@(EConst n) = FLeaf (RConst n) [] :| []
-funcrefs (EArr _ es) = mconcat (fmap funcrefs es)
-funcrefs (ESelect _ (EArr _ es) (IdxVar idx)) = FTree (concatMap NE.toList $ fmap funcrefs es) (one $ funcrefs idx) :| []
-funcrefs (ESelect _ e (IdxVar idx)) = FTree (NE.toList $ funcrefs e) (one $ funcrefs idx) :| []
+-- funcrefs (EArr _ es) = mconcat (fmap funcrefs es)
+-- funcrefs (ESelect _ (EArr _ es) (IdxVar idx)) = FTree (concatMap NE.toList $ fmap funcrefs es) (one $ funcrefs idx) :| []
+-- funcrefs (ESelect _ e (IdxVar idx)) = FTree (NE.toList $ funcrefs e) (one $ funcrefs idx) :| []
 
 -- funcrefs' :: Expr -> FTree Expr
 -- funcrefs' (EArr _ es) = undefined -- impossible
