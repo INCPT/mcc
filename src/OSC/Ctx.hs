@@ -64,23 +64,23 @@ data Choice idx
   | CExpr [Index Expr] Expr -- selection indices that flow into the inner expression
   deriving (Show)
 
-frefs :: Monad m => [Index Expr] -> Expr -> StackM (Index Expr) m (Choice (Index Expr))
-frefs idxs e@(EConst _) = pure $ CExpr idxs e
-frefs idxs e@(ECall _ _ _) = pure $ CExpr idxs e
-frefs idxs e@(EEmbed _ _ _) = do
+choiceTree :: Monad m => [Index Expr] -> Expr -> StackM (Index Expr) m (Choice (Index Expr))
+choiceTree idxs e@(EConst _) = pure $ CExpr idxs e
+choiceTree idxs e@(ECall _ _ _) = pure $ CExpr idxs e
+choiceTree idxs e@(EEmbed _ _ _) = do
   idxs' <- ST.get
   pure $ CExpr (idxs <> idxs') e
-frefs idxs (EArr _ es) = do
+choiceTree idxs (EArr _ es) = do
   idx <- pop
-  es' <- traverse (frefs idxs) es
+  es' <- traverse (choiceTree idxs) es
   push idx
   pure $ CChoice es' idx
-frefs idxs (ESelect _ e idx) = do
+choiceTree idxs (ESelect _ e idx) = do
   push idx
-  c <- frefs idxs e
+  c <- choiceTree idxs e
   _ <- pop
   pure c
-frefs idxs (ERec _ _ _ e) = frefs idxs e
+choiceTree idxs (ERec _ _ _ e) = choiceTree idxs e
 
 elimConstIndices :: Choice (Index Expr) -> Choice Expr
 elimConstIndices (CExpr idxs e) = CExpr idxs e
