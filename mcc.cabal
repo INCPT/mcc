@@ -43,6 +43,7 @@ library
       Microc.Utils
       OSC.AST
       OSC.Box
+      OSC.Ctx
   other-modules:
       Microc.Parser.Generator
       Microc.Scanner.Generator
