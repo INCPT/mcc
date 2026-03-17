@@ -18,6 +18,8 @@ data Ident = Ident String
 data Index a = IdxConst Int | IdxVar a
   deriving (Show, Functor, Foldable, Traversable)
 
+data Binding e = Binding Ident e
+
 data Expr
   = EConst Number
   | EEmbed Type Expr [Expr]
@@ -86,7 +88,7 @@ choiceTree (ESelect t e idx) = do
   c <- choiceTree e
   _ <- pop
   pure c
-choiceTree (ERec _ _ _ e) = choiceTree e
+choiceTree (ERec _ _ _ e) = choiceTree e -- TODO: need to inline ident with delay boxes
 
 elimConstIndices :: Choice (Index Expr) -> Choice Expr
 elimConstIndices (CExpr idxs e) = CExpr idxs e

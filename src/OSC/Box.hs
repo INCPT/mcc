@@ -265,6 +265,7 @@ data LBox
 
 -- TODO: steps
 -- * typecheck
+-- ** is it possible to only type annotate arguments (and maybe return values) and have everything else be inferred?
 -- * var names -> indices, SSA
 -- * check for recursion
 -- * simplify, fusion rules, find fixpoint,
