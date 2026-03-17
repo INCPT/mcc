@@ -57,6 +57,7 @@ runStack = flip ST.evalState []
 
 --------------------------------------------------------------------------------
 
+-- TODO: in typechecking, check that static indices are within range
 -- TODO: in the CallM monad, arguments that get written to the output can pass their array ctx slice to the argument expression, so no need for copy
 
 data Choice idx
