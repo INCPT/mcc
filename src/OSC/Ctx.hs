@@ -64,43 +64,58 @@ runStack = flip ST.evalState []
 -- * TODO: in the CallM monad, arguments that get written to the output can pass their array ctx slice to the argument expression, so no need for copy
 
 data Choice idx
-  = CChoice [Choice idx] idx
-  | CExpr [Index Expr] Expr -- selection indices that flow into the inner expression
+  = CChoice Type [Choice idx] idx
+  | CExpr [(Type, Index Expr)] Expr -- selection indices that flow into the inner expression
   deriving (Show)
 
-choiceTree :: Monad m => [Index Expr] -> Expr -> StackM (Index Expr) m (Choice (Index Expr))
-choiceTree idxs e@(EConst _) = pure $ CExpr idxs e
-choiceTree idxs e@(ECall _ _ _) = pure $ CExpr idxs e
-choiceTree idxs e@(EEmbed _ _ _) = do
-  idxs' <- ST.get
-  pure $ CExpr (idxs <> idxs') e
-choiceTree idxs (EArr _ es) = do
-  idx <- pop
-  es' <- traverse (choiceTree idxs) es
-  push idx
-  pure $ CChoice es' idx
-choiceTree idxs (ESelect _ e idx) = do
-  push idx
-  c <- choiceTree idxs e
+toC :: Monad m => Expr -> StackM (Type, Index Expr) m (Choice (Index Expr))
+toC e = do
+  idxs <- ST.get
+  pure $ CExpr idxs e
+
+choiceTree :: Monad m => Expr -> StackM (Type, Index Expr) m (Choice (Index Expr))
+choiceTree e@(EConst _) = toC e
+choiceTree e@(ECall _ _ _) = toC e
+choiceTree e@(EEmbed _ _ _) = toC e
+choiceTree (EArr _ es) = do
+  (t, idx) <- peek
+  es' <- traverse choiceTree es
+  pure $ CChoice t es' idx
+choiceTree (ESelect t e idx) = do
+  push (t, idx)
+  c <- choiceTree e
   _ <- pop
   pure c
-choiceTree idxs (ERec _ _ _ e) = choiceTree idxs e
+choiceTree (ERec _ _ _ e) = choiceTree e
 
 elimConstIndices :: Choice (Index Expr) -> Choice Expr
 elimConstIndices (CExpr idxs e) = CExpr idxs e
-elimConstIndices (CChoice chs (IdxConst idx)) = elimConstIndices (chs !! idx)
-elimConstIndices (CChoice chs (IdxVar idx)) = CChoice (map elimConstIndices chs) idx
+elimConstIndices (CChoice _ chs (IdxConst idx)) = elimConstIndices (chs !! idx)
+elimConstIndices (CChoice t chs (IdxVar idx)) = CChoice t (map elimConstIndices chs) idx
 
 -- array ctx -------------------------------------------------------------------
 
 data AllocM a
 
+data FuncRef
+
+data Ref
+data Ret
+
+fn :: [(Ident, Type)] -> Type -> AllocM Ret -> AllocM FuncRef
+fn = undefined
+
 at :: Int -> AllocM () -> AllocM ()
 at = undefined
 
--- the type lets runArrayCtxM know how big of an array (or value) to allocate
-runArrayCtxM :: Type -> ()
-runArrayCtxM = undefined
+binding :: Ident -> AllocM () -> AllocM ()
+binding = undefined
+
+capture :: Ident -> AllocM Ref
+capture = undefined
+
+call :: FuncRef -> [Ref] -> AllocM ()
+call = undefined
 
 --------------------------------------------------------------------------------
 
