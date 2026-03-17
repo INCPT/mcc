@@ -19,6 +19,8 @@ import Control.Monad.State.Lazy (State, StateT)
 import qualified Control.Monad.Writer.CPS as W
 import Control.Monad.Writer.CPS (Writer)
 import Data.Maybe (isJust)
+import Data.List.NonEmpty (NonEmpty ((:|)))
+import qualified Data.List.NonEmpty as NE
 
 import qualified Data.Map as M
 import Data.Map (Map)
@@ -311,11 +313,14 @@ data FTree r e
 
 data R = RConst Number | RCall Ident
 
-funcrefs :: Expr -> [FTree R Expr]
-funcrefs e@(EConst n) = [FLeaf (RConst n) []]
-funcrefs (EArr _ es) = concatMap funcrefs es
-funcrefs (ESelect _ (EArr _ es) (IdxVar idx)) = [FTree (concatMap funcrefs es) idx]
-funcrefs (ESelect _ e (IdxVar idx)) = [FTree (funcrefs e) idx]
+one (fidx :| []) = fidx
+one _ = error "funcrefs: ESelect: one (this is a bug)"
+
+funcrefs :: Expr -> NE.NonEmpty (FTree R Expr)
+funcrefs e@(EConst n) = FLeaf (RConst n) [] :| []
+funcrefs (EArr _ es) = mconcat (fmap funcrefs es)
+funcrefs (ESelect _ (EArr _ es) (IdxVar idx)) = FTree (concatMap NE.toList $ fmap funcrefs es) (one $ funcrefs idx) :| []
+funcrefs (ESelect _ e (IdxVar idx)) = FTree (NE.toList $ funcrefs e) (one $ funcrefs idx) :| []
 
 -- funcrefs' :: Expr -> FTree Expr
 -- funcrefs' (EArr _ es) = undefined -- impossible
