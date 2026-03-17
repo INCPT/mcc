@@ -64,23 +64,23 @@ data Choice
   | CExpr [Index Expr] Expr -- selection indices that flow into the inner expression
   deriving (Show)
 
-frefs :: Monad m => Expr -> StackM (Index Expr) m Choice
-frefs e@(EConst _) = pure $ CExpr [] e
-frefs e@(ECall _ _ _) = pure $ CExpr [] e
-frefs e@(EEmbed _ _ _) = do
-  idxs <- ST.get
-  pure $ CExpr idxs e
-frefs (EArr _ es) = do
+frefs :: Monad m => [Index Expr] -> Expr -> StackM (Index Expr) m Choice
+frefs idxs e@(EConst _) = pure $ CExpr idxs e
+frefs idxs e@(ECall _ _ _) = pure $ CExpr idxs e
+frefs idxs e@(EEmbed _ _ _) = do
+  idxs' <- ST.get
+  pure $ CExpr (idxs <> idxs') e
+frefs idxs (EArr _ es) = do
   idx <- pop
-  es' <- traverse frefs es
+  es' <- traverse (frefs idxs) es
   push idx
   pure $ CChoice [ (i, e) | (i, e) <- zip [0..] es' ] idx
-frefs (ESelect _ e idx) = do
+frefs idxs (ESelect _ e idx) = do
   push idx
-  c <- frefs e
+  c <- frefs idxs e
   _ <- pop
   pure c
-frefs (ERec _ _ _ e) = frefs e
+frefs idxs (ERec _ _ _ e) = frefs idxs e
 
 -- array ctx -------------------------------------------------------------------
 
