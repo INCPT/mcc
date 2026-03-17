@@ -290,11 +290,28 @@ exprToBox (ECall t n args) = do
 
 --------------------------------------------------------------------------------
 
-data FTree e = Leaf e | FTree [FTree e] e
+-- an eval tree returns either a const or an array of consts
+-- const goes in known local
+-- array goes in knowb base addr
+-- in the case of RCall this means that arguments can be arrays; and return values as well
+-- no need to pass anything on stack then; unless we want to reuse wasm from global function and pass args and return values on stack
 
-funcrefs :: Expr -> [FTree Expr]
+data FTree r e
+  = FLeaf r [FTree r e] {- separate eval trees -}
+  | FTree [FTree r e] (FTree r e) {- separate eval tree -}
+
+data R = RConst Number | RCall Ident
+
+funcrefs :: Expr -> [FTree R Expr]
+funcrefs e@(EConst n) = [FLeaf (RConst n) []]
+funcrefs (EArr _ es) = concatMap funcrefs es
 funcrefs (ESelect _ (EArr _ es) (IdxVar idx)) = [FTree (concatMap funcrefs es) idx]
 funcrefs (ESelect _ e (IdxVar idx)) = [FTree (funcrefs e) idx]
+
+-- funcrefs' :: Expr -> FTree Expr
+-- funcrefs' (EArr _ es) = undefined -- impossible
+-- funcrefs' (ESelect _ (EArr _ es) (IdxVar idx)) = FTree (map funcrefs' es) idx
+-- funcrefs' (ESelect _ e (IdxVar idx)) = FTree [funcrefs' e] idx
 
 -- TODO: AGenM should have two instances
 -- ** one with locals
