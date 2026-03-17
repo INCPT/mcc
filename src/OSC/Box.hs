@@ -290,6 +290,12 @@ exprToBox (ECall t n args) = do
 
 --------------------------------------------------------------------------------
 
+data FTree e = Leaf e | FTree [FTree e] e
+
+funcrefs :: Expr -> [FTree Expr]
+funcrefs (ESelect _ (EArr _ es) (IdxVar idx)) = [FTree (concatMap funcrefs es) idx]
+funcrefs (ESelect _ e (IdxVar idx)) = [FTree (funcrefs e) idx]
+
 -- TODO: AGenM should have two instances
 -- ** one with locals
 -- ** one with memory
@@ -358,6 +364,7 @@ write = undefined
 at :: Int -> AGenM t () -> AGenM t ()
 at = undefined
 
+-- TODO: this isn't portable (e.g. GPU)
 onStack :: AGenM t () -> AGenM t ()
 onStack = undefined
 
