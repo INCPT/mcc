@@ -24,14 +24,21 @@ data Expr
   | ECall Type Ident [Expr]
   deriving Show
 
-data FTree e = FLeaf e | FChoice [FTree e] e
+data FTree e r = FLeaf r | FArr [FTree e r] | FChoice (FTree e r) (Index e)
 
-funcrefs :: Expr -> FTree Expr
-funcrefs e@(EConst _) = FLeaf e
-funcrefs e@(ECall _ _ _) = FLeaf e
--- funcrefs (EArr _ es) = FArr (map funcrefs es)
--- funcrefs (ESelect _ (EArr _ es) (IdxVar idx)) = FChoice (fmap funcrefs es) (funcrefs idx)
--- funcrefs (ESelect _ e (IdxVar idx)) = FChoice [funcrefs e] (funcrefs idx)
+data R = RConst Number | RCall Ident [Expr] | REmbedGraph Ident [Expr]
+
+-- insight: inner type of select must *at some point* be an array
+-- external calls are not permitted in selects - we must be able to distinguish between execution threads
+-- recursive bindings are *always* computed (optimization: bindings that do not reference the recusive head can be outside the rec block)
+
+funcrefs :: (Ident -> Expr) -> Expr -> FTree Expr R
+funcrefs _ (EConst n) = FLeaf (RConst n)
+funcrefs _ (ECall _ n es) = FLeaf (RCall n es)
+funcrefs _ (EVar _ n) = FLeaf (RCall n [])
+funcrefs env (EEmbedGraph _ n _) = funcrefs env (env n)
+funcrefs env (EArr _ es) = FArr (map (funcrefs env) es)
+funcrefs env (ESelect _ e idx) = FChoice (funcrefs env e) idx
 
 -- array ctx:
 

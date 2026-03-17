@@ -273,6 +273,7 @@ data LBox
 -- * cluster common subexpressions
 -- * if cluster referenced only once, inline
 -- * if something is not referenced in delay, don't alloc delay box and compute it lazily in e.g. select
+-- ** e.g. bindings that do not reference the recusive head can be outside the rec block
 -- * codegen
 
 exprToBox :: Expr -> BoxGenM BoxIndex
