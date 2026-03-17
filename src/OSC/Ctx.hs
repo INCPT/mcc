@@ -59,12 +59,12 @@ runStack = flip ST.evalState []
 
 -- TODO: in the CallM monad, arguments that get written to the output can pass their array ctx slice to the argument expression, so no need for copy
 
-data Choice
-  = CChoice [(Int, Choice)] (Index Expr)
+data Choice idx
+  = CChoice [Choice idx] idx
   | CExpr [Index Expr] Expr -- selection indices that flow into the inner expression
   deriving (Show)
 
-frefs :: Monad m => [Index Expr] -> Expr -> StackM (Index Expr) m Choice
+frefs :: Monad m => [Index Expr] -> Expr -> StackM (Index Expr) m (Choice (Index Expr))
 frefs idxs e@(EConst _) = pure $ CExpr idxs e
 frefs idxs e@(ECall _ _ _) = pure $ CExpr idxs e
 frefs idxs e@(EEmbed _ _ _) = do
@@ -74,13 +74,18 @@ frefs idxs (EArr _ es) = do
   idx <- pop
   es' <- traverse (frefs idxs) es
   push idx
-  pure $ CChoice [ (i, e) | (i, e) <- zip [0..] es' ] idx
+  pure $ CChoice es' idx
 frefs idxs (ESelect _ e idx) = do
   push idx
   c <- frefs idxs e
   _ <- pop
   pure c
 frefs idxs (ERec _ _ _ e) = frefs idxs e
+
+elimConstIndices :: Choice (Index Expr) -> Choice Expr
+elimConstIndices (CExpr idxs e) = CExpr idxs e
+elimConstIndices (CChoice chs (IdxConst idx)) = elimConstIndices (chs !! idx)
+elimConstIndices (CChoice chs (IdxVar idx)) = CChoice (map elimConstIndices chs) idx
 
 -- array ctx -------------------------------------------------------------------
 
