@@ -60,6 +60,7 @@ runStack = flip ST.evalState []
 -- * TODO: in typechecking, check that static indices are within range
 -- ** even better: attach range to index; then check if everything ok in range check
 -- ***  otherwise expect a clamp() or wrap() range correcting fun
+-- ** if not possible, then demand clamp/wrap in dynamic select index expressions
 -- * TODO: in the CallM monad, arguments that get written to the output can pass their array ctx slice to the argument expression, so no need for copy
 
 data Choice idx
