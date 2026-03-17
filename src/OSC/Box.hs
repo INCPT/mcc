@@ -293,8 +293,14 @@ exprToBox (ECall t n args) = do
 -- an eval tree returns either a const or an array of consts
 -- const goes in known local
 -- array goes in knowb base addr
--- in the case of RCall this means that arguments can be arrays; and return values as well
+-- in the case of RCall this means that arguments can be arrays and return values as well
 -- no need to pass anything on stack then; unless we want to reuse wasm from global function and pass args and return values on stack
+
+-- calling convention:
+-- simple values are passed/returned on stack
+-- array arg baseAddrs are known statically; inline in codegen
+-- array returns baseAddrs are knowb statically as well; inline in codegen
+-- in case of function calls (e.g. something can't be inlined), pass and return array baseAddrs on stack
 
 data FTree r e
   = FLeaf r [FTree r e] {- separate eval trees -}
