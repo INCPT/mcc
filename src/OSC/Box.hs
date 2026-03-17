@@ -84,6 +84,7 @@ data Binding expr = Binding Ident expr
 -- TODO: normal functions/methods not in scope in graph (only variables are in scope)
 -- TODO: branch operation computes both branches
 -- TODO: after the shadow check/SSA pass all Idents are unique
+-- TODO: have --max-locals/--max-globals options; if exhausted, go to mem
 
 -- TODO: should this be legal: f: f32[4] -> f32, rec |prev| return (f prev)
 
