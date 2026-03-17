@@ -42,6 +42,12 @@ pop = do
       ST.put as
       pure a
 
+peek :: Monad m => StackM s m s
+peek = do
+  as <- ST.get
+  case as of
+    (a:as) -> pure a
+
 modify :: Monad m => (s -> s) -> StackM s m ()
 modify f = ST.modify $ \st -> case st of
   (a:as) -> (f a:as)
@@ -63,10 +69,13 @@ frefs e@(EEmbed _ _ _) = pure $ CExpr e
 frefs (EArr _ es) = do
   idx <- pop
   es' <- traverse frefs es
+  push idx
   pure $ CChoice [ (i, e) | (i, e) <- zip [0..] es' ] idx
 frefs (ESelect _ e idx) = do
   push idx
-  frefs e
+  c <- frefs e
+  _ <- pop
+  pure c
 frefs (ERec _ _ _ e) = frefs e
 
 -- array ctx -------------------------------------------------------------------
