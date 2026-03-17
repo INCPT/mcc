@@ -29,8 +29,8 @@ data FTree e r = FLeaf r | FArr [FTree e r] | FChoice (FTree e r) (Index e)
 data R = RConst Number | RCall Ident [Expr] | REmbedGraph Ident [Expr]
 
 -- insight: inner type of select must *at some point* be an array
--- external calls are not permitted in selects - we must be able to distinguish between execution threads
--- recursive bindings are *always* computed (optimization: bindings that do not reference the recusive head can be outside the rec block)
+-- external calls must be turned into copy-selects (e.g. alloc internal array, compute function, copy indexed elements to array ctx) and a slow code warning issued
+-- recursive bindings are *always* computed
 
 funcrefs :: (Ident -> Expr) -> Expr -> FTree Expr R
 funcrefs _ (EConst n) = FLeaf (RConst n)
