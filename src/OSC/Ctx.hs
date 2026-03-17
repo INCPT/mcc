@@ -58,6 +58,7 @@ runStack = flip ST.evalState []
 --------------------------------------------------------------------------------
 
 -- can we pass the selection indices down an Embed subtree?
+-- TODO: in the CallM monad, arguments that get written to the output can pass their array ctx slice to the argument expression, so no need for copy
 
 data Choice = CChoice [(Int, Choice)] (Index Expr) | CExpr Expr
   deriving (Show)
@@ -65,7 +66,7 @@ data Choice = CChoice [(Int, Choice)] (Index Expr) | CExpr Expr
 frefs :: Monad m => Expr -> StackM (Index Expr) m Choice
 frefs e@(EConst _) = pure $ CExpr e
 frefs e@(ECall _ _ _) = pure $ CExpr e
-frefs e@(EEmbed _ _ _) = pure $ CExpr e
+frefs (EEmbed _ e _) = frefs e -- TODO: ?
 frefs (EArr _ es) = do
   idx <- pop
   es' <- traverse frefs es
@@ -106,3 +107,14 @@ e1 = ESelect (t [3, 2]) (
     (IdxConst 2))
   (IdxConst 1)
 
+
+e2 :: Expr
+e2 = ESelect (t [3, 2]) (
+  ESelect (t [2]) (
+      EArr (t [3])
+        [ (EArr (t [2]) [EConst $ I 0, EConst $ I 1])
+        , (ECall (t [2]) (Ident "global") [])
+        , (EArr (t [2]) [EConst $ I 4, EConst $ I 5])
+        ])
+    (IdxConst 2))
+  (IdxConst 1)
