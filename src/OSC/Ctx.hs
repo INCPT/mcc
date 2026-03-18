@@ -106,6 +106,8 @@ data Ret
 -- this is basically return value ref propagation up the binding chain
 -- the most recent returned binding (or argument) gets tagged with "write to return value ref"
 
+-- fn allocs the return array
+-- how are rvalues selected?
 fn :: [(Ident, Type)] -> Type -> AllocM Ret -> AllocM FuncRef
 fn = undefined
 
@@ -120,6 +122,9 @@ capture = undefined
 
 call :: FuncRef -> [Ref] -> AllocM ()
 call = undefined
+
+layout :: Choice Expr -> AllocM ()
+layout = undefined
 
 --------------------------------------------------------------------------------
 

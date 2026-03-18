@@ -268,7 +268,8 @@ data LBox
 -- ** is it possible to only type annotate arguments (and maybe return values) and have everything else be inferred?
 -- * var names -> indices, SSA
 -- * check for recursion
--- * simplify, fusion rules, find fixpoint,
+-- * simplify, fusion rules, find fixpoint
+-- ** fusion .e.g fold . map = fold with folded map inside :D
 -- ** (ERec _ _ _ (EConst n)) = n
 -- ** (ESelect [a, b, c])[1] = b
 -- * constant folding (also fold compile time constants like $voices)
