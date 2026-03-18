@@ -102,3 +102,32 @@ For your compiler, I'd suggest:
 5. Apply **copy elimination** based on the forwarding map
 
 The combination of these techniques will let you eliminate unnecessary copies while maintaining correctness.
+
+--------------------------------------------------------------------------------
+
+This is highly implementation-dependent and varies across WebAssembly engines, but here are some rough guidelines:
+
+**General estimate: ~10-50 local get/set pairs** might approach the cost of a single `memory.copy` of equivalent data.
+
+**Why locals are faster:**
+- **Locals**: Typically map to CPU registers or a very fast stack frame. Each get/set is usually 1-2 CPU instructions.
+- **Memory operations**: Involve:
+  - Address calculation
+  - Bounds checking
+  - Cache misses (if data isn't in L1/L2 cache)
+  - Potential alignment penalties
+  - Memory barrier overhead in some cases
+
+**Rough breakdown:**
+- **1-8 locals**: Individual get/set is almost certainly faster
+- **8-32 locals**: Individual get/set is likely still faster or comparable
+- **32-64 locals**: Starting to be a gray area, depends on the engine
+- **64+ locals**: `memory.copy` might start to win, especially if the memory is already hot in cache
+
+**Important caveats:**
+1. **Memory.copy has startup overhead** - There's fixed cost for the bounds checking and setup
+2. **Small copies favor locals** - For copying just a few values (< 32 bytes), locals win decisively
+3. **Large copies favor memory.copy** - For hundreds of bytes, `memory.copy` uses optimized memcpy routines (SIMD, etc.)
+4. **Cache matters** - If memory is cold, locals are much faster
+
+**Practical advice**: For typical use cases (saving/restoring < 20 values), stick with individual local operations. Only consider memory if you're copying 50+ values or have profiling data showing it's a bottleneck.

@@ -103,6 +103,8 @@ data FuncRef
 data Ref
 data Ret
 
+-- TODO: alignment in AllocM!
+
 -- TODO: what happens if part of the return value is a capture?
 -- this is basically return value ref propagation up the binding chain
 -- the most recent returned binding (or argument) gets tagged with "write to return value ref"
