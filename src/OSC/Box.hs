@@ -271,11 +271,14 @@ data LBox
 -- * simplify, fusion rules, find fixpoint,
 -- ** (ERec _ _ _ (EConst n)) = n
 -- ** (ESelect [a, b, c])[1] = b
+-- * constant folding (also fold compile time constants like $voices)
 -- * cluster common subexpressions
 -- * if cluster referenced only once, inline
+-- ** have a configurable max inline function size
 -- * if something is not referenced in delay, don't alloc delay box and compute it lazily in e.g. select
 -- ** e.g. bindings that do not reference the recusive head can be outside the rec block
 -- * codegen
+-- ** choice strategy: for small choice tables (e.g. < 5) use ifs
 
 exprToBox :: Expr -> BoxGenM BoxIndex
 exprToBox (EConst n) = newBox (LBConst n)
