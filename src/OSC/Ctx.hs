@@ -78,8 +78,9 @@ choiceTree e@(EConst _) = toC e
 choiceTree e@(ECall _ _ _) = toC e
 choiceTree e@(EEmbed _ _ _) = toC e
 choiceTree (EArr _ es) = do
-  (t, idx) <- peek
+  (t, idx) <- pop
   es' <- traverse choiceTree es
+  push (t, idx)
   pure $ CChoice t es' idx
 choiceTree (ESelect t e idx) = do
   push (t, idx)
@@ -152,5 +153,5 @@ e2 = ESelect (t [3, 2]) (
         , (ECall (t [2]) (Ident "global") [])
         , (EArr (t [2]) [EConst $ I 4, EConst $ I 5])
         ])
-    (IdxConst 2))
+    (IdxConst 1))
   (IdxConst 1)
