@@ -35,6 +35,9 @@ data Expr
   | ERec Type Int Ident Expr -- rec delay |prev| -> expr
   deriving Show
 
+inlineExpr :: Ident -> Expr -> Expr -> Expr
+inlineExpr = undefined
+
 --------------------------------------------------------------------------------
 
 type StackM s m a = ST.StateT [s] m a
