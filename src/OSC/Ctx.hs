@@ -6,7 +6,7 @@ module OSC.Ctx where
 import Data.Functor.Identity
 import qualified Control.Monad.State as ST
 
-data Type = TNumber | TArray Type Int -- dimension
+data Type = TNumber | TArray Type {- length -} Int | TAbs [Type] Type
   deriving Show
 
 data Number = I Int | F Double
@@ -34,23 +34,14 @@ type StackM s m a = ST.StateT [s] m a
 push :: Monad m => s -> StackM s m ()
 push s = ST.modify (s:)
 
-pop :: Monad m => StackM s m s
+pop :: Monad m => StackM s m (Maybe s)
 pop = do
   as <- ST.get
   case as of
     (a:as) -> do
       ST.put as
-      pure a
-
-peek :: Monad m => StackM s m s
-peek = do
-  as <- ST.get
-  case as of
-    (a:as) -> pure a
-
-modify :: Monad m => (s -> s) -> StackM s m ()
-modify f = ST.modify $ \st -> case st of
-  (a:as) -> (f a:as)
+      pure (Just a)
+    _ -> pure Nothing
 
 runStack :: StackM s Identity a -> a
 runStack = flip ST.evalState []
@@ -77,11 +68,14 @@ choiceTree :: Monad m => Expr -> StackM (Type, Index Expr) m (Choice (Index Expr
 choiceTree e@(EConst _) = toC e
 choiceTree e@(ECall _ _ _) = toC e
 choiceTree e@(EEmbed _ _ _) = toC e
-choiceTree (EArr _ es) = do
-  (t, idx) <- pop
-  es' <- traverse choiceTree es
-  push (t, idx)
-  pure $ CChoice t es' idx
+choiceTree e@(EArr _ es) = do
+  s <- pop
+  case s of
+    Just (t, idx) -> do
+      es' <- traverse choiceTree es
+      push (t, idx)
+      pure $ CChoice t es' idx
+    Nothing -> toC e
 choiceTree (ESelect t e idx) = do
   push (t, idx)
   c <- choiceTree e
@@ -96,12 +90,17 @@ elimConstIndices (CChoice t chs (IdxVar idx)) = CChoice t (map elimConstIndices 
 
 -- array ctx -------------------------------------------------------------------
 
-data AllocM a
+type AllocM a = IO a
 
 data FuncRef
 
 data Ref
-data Ret
+data Ret = RConst Number
+
+sizeOfType :: Type -> Int
+sizeOfType TNumber = 4
+sizeOfType (TArray t dim) = sizeOfType t * dim
+sizeOfType (TAbs _ _) = 4 -- funcref is an integer
 
 -- TODO: alignment in AllocM!
 
@@ -111,8 +110,12 @@ data Ret
 
 -- fn allocs the return array
 -- how are rvalues selected?
-fn :: [(Ident, Type)] -> Type -> AllocM Ret -> AllocM FuncRef
+
+fn :: [(Ident, Type)] -> Type -> AllocM () -> AllocM FuncRef
 fn = undefined
+
+write :: Ret -> AllocM ()
+write = undefined
 
 at :: Int -> AllocM () -> AllocM ()
 at = undefined
@@ -128,6 +131,12 @@ call = undefined
 
 layout :: Choice Expr -> AllocM ()
 layout = undefined
+
+alloc :: Expr -> AllocM ()
+alloc (EConst n) = write $ RConst n
+alloc (ECall _ _ _) = undefined
+alloc (EEmbed _ _ _) = undefined
+alloc (EArr _ es) = sequence_ [ at i $ alloc e | (i, e) <- zip [0..] es ]
 
 --------------------------------------------------------------------------------
 
