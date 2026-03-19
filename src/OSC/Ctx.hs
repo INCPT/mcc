@@ -6,7 +6,7 @@ module OSC.Ctx where
 import Data.Functor.Identity
 import qualified Control.Monad.State as ST
 
-data Type = TNumber | TArray Type {- length -} Int | TAbs [Type] Type
+data Type = TNumber | TArray Type {- length -} Int | TAbs [(Ident, Type)] Type
   deriving Show
 
 data Number = I Int | F Double
@@ -18,11 +18,19 @@ data Ident = Ident String
 data Index a = IdxConst Int | IdxVar a
   deriving (Show, Functor, Foldable, Traversable)
 
+data Op = Plus | Minus | Mul | Div
+  deriving Show
+
 data Expr
   = EConst Number
-  | EEmbed Type Ident [Expr]
-  | ECall Type Ident [Expr]
+  | EOp Op Expr Expr -- both args and the result are simple types
   | EArr Type [Expr]
+
+  | EAbs [(Ident, Type)] Expr
+  | EApp Type Ident [Expr]
+
+  | EExtern Type Ident [Expr] -- can reference functions or shared mem
+
   | ESelect Type Expr (Index Expr)
   | ERec Type Int Ident Expr -- rec delay |prev| -> expr
   deriving Show
@@ -73,8 +81,8 @@ toC e = do
 
 choiceTree :: Monad m => Expr -> StackM (Type, Index Expr) m (Choice (Index Expr))
 choiceTree (EConst n) = toC (SConst n)
-choiceTree (ECall t n es) = toC (SCall t n es)
-choiceTree (EEmbed t n es) = toC (SEmbed t n es)
+choiceTree (EExtern t n es) = toC (SCall t n es)
+choiceTree (EApp t n es) = toC (SEmbed t n es)
 choiceTree (EArr _ es) = do
   s <- pop
   case s of
@@ -176,7 +184,7 @@ e2 = ESelect (t [3, 2]) (
   ESelect (t [2]) (
       EArr (t [3])
         [ (EArr (t [2]) [EConst $ I 0, EConst $ I 1])
-        , (ECall (t [2]) (Ident "global") [])
+        , (EExtern (t [2]) (Ident "global") [])
         , (EArr (t [2]) [EConst $ I 4, EConst $ I 5])
         ])
     (IdxConst 1))
