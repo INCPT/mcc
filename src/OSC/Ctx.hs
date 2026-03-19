@@ -54,28 +54,37 @@ runStack = flip ST.evalState []
 -- ** if not possible, then demand clamp/wrap in dynamic select index expressions
 -- * TODO: in the CallM monad, arguments that get written to the output can pass their array ctx slice to the argument expression, so no need for copy
 
-data Choice idx
-  = CChoice Type [Choice idx] idx
-  | CExpr [(Type, Index Expr)] Expr -- selection indices that flow into the inner expression
+data SExpr idx
+  = SConst Number
+  | SArr [Choice idx]
+  | SEmbed Type Expr [Expr]
+  | SCall Type Ident [Expr]
   deriving (Show)
 
-toC :: Monad m => Expr -> StackM (Type, Index Expr) m (Choice (Index Expr))
+data Choice idx
+  = CChoice Type [Choice idx] idx
+  | CExpr [(Type, Index Expr)] (SExpr idx) -- selection indices that flow into the inner expression
+  deriving (Show)
+
+toC :: Monad m => SExpr (Index Expr) -> StackM (Type, Index Expr) m (Choice (Index Expr))
 toC e = do
   idxs <- ST.get
   pure $ CExpr idxs e
 
 choiceTree :: Monad m => Expr -> StackM (Type, Index Expr) m (Choice (Index Expr))
-choiceTree e@(EConst _) = toC e
-choiceTree e@(ECall _ _ _) = toC e
-choiceTree e@(EEmbed _ _ _) = toC e
-choiceTree e@(EArr _ es) = do
+choiceTree (EConst n) = toC (SConst n)
+choiceTree (ECall t n es) = toC (SCall t n es)
+choiceTree (EEmbed t n es) = toC (SEmbed t n es)
+choiceTree (EArr _ es) = do
   s <- pop
   case s of
     Just (t, idx) -> do
       es' <- traverse choiceTree es
       push (t, idx)
       pure $ CChoice t es' idx
-    Nothing -> toC e
+    Nothing -> do
+      ces <- traverse choiceTree es
+      pure $ CExpr [] (SArr ces)
 choiceTree (ESelect t e idx) = do
   push (t, idx)
   c <- choiceTree e
@@ -84,7 +93,10 @@ choiceTree (ESelect t e idx) = do
 choiceTree (ERec _ _ _ e) = choiceTree e -- TODO: need to inline ident with delay boxes
 
 elimConstIndices :: Choice (Index Expr) -> Choice Expr
-elimConstIndices (CExpr idxs e) = CExpr idxs e
+elimConstIndices (CExpr idxs (SConst n)) = CExpr idxs (SConst n)
+elimConstIndices (CExpr idxs (SEmbed t n es)) = CExpr idxs (SEmbed t n es)
+elimConstIndices (CExpr idxs (SCall t n es)) = CExpr idxs (SCall t n es)
+elimConstIndices (CExpr idxs (SArr es)) = CExpr idxs (SArr $ map elimConstIndices es)
 elimConstIndices (CChoice _ chs (IdxConst idx)) = elimConstIndices (chs !! idx)
 elimConstIndices (CChoice t chs (IdxVar idx)) = CChoice t (map elimConstIndices chs) idx
 
@@ -132,11 +144,14 @@ call = undefined
 layout :: Choice Expr -> AllocM ()
 layout = undefined
 
-allocExpr :: Expr -> AllocM ()
-allocExpr (EConst n) = write $ RConst n
-allocExpr (ECall _ _ _) = undefined
-allocExpr (EEmbed _ _ _) = undefined
-allocExpr (EArr _ es) = sequence_ [ at i $ allocExpr e | (i, e) <- zip [0..] es ]
+allocExpr :: SExpr Expr -> AllocM ()
+allocExpr (SConst n) = write $ RConst n
+allocExpr (SCall _ _ _) = undefined
+allocExpr (SEmbed _ _ _) = undefined
+-- allocExpr (SArr _ es) = sequence_ [ at i $ allocExpr e | (i, e) <- zip [0..] es ]
+
+allocChoice :: Choice Expr -> AllocM ()
+allocChoice (CExpr _ e) = allocExpr e
 
 --------------------------------------------------------------------------------
 
