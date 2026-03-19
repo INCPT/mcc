@@ -132,11 +132,11 @@ call = undefined
 layout :: Choice Expr -> AllocM ()
 layout = undefined
 
-alloc :: Expr -> AllocM ()
-alloc (EConst n) = write $ RConst n
-alloc (ECall _ _ _) = undefined
-alloc (EEmbed _ _ _) = undefined
-alloc (EArr _ es) = sequence_ [ at i $ alloc e | (i, e) <- zip [0..] es ]
+allocExpr :: Expr -> AllocM ()
+allocExpr (EConst n) = write $ RConst n
+allocExpr (ECall _ _ _) = undefined
+allocExpr (EEmbed _ _ _) = undefined
+allocExpr (EArr _ es) = sequence_ [ at i $ allocExpr e | (i, e) <- zip [0..] es ]
 
 --------------------------------------------------------------------------------
 
