@@ -20,7 +20,7 @@ data Index a = IdxConst Int | IdxVar a
 
 data Expr
   = EConst Number
-  | EEmbed Type Expr [Expr]
+  | EEmbed Type Ident [Expr]
   | ECall Type Ident [Expr]
   | EArr Type [Expr]
   | ESelect Type Expr (Index Expr)
@@ -57,7 +57,7 @@ runStack = flip ST.evalState []
 data SExpr idx
   = SConst Number
   | SArr [Choice idx]
-  | SEmbed Type Expr [Expr]
+  | SEmbed Type Ident [Expr]
   | SCall Type Ident [Expr]
   deriving (Show)
 

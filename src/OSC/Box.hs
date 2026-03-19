@@ -280,6 +280,7 @@ data LBox
 -- ** e.g. bindings that do not reference the recusive head can be outside the rec block
 -- * codegen
 -- ** choice strategy: for small choice tables (e.g. < 5) use ifs
+-- ** two targets: WASM and C
 
 exprToBox :: Expr -> BoxGenM BoxIndex
 exprToBox (EConst n) = newBox (LBConst n)
