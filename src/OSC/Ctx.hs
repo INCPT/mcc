@@ -26,7 +26,7 @@ data Expr
   | EOp Op Expr Expr -- both args and the result are simple types
   | EArr Type [Expr]
 
-  | EAbs [(Ident, Type)] Expr
+  | EAbs Type [(Ident, Type)] {- bindings -} [(Ident, Expr)] Expr
   | EApp Type Ident [Expr]
 
   | EExtern Type Ident [Expr] -- can reference functions or shared mem
