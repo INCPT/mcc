@@ -148,7 +148,7 @@ allocExpr :: SExpr Expr -> AllocM ()
 allocExpr (SConst n) = write $ RConst n
 allocExpr (SCall _ _ _) = undefined
 allocExpr (SEmbed _ _ _) = undefined
--- allocExpr (SArr _ es) = sequence_ [ at i $ allocExpr e | (i, e) <- zip [0..] es ]
+allocExpr (SArr es) = sequence_ [ at i $ allocChoice e | (i, e) <- zip [0..] es ]
 
 allocChoice :: Choice Expr -> AllocM ()
 allocChoice (CExpr _ e) = allocExpr e
