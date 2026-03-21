@@ -7,7 +7,6 @@ license-file: LICENSE
 category: Compilers/Interpreters
 ghc-options: -Wall 
              -fno-warn-name-shadowing 
-             -Wcompat
              -Wincomplete-uni-patterns
              -fno-defer-type-errors
 extra-source-files:

@@ -7,13 +7,23 @@ module OSC.Ctx where
 
 import Control.Applicative ((<|>))
 import Data.Functor.Identity
-import Control.Monad.Trans (MonadTrans, lift)
+import Control.Monad.Trans (lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
 import qualified Data.Map as M
 
-data Type = TNumber | TArray Type {- length -} Int | TAbs [(Ident, Type)] Type
+data Type = TNumber | TArr Type {- length -} Int | TAbs [Type] Type
   deriving Show
+
+returnType :: Type -> Type
+returnType TNumber = TNumber
+returnType t@(TArr _ _) = t
+returnType (TAbs _ t) = t
+
+paramTypes :: Type -> [Type]
+paramTypes TNumber = error "paramTypes: number (this is a bug)"
+paramTypes t@(TArr _ _) = error "paramTypes: array (this is a bug)"
+paramTypes (TAbs ps _) = ps
 
 data Number = I Int | F Double
   deriving Show
@@ -27,7 +37,7 @@ data Index a = IdxConst Int | IdxVar a
 data Op = Plus | Minus | Mul | Div
   deriving Show
 
-data Abs = Abs Type [(Ident, Type)] {- bindings -} [(Ident, Expr)] Expr
+data Abs = Abs Type [Ident] {- bindings -} [(Ident, Expr)] Expr
   deriving Show
 
 data Expr
@@ -142,12 +152,12 @@ newSlice = undefined
 focusSlice :: Int -> Slice -> Slice
 focusSlice = undefined
 
-data RetRef = RLocal LocalRef | RArray ArrayRef Slice
+data RetRef = RLocal LocalRef | RArr Slice ArrayRef
 data Value = VConst Number | VLocal LocalRef | VArray ArrayRef | VFuncRef FuncRef
 
 sizeOfType :: Type -> Int
 sizeOfType TNumber = 4
-sizeOfType (TArray t dim) = sizeOfType t * dim
+sizeOfType (TArr t dim) = sizeOfType t * dim
 sizeOfType (TAbs _ _) = 4 -- funcref is an integer
 
 -- TODO: optimization is performed on the Choice datatype
@@ -159,22 +169,26 @@ sizeOfType (TAbs _ _) = 4 -- funcref is an integer
 -- the most recent returned binding (or argument) gets tagged with "write to return value ref"
 
 -- type is needed for type signature in WASM/C
-
-allocFuncRef :: Type -> AllocM () -> AllocM FuncRef
-allocFuncRef = undefined
+funcRef :: Type -> AllocM () -> AllocM FuncRef
+funcRef = undefined
 
 allocArray :: Type -> AllocM ArrayRef
 allocArray = undefined
 
-allocLocal :: AllocM LocalRef
+data LocalType = LTNumber | LTFuncRef
+
+allocLocal :: LocalType -> AllocM LocalRef
 allocLocal = undefined
 
 -- slice must be focused on a simple element here
 writeArray :: ArrayRef -> Slice -> Number -> AllocM ()
 writeArray = undefined
 
-writeLocal :: LocalRef -> Number -> AllocM ()
-writeLocal = undefined
+writeNumber :: LocalRef -> Number -> AllocM ()
+writeNumber = undefined
+
+writeFuncRef :: LocalRef -> FuncRef -> AllocM ()
+writeFuncRef = undefined
 
 call :: FuncRef -> [RetRef] -> RetRef -> AllocM ()
 call = undefined
@@ -182,48 +196,63 @@ call = undefined
 callOp :: Op -> LocalRef -> LocalRef -> LocalRef -> AllocM ()
 callOp = undefined
 
+--------------------------------------------------------------------------------
+
 data Env = Env
   { globalAbs :: M.Map Ident Abs
   , localBindings :: M.Map Ident Expr
-  , identFuncRefs :: M.Map Ident FuncRef
+  , funcRefs :: M.Map Ident (Type, FuncRef)
   }
+
+allocRef :: Type -> RetRef
+allocRef = undefined
 
 toAbs :: Expr -> Maybe Abs
 toAbs = undefined
 
 allocExpr :: RetRef -> SExpr Expr -> R.ReaderT Env AllocM ()
-allocExpr (RLocal ref) (SConst n) = lift $ writeLocal ref n
-allocExpr (RArray ref slice) (SConst n) = lift $ writeArray ref slice n
-allocExpr (RArray ref slice) (SArr _ es) = sequence_
-  [ allocChoice (RArray ref (focusSlice i slice)) (toChoice e)
+allocExpr (RLocal ref) (SConst n) = lift $ writeNumber ref n
+allocExpr (RArr slice ref) (SConst n) = lift $ writeArray ref slice n
+allocExpr (RArr slice ref) (SArr _ es) = sequence_
+  [ allocChoice (RArr (focusSlice i slice) ref) (toChoice e)
   | (i, e) <- zip [0..] es
   ]
 allocExpr (RLocal ref) (SOp op a b) = do
-  aref <- lift allocLocal
-  bref <- lift allocLocal
+  aref <- lift $ allocLocal LTNumber
+  bref <- lift $ allocLocal LTNumber
   allocChoice (RLocal aref) (toChoice a)
   allocChoice (RLocal bref) (toChoice b)
   lift $ callOp op aref bref ref
 allocExpr ref (SExtern _ _ _) = undefined
-allocExpr ref (SAbs _) = do
+allocExpr (RLocal ref) (SAbs _) = do
   -- TODO: fill in identFuncRefs with binding funcrefs (as we must do in the global scope as well)
   -- funcRef t (allocChoice (toChoice e))
   undefined
 allocExpr ref (SApp _ n args) = do
   env <- lift R.ask
-  case M.lookup n env.globalAbs <|> (M.lookup n env.localBindings >>= toAbs) of
-    Just (Abs t params bindings e) -> do
-      -- Get funcref for lambda abstraction
-      let Just fr = M.lookup n env.identFuncRefs
-
-      case drop (length args) params of
+  case M.lookup n env.funcRefs of
+    Just (t, fr) -> do
+      case drop (length args) (paramTypes t) of
         -- full application
         [] -> do
           args' <- sequence
-            [ allocChoice (toChoice arg)
-            | (arg, (_, t)) <- zip args params
+            [ do
+                ref <- case argType of
+                  TNumber -> lift $ fmap RLocal $ allocLocal LTNumber
+                  TAbs _ _ -> lift $ fmap RLocal $ allocLocal LTFuncRef
+                  t@(TArr _ _) -> lift $ fmap (RArr (newSlice t)) $ allocArray t
+
+                allocChoice ref (toChoice arg)
+                pure ref
+            | (arg, argType) <- zip args (paramTypes t)
             ]
-          call fr args'
+
+          ref <- case returnType t of
+            TNumber -> lift $ fmap RLocal $ allocLocal LTNumber
+            TAbs _ _ -> lift $ fmap RLocal $ allocLocal LTFuncRef
+            t@(TArr _ _) -> lift $ fmap (RArr (newSlice t)) $ allocArray t
+
+          lift $ call fr args' ref
 
         params' -> do
           sequence_
@@ -231,7 +260,7 @@ allocExpr ref (SApp _ n args) = do
             | arg <- args
             ]
           undefined
-    Nothing -> error "allocExpr: app: no binding in scope (this is a bug)"
+    Nothing -> error "allocExpr: app: no funcref in scope (this is a bug)"
 
 allocChoice :: RetRef -> Choice Expr -> R.ReaderT Env AllocM ()
 allocChoice ref (CExpr _ e) = allocExpr ref e
