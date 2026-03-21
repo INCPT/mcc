@@ -77,7 +77,7 @@ runStack = flip ST.evalState []
 data SExpr idx
   = SConst Number
   | SOp Op Expr Expr
-  | SArr [Choice idx]
+  | SArr Type [Choice idx]
   | SAbs Abs
   | SApp Type Ident [Expr]
   | SExtern Type Ident [Expr]
@@ -99,7 +99,7 @@ choiceTree (EOp op a b) = toC (SOp op a b)
 choiceTree (EExtern t n es) = toC (SExtern t n es)
 choiceTree (EApp t n es) = toC (SApp t n es)
 choiceTree (EAbs abs) = toC (SAbs abs)
-choiceTree (EArr _ es) = do
+choiceTree (EArr t es) = do
   s <- pop
   case s of
     Just (t, idx) -> do
@@ -108,7 +108,7 @@ choiceTree (EArr _ es) = do
       pure $ CChoice t es' idx
     Nothing -> do
       ces <- traverse choiceTree es
-      pure $ CExpr [] (SArr ces)
+      pure $ CExpr [] (SArr t ces)
 choiceTree (ESelect t e idx) = do
   push (t, idx)
   c <- choiceTree e
@@ -120,9 +120,13 @@ elimConstIndices :: Choice (Index Expr) -> Choice Expr
 elimConstIndices (CExpr idxs (SConst n)) = CExpr idxs (SConst n)
 elimConstIndices (CExpr idxs (SApp t n es)) = CExpr idxs (SApp t n es)
 elimConstIndices (CExpr idxs (SExtern t n es)) = CExpr idxs (SExtern t n es)
-elimConstIndices (CExpr idxs (SArr es)) = CExpr idxs (SArr $ map elimConstIndices es)
+elimConstIndices (CExpr idxs (SArr t es)) = CExpr idxs (SArr t $ map elimConstIndices es)
 elimConstIndices (CChoice _ chs (IdxConst idx)) = elimConstIndices (chs !! idx)
 elimConstIndices (CChoice t chs (IdxVar idx)) = CChoice t (map elimConstIndices chs) idx
+
+-- TODO: optimization pass goes here
+toChoice :: Expr -> Choice Expr
+toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
 
 -- array ctx -------------------------------------------------------------------
 
@@ -130,8 +134,10 @@ newtype AllocM m a = AllocM (ST.StateT () m a)
   deriving (Functor, Applicative, Monad, MonadTrans)
 
 data FuncRef
+data LocalRef
+data ArrayRef
 
-data Value = RConst Number | RLocal Int | RArray Int
+data Value = RConst Number | RLocal LocalRef | RArray ArrayRef | RFuncRef FuncRef
 
 sizeOfType :: Type -> Int
 sizeOfType TNumber = 4
@@ -147,17 +153,14 @@ sizeOfType (TAbs _ _) = 4 -- funcref is an integer
 -- the most recent returned binding (or argument) gets tagged with "write to return value ref"
 
 -- type is needed for type signature in WASM/C
-funcRef :: Monad m => Type -> AllocM m () -> AllocM m FuncRef
+funcRef :: Monad m => Type -> AllocM m Value -> AllocM m FuncRef
 funcRef = undefined
 
-alloc :: Type -> AllocM m a -> AllocM m (a, Value)
-alloc = undefined
+allocArray :: Type -> [AllocM m Value] -> AllocM m ArrayRef
+allocArray = undefined
 
-at :: Int -> AllocM m () -> AllocM m ()
-at = undefined
-
-ret :: Number -> AllocM m ()
-ret = undefined
+allocLocal :: Type -> AllocM m LocalRef
+allocLocal = undefined
 
 call :: FuncRef -> [Value] -> AllocM m Value
 call = undefined
@@ -165,22 +168,43 @@ call = undefined
 data Env = Env
   { globalAbs :: M.Map Ident Abs
   , localBindings :: M.Map Ident Expr
+  , identFuncRefs :: M.Map Ident FuncRef
   }
 
 toAbs :: Expr -> Maybe Abs
 toAbs = undefined
 
-allocExpr :: SExpr Expr -> AllocM (R.Reader Env) ()
-allocExpr (SConst n) = ret n
+allocExpr :: SExpr Expr -> AllocM (R.Reader Env) Value
+allocExpr (SConst n) = pure $ RConst n
 allocExpr (SExtern _ _ _) = undefined
 allocExpr (SApp _ n args) = do
   env <- lift R.ask
   case M.lookup n env.globalAbs <|> (M.lookup n env.localBindings >>= toAbs) of
-    Just (Abs t params bindings e) -> undefined
-    Nothing -> error "allocExpr: app: no binding in scope (this is a bug)"
-allocExpr (SArr es) = sequence_ [ at i $ allocChoice e | (i, e) <- zip [0..] es ]
+    Just (Abs t params bindings e) -> do
+      -- Get funcref for lambda abstraction
+      fr <- case M.lookup n env.identFuncRefs of
+        Just fr' -> pure fr'
+        Nothing -> funcRef t (allocChoice (toChoice e))
 
-allocChoice :: Monad m => Choice Expr -> AllocM m ()
+      case drop (length args) params of
+        -- full application
+        [] -> do
+          args' <- sequence
+            [ allocChoice (toChoice arg)
+            | arg <- args
+            ]
+          call fr args'
+
+        params' -> do
+          sequence_
+            [ allocChoice (toChoice arg)
+            | arg <- args
+            ]
+          undefined
+    Nothing -> error "allocExpr: app: no binding in scope (this is a bug)"
+allocExpr (SArr t es) = RArray <$> allocArray t (fmap allocChoice es)
+
+allocChoice :: Choice Expr -> AllocM (R.Reader Env) Value
 allocChoice (CExpr _ e) = allocExpr e
 
 --------------------------------------------------------------------------------
