@@ -76,8 +76,8 @@ runStack = flip ST.evalState []
 
 data SExpr idx
   = SConst Number
-  | SOp Op Expr Expr
   | SArr Type [Expr]
+  | SOp Op Expr Expr
   | SAbs Abs
   | SApp Type Ident [Expr]
   | SExtern Type Ident [Expr]
@@ -165,10 +165,11 @@ funcRef = undefined
 allocArray :: Type -> AllocM m ArrayRef
 allocArray = undefined
 
-writeArray :: ArrayRef -> Int -> Number -> AllocM m ()
+-- slice must be focused on a simple element here
+writeArray :: ArrayRef -> Slice -> Number -> AllocM m ()
 writeArray = undefined
 
-allocLocal :: Type -> AllocM m LocalRef
+allocLocal :: AllocM m LocalRef
 allocLocal = undefined
 
 writeLocal :: LocalRef -> Number -> AllocM m ()
@@ -176,6 +177,9 @@ writeLocal = undefined
 
 call :: FuncRef -> [Value] -> RetRef -> AllocM m ()
 call = undefined
+
+callOp :: Op -> LocalRef -> LocalRef -> LocalRef -> AllocM m ()
+callOp = undefined
 
 data Env = Env
   { globalAbs :: M.Map Ident Abs
@@ -188,6 +192,17 @@ toAbs = undefined
 
 allocExpr :: RetRef -> SExpr Expr -> AllocM (R.Reader Env) ()
 allocExpr (RLocal ref) (SConst n) = writeLocal ref n
+allocExpr (RArray ref slice) (SConst n) = writeArray ref slice n
+allocExpr (RArray ref slice) (SArr _ es) = sequence_
+  [ allocChoice (RArray ref (focusSlice i slice)) (toChoice e)
+  | (i, e) <- zip [0..] es
+  ]
+allocExpr (RLocal ref) (SOp op a b) = do
+  aref <- allocLocal
+  bref <- allocLocal
+  allocChoice (RLocal aref) (toChoice a)
+  allocChoice (RLocal bref) (toChoice b)
+  callOp op aref bref ref
 allocExpr ref (SExtern _ _ _) = undefined
 allocExpr ref (SAbs _) = do
   -- TODO: fill in identFuncRefs with binding funcrefs (as we must do in the global scope as well)
@@ -216,10 +231,6 @@ allocExpr ref (SAbs _) = do
 --             ]
 --           undefined
 --     Nothing -> error "allocExpr: app: no binding in scope (this is a bug)"
-allocExpr (RArray ref slice) (SArr _ es) = sequence_
-  [ allocChoice (RArray ref (focusSlice i slice)) (toChoice e)
-  | (i, e) <- zip [0..] es
-  ]
 
 allocChoice :: RetRef -> Choice Expr -> AllocM (R.Reader Env) ()
 allocChoice ref (CExpr _ e) = allocExpr ref e
