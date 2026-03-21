@@ -15,6 +15,11 @@ import qualified Data.Map as M
 data Type = TNumber | TArr Type {- length -} Int | TAbs [Type] Type
   deriving Show
 
+sizeOfType :: Type -> Int
+sizeOfType TNumber = 4
+sizeOfType (TArr t dim) = sizeOfType t * dim
+sizeOfType (TAbs _ _) = 4 -- funcref is an integer
+
 returnType :: Type -> Type
 returnType TNumber = TNumber
 returnType t@(TArr _ _) = t
@@ -152,13 +157,7 @@ newSlice = undefined
 focusSlice :: Int -> Slice -> Slice
 focusSlice = undefined
 
-data RetRef = RLocal LocalRef | RArr Slice ArrayRef
-data Value = VConst Number | VLocal LocalRef | VArray ArrayRef | VFuncRef FuncRef
-
-sizeOfType :: Type -> Int
-sizeOfType TNumber = 4
-sizeOfType (TArr t dim) = sizeOfType t * dim
-sizeOfType (TAbs _ _) = 4 -- funcref is an integer
+data Ref = RLocal LocalRef | RArr Slice ArrayRef
 
 -- TODO: optimization is performed on the Choice datatype
 
@@ -190,7 +189,7 @@ writeNumber = undefined
 writeFuncRef :: LocalRef -> FuncRef -> AllocM ()
 writeFuncRef = undefined
 
-call :: FuncRef -> [RetRef] -> RetRef -> AllocM ()
+call :: FuncRef -> [Ref] -> Ref -> AllocM ()
 call = undefined
 
 callOp :: Op -> LocalRef -> LocalRef -> LocalRef -> AllocM ()
@@ -204,13 +203,12 @@ data Env = Env
   , funcRefs :: M.Map Ident (Type, FuncRef)
   }
 
-allocRef :: Type -> RetRef
-allocRef = undefined
+allocRef :: Type -> AllocM Ref
+allocRef TNumber = RLocal <$> allocLocal LTNumber
+allocRef (TAbs _ _) = RLocal <$> allocLocal LTFuncRef
+allocRef t@(TArr _ _) = RArr (newSlice t) <$> allocArray t
 
-toAbs :: Expr -> Maybe Abs
-toAbs = undefined
-
-allocExpr :: RetRef -> SExpr Expr -> R.ReaderT Env AllocM ()
+allocExpr :: Ref -> SExpr Expr -> R.ReaderT Env AllocM ()
 allocExpr (RLocal ref) (SConst n) = lift $ writeNumber ref n
 allocExpr (RArr slice ref) (SConst n) = lift $ writeArray ref slice n
 allocExpr (RArr slice ref) (SArr _ es) = sequence_
@@ -237,21 +235,13 @@ allocExpr ref (SApp _ n args) = do
         [] -> do
           args' <- sequence
             [ do
-                ref <- case argType of
-                  TNumber -> lift $ fmap RLocal $ allocLocal LTNumber
-                  TAbs _ _ -> lift $ fmap RLocal $ allocLocal LTFuncRef
-                  t@(TArr _ _) -> lift $ fmap (RArr (newSlice t)) $ allocArray t
-
+                ref <- lift $ allocRef argType
                 allocChoice ref (toChoice arg)
                 pure ref
             | (arg, argType) <- zip args (paramTypes t)
             ]
 
-          ref <- case returnType t of
-            TNumber -> lift $ fmap RLocal $ allocLocal LTNumber
-            TAbs _ _ -> lift $ fmap RLocal $ allocLocal LTFuncRef
-            t@(TArr _ _) -> lift $ fmap (RArr (newSlice t)) $ allocArray t
-
+          ref <- lift $ allocRef (returnType t)
           lift $ call fr args' ref
 
         params' -> do
@@ -262,7 +252,7 @@ allocExpr ref (SApp _ n args) = do
           undefined
     Nothing -> error "allocExpr: app: no funcref in scope (this is a bug)"
 
-allocChoice :: RetRef -> Choice Expr -> R.ReaderT Env AllocM ()
+allocChoice :: Ref -> Choice Expr -> R.ReaderT Env AllocM ()
 allocChoice ref (CExpr _ e) = allocExpr ref e
 
 --------------------------------------------------------------------------------
