@@ -1,10 +1,16 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 
 module OSC.Ctx where
 
+import Control.Applicative ((<|>))
 import Data.Functor.Identity
+import Control.Monad.Trans (MonadTrans, lift)
+import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
+import qualified Data.Map as M
 
 data Type = TNumber | TArray Type {- length -} Int | TAbs [(Ident, Type)] Type
   deriving Show
@@ -21,12 +27,15 @@ data Index a = IdxConst Int | IdxVar a
 data Op = Plus | Minus | Mul | Div
   deriving Show
 
+data Abs = Abs Type [(Ident, Type)] {- bindings -} [(Ident, Expr)] Expr
+  deriving Show
+
 data Expr
   = EConst Number
   | EOp Op Expr Expr -- both args and the result are simple types
   | EArr Type [Expr]
 
-  | EAbs Type [(Ident, Type)] {- bindings -} [(Ident, Expr)] Expr
+  | EAbs Abs
   | EApp Type Ident [Expr]
 
   | EExtern Type Ident [Expr] -- can reference functions or shared mem
@@ -67,9 +76,11 @@ runStack = flip ST.evalState []
 
 data SExpr idx
   = SConst Number
+  | SOp Op Expr Expr
   | SArr [Choice idx]
-  | SEmbed Type Ident [Expr]
-  | SCall Type Ident [Expr]
+  | SAbs Abs
+  | SApp Type Ident [Expr]
+  | SExtern Type Ident [Expr]
   deriving (Show)
 
 data Choice idx
@@ -84,8 +95,10 @@ toC e = do
 
 choiceTree :: Monad m => Expr -> StackM (Type, Index Expr) m (Choice (Index Expr))
 choiceTree (EConst n) = toC (SConst n)
-choiceTree (EExtern t n es) = toC (SCall t n es)
-choiceTree (EApp t n es) = toC (SEmbed t n es)
+choiceTree (EOp op a b) = toC (SOp op a b)
+choiceTree (EExtern t n es) = toC (SExtern t n es)
+choiceTree (EApp t n es) = toC (SApp t n es)
+choiceTree (EAbs abs) = toC (SAbs abs)
 choiceTree (EArr _ es) = do
   s <- pop
   case s of
@@ -105,20 +118,20 @@ choiceTree (ERec _ _ _ e) = choiceTree e -- TODO: need to inline ident with dela
 
 elimConstIndices :: Choice (Index Expr) -> Choice Expr
 elimConstIndices (CExpr idxs (SConst n)) = CExpr idxs (SConst n)
-elimConstIndices (CExpr idxs (SEmbed t n es)) = CExpr idxs (SEmbed t n es)
-elimConstIndices (CExpr idxs (SCall t n es)) = CExpr idxs (SCall t n es)
+elimConstIndices (CExpr idxs (SApp t n es)) = CExpr idxs (SApp t n es)
+elimConstIndices (CExpr idxs (SExtern t n es)) = CExpr idxs (SExtern t n es)
 elimConstIndices (CExpr idxs (SArr es)) = CExpr idxs (SArr $ map elimConstIndices es)
 elimConstIndices (CChoice _ chs (IdxConst idx)) = elimConstIndices (chs !! idx)
 elimConstIndices (CChoice t chs (IdxVar idx)) = CChoice t (map elimConstIndices chs) idx
 
 -- array ctx -------------------------------------------------------------------
 
-type AllocM a = IO a
+newtype AllocM m a = AllocM (ST.StateT () m a)
+  deriving (Functor, Applicative, Monad, MonadTrans)
 
 data FuncRef
 
-data Ref
-data Ret = RConst Number
+data Value = RConst Number | RLocal Int | RArray Int
 
 sizeOfType :: Type -> Int
 sizeOfType TNumber = 4
@@ -131,37 +144,40 @@ sizeOfType (TAbs _ _) = 4 -- funcref is an integer
 -- this is basically return value ref propagation up the binding chain
 -- the most recent returned binding (or argument) gets tagged with "write to return value ref"
 
--- fn allocs the return array
--- how are rvalues selected?
+funcRef :: Monad m => Type -> AllocM m () -> AllocM m FuncRef
+funcRef = undefined
 
-fn :: [(Ident, Type)] -> Type -> AllocM () -> AllocM FuncRef
-fn = undefined
+alloc :: Type -> AllocM m a -> AllocM m (a, Value)
+alloc = undefined
 
-write :: Ret -> AllocM ()
-write = undefined
-
-at :: Int -> AllocM () -> AllocM ()
+at :: Int -> AllocM m () -> AllocM m ()
 at = undefined
 
-binding :: Ident -> AllocM () -> AllocM ()
-binding = undefined
+ret :: Number -> AllocM m ()
+ret = undefined
 
-capture :: Ident -> AllocM Ref
-capture = undefined
-
-call :: FuncRef -> [Ref] -> AllocM ()
+call :: FuncRef -> [Value] -> AllocM m Value
 call = undefined
 
-layout :: Choice Expr -> AllocM ()
-layout = undefined
+data Env = Env
+  { globalAbs :: M.Map Ident Abs
+  , localBindings :: M.Map Ident Expr
+  }
 
-allocExpr :: SExpr Expr -> AllocM ()
-allocExpr (SConst n) = write $ RConst n
-allocExpr (SCall _ _ _) = undefined
-allocExpr (SEmbed _ _ _) = undefined
+toAbs :: Expr -> Maybe Abs
+toAbs = undefined
+
+allocExpr :: SExpr Expr -> AllocM (R.Reader Env) ()
+allocExpr (SConst n) = ret n
+allocExpr (SExtern _ _ _) = undefined
+allocExpr (SApp _ n args) = do
+  env <- lift R.ask
+  case M.lookup n env.globalAbs <|> (M.lookup n env.localBindings >>= toAbs) of
+    Just (Abs t params bindings e) -> undefined
+    Nothing -> error "allocExpr: app: no binding in scope (this is a bug)"
 allocExpr (SArr es) = sequence_ [ at i $ allocChoice e | (i, e) <- zip [0..] es ]
 
-allocChoice :: Choice Expr -> AllocM ()
+allocChoice :: Monad m => Choice Expr -> AllocM m ()
 allocChoice (CExpr _ e) = allocExpr e
 
 --------------------------------------------------------------------------------
