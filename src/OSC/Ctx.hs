@@ -249,7 +249,7 @@ allocExpr ref (SApp _ n args) = do
 
           case ref of
             RLocal lref -> lift $ writeFuncRef lref curriedFr
-            ref' -> error $ "allocExpr: ref: " <> show ref'
+            ref' -> error $ "allocExpr: ref when currying: " <> show ref'
 
     Nothing -> error "allocExpr: app: no funcref in scope (this is a bug)"
 
