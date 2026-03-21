@@ -159,7 +159,7 @@ sizeOfType (TAbs _ _) = 4 -- funcref is an integer
 -- the most recent returned binding (or argument) gets tagged with "write to return value ref"
 
 -- type is needed for type signature in WASM/C
-funcRef :: Monad m => Type -> AllocM m Value -> AllocM m FuncRef
+funcRef :: Monad m => Type -> AllocM m () -> AllocM m FuncRef
 funcRef = undefined
 
 allocArray :: Type -> AllocM m ArrayRef
@@ -208,29 +208,29 @@ allocExpr ref (SAbs _) = do
   -- TODO: fill in identFuncRefs with binding funcrefs (as we must do in the global scope as well)
   -- funcRef t (allocChoice (toChoice e))
   undefined
--- allocExpr ref (SApp _ n args) = do
---   env <- lift R.ask
---   case M.lookup n env.globalAbs <|> (M.lookup n env.localBindings >>= toAbs) of
---     Just (Abs t params bindings e) -> do
---       -- Get funcref for lambda abstraction
---       let Just fr = M.lookup n env.identFuncRefs
--- 
---       case drop (length args) params of
---         -- full application
---         [] -> do
---           args' <- sequence
---             [ allocChoice (toChoice arg)
---             | arg <- args
---             ]
---           call fr args'
--- 
---         params' -> do
---           sequence_
---             [ allocChoice (toChoice arg)
---             | arg <- args
---             ]
---           undefined
---     Nothing -> error "allocExpr: app: no binding in scope (this is a bug)"
+allocExpr ref (SApp _ n args) = do
+  env <- lift R.ask
+  case M.lookup n env.globalAbs <|> (M.lookup n env.localBindings >>= toAbs) of
+    Just (Abs t params bindings e) -> do
+      -- Get funcref for lambda abstraction
+      let Just fr = M.lookup n env.identFuncRefs
+
+      case drop (length args) params of
+        -- full application
+        [] -> do
+          args' <- sequence
+            [ allocChoice (toChoice arg)
+            | (arg, (_, t)) <- zip args params
+            ]
+          call fr args'
+
+        params' -> do
+          sequence_
+            [ allocChoice (toChoice arg)
+            | arg <- args
+            ]
+          undefined
+    Nothing -> error "allocExpr: app: no binding in scope (this is a bug)"
 
 allocChoice :: RetRef -> Choice Expr -> AllocM (R.Reader Env) ()
 allocChoice ref (CExpr _ e) = allocExpr ref e
