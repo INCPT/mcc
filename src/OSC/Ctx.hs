@@ -168,13 +168,13 @@ data Ref = RLocal LocalRef | RArr Slice ArrayRef
 -- the most recent returned binding (or argument) gets tagged with "write to return value ref"
 
 -- type is needed for type signature in WASM/C
-funcRef :: Type -> AllocM () -> AllocM FuncRef
+funcRef :: Type -> ([Ref] -> Ref -> AllocM ()) -> AllocM FuncRef
 funcRef = undefined
 
 allocArray :: Type -> AllocM ArrayRef
 allocArray = undefined
 
-data LocalType = LTNumber | LTFuncRef
+data LocalType = LTNumber | LTFuncRef [Type]
 
 allocLocal :: LocalType -> AllocM LocalRef
 allocLocal = undefined
@@ -205,7 +205,7 @@ data Env = Env
 
 allocRef :: Type -> AllocM Ref
 allocRef TNumber = RLocal <$> allocLocal LTNumber
-allocRef (TAbs _ _) = RLocal <$> allocLocal LTFuncRef
+allocRef t@(TAbs _ _) = RLocal <$> allocLocal (LTFuncRef (paramTypes t))
 allocRef t@(TArr _ _) = RArr (newSlice t) <$> allocArray t
 
 allocExpr :: Ref -> SExpr Expr -> R.ReaderT Env AllocM ()
@@ -228,28 +228,29 @@ allocExpr (RLocal ref) (SAbs _) = do
   undefined
 allocExpr ref (SApp _ n args) = do
   env <- lift R.ask
+
   case M.lookup n env.funcRefs of
     Just (t, fr) -> do
+      argRefs <- sequence
+        [ do
+            ref <- lift $ allocRef argType
+            allocChoice ref (toChoice arg)
+            pure ref
+        | (arg, argType) <- zip args (paramTypes t)
+        ]
+
       case drop (length args) (paramTypes t) of
         -- full application
-        [] -> do
-          args' <- sequence
-            [ do
-                ref <- lift $ allocRef argType
-                allocChoice ref (toChoice arg)
-                pure ref
-            | (arg, argType) <- zip args (paramTypes t)
-            ]
-
-          ref <- lift $ allocRef (returnType t)
-          lift $ call fr args' ref
+        [] -> lift $ call fr argRefs ref
 
         params' -> do
-          sequence_
-            [ allocChoice (toChoice arg)
-            | arg <- args
-            ]
-          undefined
+          curriedFr <- lift $ funcRef (TAbs params' (returnType t)) $ \curriedArgRefs ref' ->
+            call fr (argRefs <> curriedArgRefs) ref'
+
+          case ref of
+            RLocal ref' -> lift $ writeFuncRef ref' curriedFr
+            ref' -> error $ "allocExpr: ref: " <> show ref'
+
     Nothing -> error "allocExpr: app: no funcref in scope (this is a bug)"
 
 allocChoice :: Ref -> Choice Expr -> R.ReaderT Env AllocM ()
