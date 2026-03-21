@@ -268,6 +268,8 @@ data LBox
 -- ** is it possible to only type annotate arguments (and maybe return values) and have everything else be inferred?
 -- * var names -> indices, SSA
 -- * check for recursion
+-- ** no mutual recursion in graph code
+-- ** mutual recursion in imperative code only with `wait` inbetween
 -- * constant folding (also fold compile time constants like $voices)
 -- * compiler time expression expansion (range, fold, lvalue index expressions must be computable at compile time)
 -- * cluster common subexpressions
