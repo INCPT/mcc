@@ -124,7 +124,7 @@ elimConstIndices (CExpr idxs (SArr t es)) = CExpr idxs (SArr t $ map elimConstIn
 elimConstIndices (CChoice _ chs (IdxConst idx)) = elimConstIndices (chs !! idx)
 elimConstIndices (CChoice t chs (IdxVar idx)) = CChoice t (map elimConstIndices chs) idx
 
--- TODO: optimization pass goes here
+-- TODO: optimization, cluster generation and so on go here
 toChoice :: Expr -> Choice Expr
 toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
 
