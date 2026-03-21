@@ -128,8 +128,8 @@ toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
 
 -- array ctx -------------------------------------------------------------------
 
-newtype AllocM m a = AllocM (ST.StateT () m a)
-  deriving (Functor, Applicative, Monad, MonadTrans)
+newtype AllocM a = AllocM (ST.State () a)
+  deriving (Functor, Applicative, Monad)
 
 data FuncRef
 data LocalRef
@@ -159,26 +159,27 @@ sizeOfType (TAbs _ _) = 4 -- funcref is an integer
 -- the most recent returned binding (or argument) gets tagged with "write to return value ref"
 
 -- type is needed for type signature in WASM/C
-funcRef :: Monad m => Type -> AllocM m () -> AllocM m FuncRef
-funcRef = undefined
 
-allocArray :: Type -> AllocM m ArrayRef
+allocFuncRef :: Type -> AllocM () -> AllocM FuncRef
+allocFuncRef = undefined
+
+allocArray :: Type -> AllocM ArrayRef
 allocArray = undefined
 
--- slice must be focused on a simple element here
-writeArray :: ArrayRef -> Slice -> Number -> AllocM m ()
-writeArray = undefined
-
-allocLocal :: AllocM m LocalRef
+allocLocal :: AllocM LocalRef
 allocLocal = undefined
 
-writeLocal :: LocalRef -> Number -> AllocM m ()
+-- slice must be focused on a simple element here
+writeArray :: ArrayRef -> Slice -> Number -> AllocM ()
+writeArray = undefined
+
+writeLocal :: LocalRef -> Number -> AllocM ()
 writeLocal = undefined
 
-call :: FuncRef -> [Value] -> RetRef -> AllocM m ()
+call :: FuncRef -> [RetRef] -> RetRef -> AllocM ()
 call = undefined
 
-callOp :: Op -> LocalRef -> LocalRef -> LocalRef -> AllocM m ()
+callOp :: Op -> LocalRef -> LocalRef -> LocalRef -> AllocM ()
 callOp = undefined
 
 data Env = Env
@@ -190,19 +191,19 @@ data Env = Env
 toAbs :: Expr -> Maybe Abs
 toAbs = undefined
 
-allocExpr :: RetRef -> SExpr Expr -> AllocM (R.Reader Env) ()
-allocExpr (RLocal ref) (SConst n) = writeLocal ref n
-allocExpr (RArray ref slice) (SConst n) = writeArray ref slice n
+allocExpr :: RetRef -> SExpr Expr -> R.ReaderT Env AllocM ()
+allocExpr (RLocal ref) (SConst n) = lift $ writeLocal ref n
+allocExpr (RArray ref slice) (SConst n) = lift $ writeArray ref slice n
 allocExpr (RArray ref slice) (SArr _ es) = sequence_
   [ allocChoice (RArray ref (focusSlice i slice)) (toChoice e)
   | (i, e) <- zip [0..] es
   ]
 allocExpr (RLocal ref) (SOp op a b) = do
-  aref <- allocLocal
-  bref <- allocLocal
+  aref <- lift allocLocal
+  bref <- lift allocLocal
   allocChoice (RLocal aref) (toChoice a)
   allocChoice (RLocal bref) (toChoice b)
-  callOp op aref bref ref
+  lift $ callOp op aref bref ref
 allocExpr ref (SExtern _ _ _) = undefined
 allocExpr ref (SAbs _) = do
   -- TODO: fill in identFuncRefs with binding funcrefs (as we must do in the global scope as well)
@@ -232,7 +233,7 @@ allocExpr ref (SApp _ n args) = do
           undefined
     Nothing -> error "allocExpr: app: no binding in scope (this is a bug)"
 
-allocChoice :: RetRef -> Choice Expr -> AllocM (R.Reader Env) ()
+allocChoice :: RetRef -> Choice Expr -> R.ReaderT Env AllocM ()
 allocChoice ref (CExpr _ e) = allocExpr ref e
 
 --------------------------------------------------------------------------------
