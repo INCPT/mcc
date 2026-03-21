@@ -286,6 +286,8 @@ data LBox
 -- * codegen
 -- ** choice strategy: for small choice tables (e.g. < 5) use ifs
 -- ** two targets: WASM and C
+-- * MCP server with retrieve-syntax, retrieve-type, retrieve-source, retrieve-docs, etc
+-- * LSP server
 
 exprToBox :: Expr -> BoxGenM BoxIndex
 exprToBox (EConst n) = newBox (LBConst n)
