@@ -119,7 +119,7 @@ elimConstIndices :: Choice (Index Expr) -> Choice Expr
 elimConstIndices (CExpr idxs (SConst n)) = CExpr idxs (SConst n)
 elimConstIndices (CExpr idxs (SApp t n es)) = CExpr idxs (SApp t n es)
 elimConstIndices (CExpr idxs (SExtern t n es)) = CExpr idxs (SExtern t n es)
-elimConstIndices (CExpr idxs (SArr t es)) = CExpr idxs (SArr t $ map elimConstIndices es)
+elimConstIndices (CExpr idxs (SArr t es)) = CExpr idxs (SArr t es)
 elimConstIndices (CChoice _ chs (IdxConst idx)) = elimConstIndices (chs !! idx)
 elimConstIndices (CChoice t chs (IdxVar idx)) = CChoice t (map elimConstIndices chs) idx
 
