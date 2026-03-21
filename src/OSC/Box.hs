@@ -268,14 +268,17 @@ data LBox
 -- ** is it possible to only type annotate arguments (and maybe return values) and have everything else be inferred?
 -- * var names -> indices, SSA
 -- * check for recursion
--- * simplify, fusion rules, find fixpoint
--- ** fusion .e.g fold . map = fold with folded map inside :D
--- ** (ERec _ _ _ (EConst n)) = n
--- ** (ESelect [a, b, c])[1] = b
 -- * constant folding (also fold compile time constants like $voices)
+-- * compiler time expression expansion (range, fold, lvalue index expressions must be computable at compile time)
 -- * cluster common subexpressions
 -- * if cluster referenced only once, inline
 -- ** have a configurable max inline function size
+-- ** optimization must happen after inlining
+-- *** simplify, fusion rules, find fixpoint
+-- **** fusion .e.g fold . map = fold with folded map inside :D
+-- **** (ERec _ _ _ (EConst n)) = n
+-- **** (ESelect [a, b, c])[1] = b
+-- **** (App (Abs f)) = can inline if feasible
 -- * if something is not referenced in delay, don't alloc delay box and compute it lazily in e.g. select
 -- ** e.g. bindings that do not reference the recusive head can be outside the rec block
 -- * codegen

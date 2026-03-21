@@ -138,12 +138,15 @@ sizeOfType TNumber = 4
 sizeOfType (TArray t dim) = sizeOfType t * dim
 sizeOfType (TAbs _ _) = 4 -- funcref is an integer
 
+-- TODO: optimization is performed on the Choice datatype
+
 -- TODO: alignment in AllocM!
 
 -- TODO: what happens if part of the return value is a capture?
 -- this is basically return value ref propagation up the binding chain
 -- the most recent returned binding (or argument) gets tagged with "write to return value ref"
 
+-- type is needed for type signature in WASM/C
 funcRef :: Monad m => Type -> AllocM m () -> AllocM m FuncRef
 funcRef = undefined
 
