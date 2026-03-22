@@ -9,7 +9,6 @@ module OSC.Ctx where
 import Control.Applicative ((<|>))
 import Data.Functor.Identity
 import Control.Monad (when)
-import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans (lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
@@ -153,7 +152,7 @@ toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
 -- array ctx -------------------------------------------------------------------
 
 newtype AllocM a = AllocM (ST.State () a)
-  deriving (Functor, Applicative, Monad, MonadFix)
+  deriving (Functor, Applicative, Monad)
 
 newtype FuncRef = FuncRef Int deriving Show
 newtype LocalRef = LocalRef Int deriving Show
