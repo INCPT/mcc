@@ -214,6 +214,10 @@ data Env = Env
   { refs :: M.Map Ident (Type, Ref)
   }
 
+data State = State
+  { funcRefs :: M.Map FuncRef (Type, (Ref -> AllocM ()))
+  }
+
 allocRef :: Type -> AllocM Ref
 allocRef TNumber = RLocal <$> allocLocal
 allocRef t@(TArr _ _) = RArr (newSlice t) <$> allocArray t
