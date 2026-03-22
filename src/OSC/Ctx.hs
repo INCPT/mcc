@@ -51,7 +51,6 @@ data Expr
   = EConst Number
   | EOp Op Expr Expr -- both args and the result are simple types
   | EArr Type [Expr]
-  | EVar Type Ident
 
   | EAbs Abs
   | EApp Type Ident [Expr]
@@ -152,10 +151,10 @@ toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
 newtype AllocM a = AllocM (ST.State () a)
   deriving (Functor, Applicative, Monad)
 
-data FuncRef
-data LocalRef
-data ArrayRef
-data Slice
+newtype FuncRef = FuncRef Int deriving Show
+newtype LocalRef = LocalRef Int deriving Show
+newtype ArrayRef = ArrayRef Int deriving Show
+data Slice = Slice Int Int deriving Show
 
 newSlice :: Type -> Slice
 newSlice = undefined
@@ -163,9 +162,8 @@ newSlice = undefined
 focusSlice :: Int -> Slice -> Slice
 focusSlice = undefined
 
-data Ref = RLocal LocalRef | RArr Slice ArrayRef
-
-data Arg = Arg Int
+data Ref = RLocal LocalRef | RFuncRef FuncRef | RArr Slice ArrayRef
+  deriving Show
 
 -- TODO: optimization is performed on the Choice datatype
 
@@ -176,8 +174,11 @@ data Arg = Arg Int
 -- the most recent returned binding (or argument) gets tagged with "write to return value ref"
 
 -- type is needed for type signature in WASM/C
-funcRef :: Type -> ([Arg] -> Ref -> AllocM ()) -> AllocM FuncRef
+funcRef :: FuncRef -> Type -> ([Ref] -> Ref -> AllocM ()) -> AllocM ()
 funcRef = undefined
+
+allocFuncRef :: AllocM FuncRef
+allocFuncRef = undefined
 
 allocArray :: Type -> AllocM ArrayRef
 allocArray = undefined
@@ -191,11 +192,8 @@ allocLocal = undefined
 writeArray :: ArrayRef -> Slice -> Number -> AllocM ()
 writeArray = undefined
 
-writeNumber :: LocalRef -> Number -> AllocM ()
-writeNumber = undefined
-
-writeFuncRef :: LocalRef -> FuncRef -> AllocM ()
-writeFuncRef = undefined
+writeLocal :: LocalRef -> Number -> AllocM ()
+writeLocal = undefined
 
 call :: FuncRef -> [Ref] -> Ref -> AllocM ()
 call = undefined
@@ -211,11 +209,11 @@ data Env = Env
 
 allocRef :: Type -> AllocM Ref
 allocRef TNumber = RLocal <$> allocLocal LTNumber
-allocRef t@(TAbs _ _) = RLocal <$> allocLocal (LTFuncRef (paramTypes t))
 allocRef t@(TArr _ _) = RArr (newSlice t) <$> allocArray t
+allocRef (TAbs _ _) = RFuncRef <$> allocFuncRef
 
 allocExpr :: Ref -> SExpr Expr -> R.ReaderT Env AllocM ()
-allocExpr (RLocal ref) (SConst n) = lift $ writeNumber ref n
+allocExpr (RLocal ref) (SConst n) = lift $ writeLocal ref n
 allocExpr (RArr slice ref) (SConst n) = lift $ writeArray ref slice n
 allocExpr (RArr slice ref) (SArr _ es) = sequence_
   [ allocChoice (RArr (focusSlice i slice) ref) (toChoice e)
@@ -228,20 +226,18 @@ allocExpr (RLocal ref) (SOp op a b) = do
   allocChoice (RLocal bref) (toChoice b)
   lift $ callOp op aref bref ref
 allocExpr ref (SExtern _ _ _) = undefined
-allocExpr (RLocal ref) (SAbs (Abs t ns bindings e)) = mdo
+allocExpr (RFuncRef fref) (SAbs (Abs t ns bindings e)) = mdo
   env <- R.ask
 
   bindingRefs <- fmap (M.fromList . mconcat) $ sequence
     [ case exprType bexpr of
         t@(TAbs _ _) -> do
           -- TODO: inline args in (toChoice bexpr)
-          fr <- lift $ funcRef t $ \args ref -> R.runReaderT (allocChoice ref (toChoice bexpr)) $ env
+          fr <- lift allocFuncRef
+          lift $ funcRef fr t $ \args ref -> R.runReaderT (allocChoice ref (toChoice bexpr)) $ env
             { refs = bindingRefs `M.union` env.refs }
 
-          lfr <- lift $ allocLocal (LTFuncRef (paramTypes t))
-          lift $ writeFuncRef lfr fr
-
-          pure [(bname, (t, RLocal lfr))]
+          pure [(bname, (t, RFuncRef fr))]
         t -> do
           ref <- lift $ allocRef t
           pure [(bname, (t, ref))]
@@ -249,14 +245,13 @@ allocExpr (RLocal ref) (SAbs (Abs t ns bindings e)) = mdo
     ]
 
   -- TODO: inline bindingRefs in toChoice expr
-  fr <- lift $ funcRef t $ \args ref -> R.runReaderT (allocChoice ref (toChoice e)) $ env
+  lift $ funcRef fref t $ \args ref -> R.runReaderT (allocChoice ref (toChoice e)) $ env
     { refs = bindingRefs `M.union` env.refs }
-  lift $ writeFuncRef ref fr
 allocExpr ref (SApp _ n args) = do
-  env <- lift R.ask
+  env <- R.ask
 
-  case M.lookup n env.funcRefs of
-    Just (t, fr) -> do
+  case M.lookup n env.refs of
+    Just (t, RFuncRef fr) -> do
       argRefs <- sequence
         [ do
             ref <- lift $ allocRef argType
@@ -269,15 +264,13 @@ allocExpr ref (SApp _ n args) = do
         -- full application
         [] -> lift $ call fr argRefs ref
 
-        params' -> do
-          curriedFr <- lift $ funcRef (TAbs params' (returnType t)) $ \curriedArgRefs ref' ->
-            call fr (argRefs <> curriedArgRefs) ref'
-
+        params' -> lift $ do
           case ref of
-            RLocal lref -> lift $ writeFuncRef lref curriedFr
-            ref' -> error $ "allocExpr: ref when currying: " <> show ref'
-
-    Nothing -> error "allocExpr: app: no funcref in scope (this is a bug)"
+            RFuncRef curriedFr -> 
+              funcRef curriedFr (TAbs params' (returnType t)) $ \curriedArgRefs ref' ->
+                call fr (argRefs <> curriedArgRefs) ref'
+            ref' ->  error $ "allocExpr: SApp: ref: " <> show ref'
+    e -> error $ "allocExpr: SApp: " <> show e
 
 allocChoice :: Ref -> Choice Expr -> R.ReaderT Env AllocM ()
 allocChoice ref (CExpr _ e) = allocExpr ref e
@@ -286,7 +279,7 @@ allocChoice ref (CExpr _ e) = allocExpr ref e
 
 t :: [Int] -> Type
 t [] = TNumber
-t (dim:dims) = TArray (t dims) dim
+t (dim:dims) = TArr (t dims) dim
 
 e1 :: Expr
 e1 = ESelect (t [3, 2]) (
