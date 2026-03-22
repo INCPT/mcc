@@ -9,6 +9,7 @@ module OSC.Ctx where
 
 import Control.Applicative ((<|>))
 import Data.Functor.Identity
+import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans (lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
@@ -149,7 +150,7 @@ toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
 -- array ctx -------------------------------------------------------------------
 
 newtype AllocM a = AllocM (ST.State () a)
-  deriving (Functor, Applicative, Monad)
+  deriving (Functor, Applicative, Monad, MonadFix)
 
 newtype FuncRef = FuncRef Int deriving Show
 newtype LocalRef = LocalRef Int deriving Show
@@ -213,21 +214,21 @@ allocRef t@(TArr _ _) = RArr (newSlice t) <$> allocArray t
 allocRef (TAbs _ _) = RFuncRef <$> allocFuncRef
 
 -- TODO: take spillover selection indices into account
-allocExpr :: Ref -> SExpr Expr -> R.ReaderT Env AllocM ()
-allocExpr (RLocal ref) (SConst n) = lift $ writeLocal ref n
-allocExpr (RArr slice ref) (SConst n) = lift $ writeArray ref slice n
-allocExpr (RArr slice ref) (SArr _ es) = sequence_
+allocExpr :: [(Type, Index Expr)] -> Ref -> SExpr Expr -> R.ReaderT Env AllocM ()
+allocExpr [] (RLocal ref) (SConst n) = lift $ writeLocal ref n
+allocExpr [] (RArr slice ref) (SConst n) = lift $ writeArray ref slice n
+allocExpr [] (RArr slice ref) (SArr _ es) = sequence_
   [ allocChoice (RArr (focusSlice i slice) ref) (toChoice e)
   | (i, e) <- zip [0..] es
   ]
-allocExpr (RLocal ref) (SOp op a b) = do
+allocExpr [] (RLocal ref) (SOp op a b) = do
   aref <- lift $ allocLocal LTNumber
   bref <- lift $ allocLocal LTNumber
   allocChoice (RLocal aref) (toChoice a)
   allocChoice (RLocal bref) (toChoice b)
   lift $ callOp op aref bref ref
-allocExpr ref (SExtern _ _ _) = undefined
-allocExpr (RFuncRef fref) (SAbs (Abs t ns bindings e)) = mdo
+allocExpr idxs ref (SExtern _ _ _) = undefined
+allocExpr _ (RFuncRef fref) (SAbs (Abs t ns bindings e)) = mdo
   env <- R.ask
 
   bindingRefs <- fmap (M.fromList . mconcat) $ sequence
@@ -248,7 +249,7 @@ allocExpr (RFuncRef fref) (SAbs (Abs t ns bindings e)) = mdo
   -- TODO: inline bindingRefs in toChoice expr
   lift $ funcRef fref t $ \args ref -> R.runReaderT (allocChoice ref (toChoice e)) $ env
     { refs = bindingRefs `M.union` env.refs }
-allocExpr ref (SApp _ n args) = do
+allocExpr _ ref (SApp _ n args) = do
   env <- R.ask
 
   case M.lookup n env.refs of
@@ -274,7 +275,7 @@ allocExpr ref (SApp _ n args) = do
     e -> error $ "allocExpr: SApp: " <> show e <> " (this is a bug)"
 
 allocChoice :: Ref -> Choice Expr -> R.ReaderT Env AllocM ()
-allocChoice ref (CExpr _ e) = allocExpr ref e
+allocChoice ref (CExpr idxs e) = allocExpr idxs ref e
 
 --------------------------------------------------------------------------------
 
