@@ -33,47 +33,77 @@ returnType (TAbs _ r) = returnType r
 
 data Slice = Slice { start :: Int, length :: Int, innerDims :: [Int] }
 
-data State m = State
-  { nextArrayIdx :: Int
-  , nextFuncRef :: Int
-  , funcRefs :: Map Int (FuncRef m)
-  }
+data CallM a
 
-data Env = Env
-  { slice :: Slice
-  }
-
-newtype CallM m a = CallM { run :: R.ReaderT Env (ST.StateT (State m) m) a }
-  deriving (Functor, Applicative, Monad)
-
-instance MonadTrans CallM where
-  lift = CallM . lift . lift
+-- bin ops
+-- externals
+-- arguments/bindings
+-- selection
+-- choice
 
 data Ident
-data Number = I32 Int | F32 Float
+data Number
+data FuncRef
+data Any
 
-data Value = VConst Number | VArr [Value]
+data Value a
 
-data FuncRef m = FuncRef Int Type (M.Map Ident (Ref m)) ([Ref m] -> m Value)
-data Ref m = RConst Number | RLocal Int | RArray Slice Int | RFuncRef (FuncRef m)
-
-binOp :: Ref m -> Ref m -> CallM m (Ref m)
+binOp :: op -> Value Number -> Value Number -> CallM (Value Number)
 binOp = undefined
 
--- if not in a return context, alloc one
-func :: Monad m => Type -> M.Map Ident (CallM m (Ref m)) -> ([Ref m] -> CallM m Value) -> CallM m (FuncRef m)
-func t bindings f = CallM $ do
-  nfr <- ST.gets (.nextFuncRef); ST.modify \st -> st { nextFuncRef = st.nextFuncRef + 1 }
+external :: Ident -> CallM (Value Any)
+external = undefined
 
-  -- let a = R.runReaderT (ST.runStateT ((f undefined).run) undefined) undefined
-  --- let a = ST.runStateT (R.runReaderT ((f undefined).run) undefined) undefined
+funcRef :: ([Value Any] -> CallM (Value Any)) -> CallM (Value FuncRef)
+funcRef = undefined
 
-  let fr = FuncRef nfr t undefined undefined
+call :: Value FuncRef -> [Value Any] -> CallM (Value Any)
+call = undefined
 
-  ST.modify $ \st -> st { funcRefs = M.insert nfr fr st.funcRefs }
-  pure fr
+select :: Value Any -> [Value Number] -> CallM (Value Any)
+select = undefined
 
-call :: Monad m => FuncRef m -> [Ref m] -> CallM m (Ref m)
-call (FuncRef _ t bindings f) args = case drop (length args) (paramTypes t) of
-    [] -> undefined
-    _ -> undefined
+-- data State m = State
+--   { nextArrayIdx :: Int
+--   , nextFuncRef :: Int
+--   , funcRefs :: Map Int (FuncRef m)
+--   }
+-- 
+-- data Env = Env
+--   { slice :: Slice
+--   }
+-- 
+-- newtype CallM m a = CallM { run :: R.ReaderT Env (ST.StateT (State m) m) a }
+--   deriving (Functor, Applicative, Monad)
+-- 
+-- instance MonadTrans CallM where
+--   lift = CallM . lift . lift
+-- 
+-- data Ident
+-- data Number = I32 Int | F32 Float
+-- 
+-- data Value = VConst Number | VArr [Value]
+-- 
+-- data FuncRef m = FuncRef Int Type (M.Map Ident (Ref m)) ([Ref m] -> m Value)
+-- data Ref m = RConst Number | RLocal Int | RArray Slice Int | RFuncRef (FuncRef m)
+-- 
+-- binOp :: Ref m -> Ref m -> CallM m (Ref m)
+-- binOp = undefined
+-- 
+-- -- if not in a return context, alloc one
+-- func :: Monad m => Type -> M.Map Ident (CallM m (Ref m)) -> ([Ref m] -> CallM m Value) -> CallM m (FuncRef m)
+-- func t bindings f = CallM $ do
+--   nfr <- ST.gets (.nextFuncRef); ST.modify $ \st -> st { nextFuncRef = st.nextFuncRef + 1 }
+-- 
+--   -- let a = R.runReaderT (ST.runStateT ((f undefined).run) undefined) undefined
+--   --- let a = ST.runStateT (R.runReaderT ((f undefined).run) undefined) undefined
+-- 
+--   let fr = FuncRef nfr t undefined undefined
+-- 
+--   ST.modify $ \st -> st { funcRefs = M.insert nfr fr st.funcRefs }
+--   pure fr
+-- 
+-- call :: Monad m => FuncRef m -> [Ref m] -> CallM m (Ref m)
+-- call (FuncRef _ t bindings f) args = case drop (length args) (paramTypes t) of
+--     [] -> undefined
+--     _ -> undefined
