@@ -63,7 +63,7 @@ binOp = undefined
 -- if not in a return context, alloc one
 func :: Monad m => Type -> M.Map Ident (CallM m (Ref m)) -> ([Ref m] -> CallM m Value) -> CallM m (FuncRef m)
 func t bindings f = CallM $ do
-  nfr <- ST.gets (.nextFuncRef); ST.modify $ \st -> st { nextFuncRef = st.nextFuncRef + 1 }
+  nfr <- ST.gets (.nextFuncRef); ST.modify \st -> st { nextFuncRef = st.nextFuncRef + 1 }
 
   -- let a = R.runReaderT (ST.runStateT ((f undefined).run) undefined) undefined
   --- let a = ST.runStateT (R.runReaderT ((f undefined).run) undefined) undefined
