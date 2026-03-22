@@ -35,23 +35,45 @@ data Slice = Slice { start :: Int, length :: Int, innerDims :: [Int] }
 
 data Ident
 data Number
+
 newtype FuncRef = FuncRef Int
+newtype LocalIdx = LocalIdx Int
+newtype ArrayIdx = ArrayIdx Int
+newtype ArgPos = ArgPos Int
 
-data Ref = RConst Number | RLocal Int | RArray Int [Int] | RFuncRef FuncRef
+data Ref 
+  = RLocal LocalIdx
+  | RArray Type Int ArrayIdx
+  | RFuncRef FuncRef
 
-data Op
+  -- double references
+  | RRLocal LocalIdx -- local pointing to local (?)
+  | RRArray Type Int LocalIdx -- local containing base address
+  | RRFuncRef LocalIdx -- local containing func idx
 
 --------------------------------------------------------------------------------
 
 data Env = Env
   { ret :: Ref
+  , refs :: Map Ident Ref
   }
+
+class MonadCodegen m where
+  arg :: Int -> Type -> m Ref
+
+  retVal :: Number -> Ref -> m ()
+  retRef :: Ref -> Ref -> m ()
+
+  call :: Ref -> [Ref] -> Ref -> m ()
 
 newtype CallM m a = CallM (R.ReaderT Env m a)
   deriving (Functor, Applicative, Monad, MonadTrans, MFunctor)
 
-ret :: Ref -> CallM m ()
-ret = undefined
+bindings :: [(Ident, CallM m Ref)] -> CallM m ()
+bindings bs = undefined
+
+capture :: Ident -> CallM m Ref
+capture = undefined
 
 focus :: Int -> CallM m () -> CallM m ()
 focus = undefined
@@ -59,18 +81,22 @@ focus = undefined
 external :: Ident -> [Ref] -> CallM m ()
 external = undefined
 
-funcRef :: Type -> ([Ref] -> CallM m ()) -> CallM m FuncRef
-funcRef = undefined
+funcRef :: Type -> ([Ref] -> CallM m Ref) -> CallM m Ref
+funcRef t f = CallM $ do
+  -- args <- lift $ sequence [ arg i p | (i, p) <- zip [0..] (paramTypes t) ]
+  
+  -- TODO: call retVal
+  undefined
 
-call :: FuncRef -> [Ref] -> CallM m ()
-call = undefined
+-- call :: Ref -> [Ref] -> CallM m ()
+-- call = undefined
 
 -- allocation happens here
-runCallM :: Type -> CallM m () -> CallM m Ref
+runCallM :: MonadCodegen m => Type -> CallM m () -> CallM m Ref
 runCallM t (CallM m) = undefined
 
-possible :: (Env -> Env) -> CallM (R.Reader Env) a -> CallM (R.Reader Env) a
-possible f = hoist (R.local f)
+-- possible :: (Env -> Env) -> CallM (R.Reader Env) a -> CallM (R.Reader Env) a
+-- possible f = hoist (R.local f)
 
 -- select :: Value Any -> [Value Number] -> CallM (Value Any)
 -- select = undefined
