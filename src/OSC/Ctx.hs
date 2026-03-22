@@ -240,24 +240,32 @@ allocExpr idxs ref (SExtern _ _ _) = undefined
 allocExpr [] (RFuncRef fref) (SAbs (Abs t paramNames bindings expr)) = do
   env <- R.ask
 
-  bindingRefs' <- sequence
+  bindingRefs' <- lift $ sequence
     [ do
-        ref <- lift $ allocRef (exprType bexpr)
+        ref <- allocRef (exprType bexpr)
         pure (bname, (t, ref))
     | (bname, bexpr) <- bindings
     ]
 
   let bindingRefs = M.fromList bindingRefs'
 
+  argRefs <- fmap M.fromList $ lift $ sequence
+    [ do
+        ref <- arg i
+        pure (paramName, (paramType, ref))
+    | (i, (paramName, paramType)) <- zip [0..] (zip paramNames (paramTypes t))
+    ]
+
+  let innerEnv = env 
+        { refs = mconcat [ bindingRefs, argRefs, env.refs ]
+        }
+
   lift $ sequence_
-    [ funcRef fr t $ \ref -> R.runReaderT (allocChoice ref (toChoice bexpr)) $ env
-        { refs = bindingRefs `M.union` env.refs }
+    [ funcRef fr t $ \ref -> R.runReaderT (allocChoice ref (toChoice bexpr)) innerEnv
     | ((_, bexpr), (_, (t, RFuncRef fr))) <- zip bindings bindingRefs'
     ]
 
-  -- TODO: inline bindingRefs in toChoice expr
-  lift $ funcRef fref t $ \ref -> R.runReaderT (allocChoice ref (toChoice expr)) $ env
-    { refs = bindingRefs `M.union` env.refs }
+  lift $ funcRef fref t $ \ref -> R.runReaderT (allocChoice ref (toChoice expr)) innerEnv
 allocExpr idxs ref (SApp _ n args) = do
   env <- R.ask
 
