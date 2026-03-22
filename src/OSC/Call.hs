@@ -46,9 +46,6 @@ data Env = Env
 newtype CallM m a = CallM { run :: R.ReaderT Env (ST.StateT (State m) m) a }
   deriving (Functor, Applicative, Monad)
 
-instance MonadTrans CallM where
-  lift = CallM . lift . lift
-
 data Ident
 data Number = I32 Int | F32 Float
 
