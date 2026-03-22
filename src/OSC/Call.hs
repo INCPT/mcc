@@ -17,11 +17,10 @@ import Data.Functor.Product (Product (Pair))
 import Data.Map (Map)
 import qualified Data.Map as M
 
-data Type = TNumber | TArr Type {- length -} Int | TAbs Type Type
-  deriving Show
+data Type = TNumber | TArr Type {- length -} Int | TAbs Ident Type Type
 
-paramTypes :: Type -> [Type]
-paramTypes (TAbs t r) = t:paramTypes r
+paramTypes :: Type -> [(Ident, Type)]
+paramTypes (TAbs i t r) = (i, t):paramTypes r
 paramTypes _ = []
 
 data VType = VTNumber | VTArr Type Int
@@ -29,39 +28,46 @@ data VType = VTNumber | VTArr Type Int
 returnType :: Type -> VType
 returnType TNumber = VTNumber
 returnType (TArr t dim) = VTArr t dim
-returnType (TAbs _ r) = returnType r
+returnType (TAbs _ _ r) = returnType r
 
 data Slice = Slice { start :: Int, length :: Int, innerDims :: [Int] }
 
-data CallM a
-
--- bin ops
--- externals
--- arguments/bindings
--- selection
--- choice
-
 data Ident
 data Number
-data FuncRef
-data Any
+newtype FuncRef = FuncRef Int
+data Projection
 
-data Value a
+data Ref = RConst Number | RLocal Int | RArray Int [Int] | RFuncRef FuncRef
 
-binOp :: op -> Value Number -> Value Number -> CallM (Value Number)
-binOp = undefined
+data Op
 
-external :: Ident -> CallM (Value Any)
+--------------------------------------------------------------------------------
+
+data Env = Env
+  { ret :: Ref
+  }
+
+newtype CallM m a = CallM (R.ReaderT Env m a)
+  deriving (Functor, Applicative, Monad)
+
+ret :: Ref -> CallM m ()
+ret = undefined
+
+external :: Ident -> [Ref] -> CallM m ()
 external = undefined
 
-funcRef :: ([Value Any] -> CallM (Value Any)) -> CallM (Value FuncRef)
-funcRef = undefined
+funcRef :: Type -> CallM m () -> CallM m FuncRef
+funcRef bindings = undefined
 
-call :: Value FuncRef -> [Value Any] -> CallM (Value Any)
+call :: FuncRef -> [Ref] -> CallM m ()
 call = undefined
 
-select :: Value Any -> [Value Number] -> CallM (Value Any)
-select = undefined
+-- allocation happens here
+runCallM :: Type -> CallM m () -> m Ref
+runCallM t (CallM m) = undefined
+
+-- select :: Value Any -> [Value Number] -> CallM (Value Any)
+-- select = undefined
 
 -- data State m = State
 --   { nextArrayIdx :: Int
