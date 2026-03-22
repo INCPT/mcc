@@ -8,11 +8,10 @@ category: Compilers/Interpreters
 ghc-options: -Wall 
              -fno-warn-name-shadowing 
              -Wincomplete-uni-patterns
-             -fno-defer-type-errors
 extra-source-files:
   - README.md
-  - src/Microc/Parser/Generator.y
-  - src/Microc/Scanner/Generator.x
+    # - src/Microc/Parser/Generator.y
+    # - src/Microc/Scanner/Generator.x
 
 dependencies:
     - base >= 4.7 && < 5
@@ -40,12 +39,12 @@ default-extensions: OverloadedStrings, LambdaCase
 
 library:
   source-dirs: src
-  build-tools:
-    - alex
-    - happy
-  other-modules:
-    - Microc.Parser.Generator
-    - Microc.Scanner.Generator
+    # build-tools:
+    #   - alex
+    #   - happy
+    # other-modules:
+    # - Microc.Parser.Generator
+    # - Microc.Scanner.Generator
 
 executable:
   main: Main.hs
@@ -58,21 +57,21 @@ executable:
       - mcc
       - pretty-simple
 
-tests:
-  testall:
-    main: Testall.hs
-    source-dirs: tests
-    dependencies:
-        - tasty
-        - tasty-golden
-        - tasty-hunit
-        - mcc
-
-benchmarks:
-  bench:
-    main: Bench.hs
-    source-dirs: bench
-    dependencies:
-        - criterion
-        - mcc
-        - tasty-golden
+# tests:
+#   testall:
+#     main: Testall.hs
+#     source-dirs: tests
+#     dependencies:
+#         - tasty
+#         - tasty-golden
+#         - tasty-hunit
+#         - mcc
+# 
+# benchmarks:
+#   bench:
+#     main: Bench.hs
+#     source-dirs: bench
+#     dependencies:
+#         - criterion
+#         - mcc
+#         - tasty-golden

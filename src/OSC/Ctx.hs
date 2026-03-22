@@ -6,10 +6,9 @@
 
 module OSC.Ctx where
 
-import Control.Applicative ((<|>))
 import Data.Functor.Identity
 import Control.Monad (when)
-import Control.Monad.Trans (lift)
+import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
 import qualified Data.Map as M
@@ -176,13 +175,6 @@ data Ref = RLocal LocalRef | RFuncRef FuncRef | RArr Slice ArrayRef
 -- this is basically return value ref propagation up the binding chain
 -- the most recent returned binding (or argument) gets tagged with "write to return value ref"
 
--- type is needed for type signature in WASM/C
-funcRef :: FuncRef -> Type -> (Ref -> AllocM ()) -> AllocM ()
-funcRef = undefined
-
-arg :: Int -> AllocM Ref
-arg = undefined
-
 allocFuncRef :: AllocM FuncRef
 allocFuncRef = undefined
 
@@ -214,9 +206,18 @@ data Env = Env
   { refs :: M.Map Ident (Type, Ref)
   }
 
-data State = State
+data AState = AState
   { funcRefs :: M.Map FuncRef (Type, (Ref -> AllocM ()))
   }
+
+newtype CtxM m a = CtxM (ST.StateT AState (R.ReaderT Env m) a)
+  deriving (Functor, Applicative, Monad)
+
+instance MonadTrans CtxM where
+  lift f = CtxM $ lift $ lift f
+
+withEnv :: (Env -> Env) -> CtxM m a -> CtxM m a
+withEnv f (CtxM m) = CtxM $ ST.StateT $ \st -> R.local f (ST.runStateT m st)
 
 allocRef :: Type -> AllocM Ref
 allocRef TNumber = RLocal <$> allocLocal
@@ -226,7 +227,11 @@ allocRef (TAbs _ _) = RFuncRef <$> allocFuncRef
 computeIndex :: LocalRef -> [(Type, Index Expr)] -> AllocM ()
 computeIndex = undefined
 
-allocExpr :: [(Type, Index Expr)] -> Ref -> SExpr Expr -> R.ReaderT Env AllocM ()
+-- type is needed for type signature in WASM/C
+funcRef :: FuncRef -> Type -> ([Ref] -> Ref -> CtxM AllocM ()) -> CtxM AllocM ()
+funcRef = undefined
+
+allocExpr :: [(Type, Index Expr)] -> Ref -> SExpr Expr -> CtxM AllocM ()
 allocExpr [] (RLocal ref) (SConst n) = lift $ writeLocal ref n
 allocExpr [] (RArr slice ref) (SConst n) = lift $ writeElement ref slice n
 allocExpr [] (RArr slice ref) (SArr _ es) = sequence_
@@ -241,8 +246,6 @@ allocExpr [] (RLocal ref) (SOp op a b) = do
   lift $ callOp op aref bref ref
 allocExpr idxs ref (SExtern _ _ _) = undefined
 allocExpr [] (RFuncRef fref) (SAbs (Abs t paramNames bindings expr)) = do
-  env <- R.ask
-
   bindingRefs' <- lift $ sequence
     [ do
         ref <- allocRef (exprType bexpr)
@@ -252,23 +255,16 @@ allocExpr [] (RFuncRef fref) (SAbs (Abs t paramNames bindings expr)) = do
 
   let bindingRefs = M.fromList bindingRefs'
 
-  argRefs <- fmap M.fromList $ lift $ sequence
-    [ do
-        ref <- arg i
-        pure (paramName, (paramType, ref))
-    | (i, (paramName, paramType)) <- zip [0..] (zip paramNames (paramTypes t))
-    ]
-
-  let innerEnv = env 
-        { refs = mconcat [ bindingRefs, argRefs, env.refs ]
+  let innerEnv args env = env 
+        { refs = mconcat [ bindingRefs, env.refs ]
         }
 
-  lift $ sequence_
-    [ funcRef fr t $ \ref -> R.runReaderT (allocChoice ref (toChoice bexpr)) innerEnv
+  sequence_
+    [ funcRef fr t $ \args ref -> withEnv (innerEnv args) (allocChoice ref (toChoice bexpr))
     | ((_, bexpr), (_, (t, RFuncRef fr))) <- zip bindings bindingRefs'
     ]
 
-  lift $ funcRef fref t $ \ref -> R.runReaderT (allocChoice ref (toChoice expr)) innerEnv
+  funcRef fref t $ \args ref -> withEnv (innerEnv args) (allocChoice ref (toChoice expr))
 allocExpr idxs ref (SApp _ n args) = do
   env <- R.ask
 
@@ -312,8 +308,9 @@ allocExpr idxs ref (SApp _ n args) = do
 
             ref' ->  error $ "allocExpr: SApp: ref: " <> show ref' <> " (this is a bug)"
     e -> error $ "allocExpr: SApp: " <> show e <> " (this is a bug)"
+allocExpr _ _ _ = error "allocExpr"
 
-allocChoice :: Ref -> Choice Expr -> R.ReaderT Env AllocM ()
+allocChoice :: Ref -> Choice Expr -> CtxM AllocM ()
 allocChoice ref (CExpr idxs e) = allocExpr idxs ref e
 
 --------------------------------------------------------------------------------
