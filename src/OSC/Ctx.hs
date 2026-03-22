@@ -2,6 +2,8 @@
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE TupleSections #-}
 
 module OSC.Ctx where
 
@@ -58,6 +60,9 @@ data Expr
   | ESelect Type Expr (Index Expr)
   | ERec Type Int Ident Expr -- rec delay |prev| -> expr
   deriving Show
+
+exprType :: Expr -> Type
+exprType = undefined
 
 inlineExpr :: Ident -> Expr -> Expr -> Expr
 inlineExpr = undefined
@@ -198,9 +203,7 @@ callOp = undefined
 --------------------------------------------------------------------------------
 
 data Env = Env
-  { globalAbs :: M.Map Ident Abs
-  , localBindings :: M.Map Ident Expr
-  , funcRefs :: M.Map Ident (Type, FuncRef)
+  { refs :: M.Map Ident (Type, Ref)
   }
 
 allocRef :: Type -> AllocM Ref
@@ -222,10 +225,30 @@ allocExpr (RLocal ref) (SOp op a b) = do
   allocChoice (RLocal bref) (toChoice b)
   lift $ callOp op aref bref ref
 allocExpr ref (SExtern _ _ _) = undefined
-allocExpr (RLocal ref) (SAbs _) = do
-  -- TODO: fill in identFuncRefs with binding funcrefs (as we must do in the global scope as well)
-  -- funcRef t (allocChoice (toChoice e))
-  undefined
+allocExpr (RLocal ref) (SAbs (Abs t ns bindings e)) = mdo
+  env <- R.ask
+
+  bindingRefs <- fmap (M.fromList . mconcat) $ sequence
+    [ case exprType bexpr of
+        t@(TAbs _ _) -> do
+          -- TODO: inline args in (toChoice bexpr)
+          fr <- lift $ funcRef t $ \args ref -> R.runReaderT (allocChoice ref (toChoice bexpr)) $ env
+            { refs = bindingRefs `M.union` env.refs }
+
+          lfr <- lift $ allocLocal (LTFuncRef (paramTypes t))
+          lift $ writeFuncRef lfr fr
+
+          pure [(bname, (t, RLocal lfr))]
+        t -> do
+          ref <- lift $ allocRef t
+          pure [(bname, (t, ref))]
+    | (bname, bexpr) <- bindings
+    ]
+
+  -- TODO: inline bindingRefs in toChoice expr
+  fr <- lift $ funcRef t $ \args ref -> R.runReaderT (allocChoice ref (toChoice e)) $ env
+    { refs = bindingRefs `M.union` env.refs }
+  lift $ writeFuncRef ref fr
 allocExpr ref (SApp _ n args) = do
   env <- lift R.ask
 
