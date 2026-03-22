@@ -13,6 +13,7 @@ import Control.Monad (when)
 import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
+import Data.Functor.Product (Product (Pair))
 import Data.Map (Map)
 import qualified Data.Map as M
 
@@ -45,9 +46,6 @@ data Env = Env
 newtype CallM m a = CallM { run :: R.ReaderT Env (ST.StateT (State m) m) a }
   deriving (Functor, Applicative, Monad)
 
-instance MonadTrans CallM where
-  lift f = CallM $ lift $ lift f
-
 data Ident
 data Number = I32 Int | F32 Float
 
@@ -65,7 +63,7 @@ func t bindings f = CallM $ do
   nfr <- ST.gets (.nextFuncRef); ST.modify $ \st -> st { nextFuncRef = st.nextFuncRef + 1 }
 
   -- let a = R.runReaderT (ST.runStateT ((f undefined).run) undefined) undefined
-  let a = ST.runStateT (R.runReaderT ((f undefined).run) undefined) undefined
+  --- let a = ST.runStateT (R.runReaderT ((f undefined).run) undefined) undefined
 
   let fr = FuncRef nfr t undefined undefined
 
