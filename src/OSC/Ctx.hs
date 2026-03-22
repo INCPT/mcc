@@ -28,6 +28,9 @@ returnType TNumber = TNumber
 returnType t@(TArr _ _) = t
 returnType (TAbs _ t) = t
 
+peelType :: Type -> Int -> Type
+peelType = undefined
+
 paramTypes :: Type -> [Type]
 paramTypes TNumber = error "paramTypes: number (this is a bug)"
 paramTypes t@(TArr _ _) = error "paramTypes: array (this is a bug)"
@@ -184,14 +187,15 @@ allocFuncRef = undefined
 allocArray :: Type -> AllocM ArrayRef
 allocArray = undefined
 
-data LocalType = LTNumber | LTFuncRef [Type]
-
-allocLocal :: LocalType -> AllocM LocalRef
+allocLocal :: AllocM LocalRef
 allocLocal = undefined
 
 -- slice must be focused on a simple element here
 writeArray :: ArrayRef -> Slice -> Number -> AllocM ()
 writeArray = undefined
+
+copySlice :: ArrayRef -> LocalRef -> ArrayRef -> Slice -> AllocM ()
+copySlice = undefined
 
 writeLocal :: LocalRef -> Number -> AllocM ()
 writeLocal = undefined
@@ -209,11 +213,13 @@ data Env = Env
   }
 
 allocRef :: Type -> AllocM Ref
-allocRef TNumber = RLocal <$> allocLocal LTNumber
+allocRef TNumber = RLocal <$> allocLocal
 allocRef t@(TArr _ _) = RArr (newSlice t) <$> allocArray t
 allocRef (TAbs _ _) = RFuncRef <$> allocFuncRef
 
--- TODO: take spillover selection indices into account
+computeIndex :: LocalRef -> [(Type, Index Expr)] -> AllocM ()
+computeIndex = undefined
+
 allocExpr :: [(Type, Index Expr)] -> Ref -> SExpr Expr -> R.ReaderT Env AllocM ()
 allocExpr [] (RLocal ref) (SConst n) = lift $ writeLocal ref n
 allocExpr [] (RArr slice ref) (SConst n) = lift $ writeArray ref slice n
@@ -222,13 +228,13 @@ allocExpr [] (RArr slice ref) (SArr _ es) = sequence_
   | (i, e) <- zip [0..] es
   ]
 allocExpr [] (RLocal ref) (SOp op a b) = do
-  aref <- lift $ allocLocal LTNumber
-  bref <- lift $ allocLocal LTNumber
+  aref <- lift $ allocLocal
+  bref <- lift $ allocLocal
   allocChoice (RLocal aref) (toChoice a)
   allocChoice (RLocal bref) (toChoice b)
   lift $ callOp op aref bref ref
 allocExpr idxs ref (SExtern _ _ _) = undefined
-allocExpr _ (RFuncRef fref) (SAbs (Abs t ns bindings e)) = mdo
+allocExpr [] (RFuncRef fref) (SAbs (Abs t ns bindings e)) = mdo
   env <- R.ask
 
   bindingRefs <- fmap (M.fromList . mconcat) $ sequence
@@ -249,7 +255,7 @@ allocExpr _ (RFuncRef fref) (SAbs (Abs t ns bindings e)) = mdo
   -- TODO: inline bindingRefs in toChoice expr
   lift $ funcRef fref t $ \args ref -> R.runReaderT (allocChoice ref (toChoice e)) $ env
     { refs = bindingRefs `M.union` env.refs }
-allocExpr _ ref (SApp _ n args) = do
+allocExpr idxs ref (SApp _ n args) = do
   env <- R.ask
 
   case M.lookup n env.refs of
@@ -264,7 +270,20 @@ allocExpr _ ref (SApp _ n args) = do
 
       case drop (length args) (paramTypes t) of
         -- full application
-        [] -> lift $ call fr argRefs ref
+        [] -> case idxs of
+          -- no spillover indices
+          [] -> lift $ call fr argRefs ref
+          idxs' -> do
+            let t' = peelType t (length idxs')
+            lift $ do
+              tempRef <- allocArray t'
+              call fr argRefs (RArr (newSlice t') tempRef)
+              lidx <- allocLocal
+              computeIndex lidx idxs'
+
+              case ref of
+                RArr slice toRef -> copySlice tempRef lidx toRef slice
+                e -> error $ "allocExpr: SApp: RArr: " <> show e <> " (this is a bug)"
 
         params' -> lift $ do
           case ref of
