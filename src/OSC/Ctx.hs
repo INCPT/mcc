@@ -148,6 +148,16 @@ elimConstIndices (CChoice t chs (IdxVar idx)) = CChoice t (map elimConstIndices 
 toChoice :: Expr -> Choice Expr
 toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
 
+-- call ------------------------------------------------------------------------
+
+data CallM a = CallM a
+
+data Value
+
+-- if not in a return context, allocs one
+func :: Type -> ([Ref] -> Value) -> CallM FuncRef
+func = undefined
+
 -- array ctx -------------------------------------------------------------------
 
 newtype AllocM a = AllocM (ST.State () a)
@@ -206,8 +216,11 @@ data Env = Env
   { refs :: M.Map Ident (Type, Ref)
   }
 
+newtype Arg = Arg Int deriving Show
+
 data AState = AState
-  { funcRefs :: M.Map FuncRef (Type, (Ref -> AllocM ()))
+  { funcRefs :: M.Map FuncRef (Type, [Arg], AllocM ())
+  , argIdx :: Int
   }
 
 newtype CtxM m a = CtxM (ST.StateT AState (R.ReaderT Env m) a)
@@ -229,7 +242,13 @@ computeIndex = undefined
 
 -- type is needed for type signature in WASM/C
 funcRef :: FuncRef -> Type -> ([Ref] -> Ref -> CtxM AllocM ()) -> CtxM AllocM ()
-funcRef = undefined
+funcRef fr t f = CtxM $ do
+  st <- ST.get
+  sequence_
+    [ undefined
+    | paramType <- paramTypes t
+    ]
+  undefined
 
 allocExpr :: [(Type, Index Expr)] -> Ref -> SExpr Expr -> CtxM AllocM ()
 allocExpr [] (RLocal ref) (SConst n) = lift $ writeLocal ref n
@@ -255,8 +274,15 @@ allocExpr [] (RFuncRef fref) (SAbs (Abs t paramNames bindings expr)) = do
 
   let bindingRefs = M.fromList bindingRefs'
 
-  let innerEnv args env = env 
-        { refs = mconcat [ bindingRefs, env.refs ]
+  let innerEnv argRefs env = env 
+        { refs = mconcat
+            [ bindingRefs
+            , M.fromList
+                [ (paramName, (paramType, argRef))
+                | (argRef, (paramName, paramType)) <- zip argRefs (zip paramNames (paramTypes t))
+                ]
+            , env.refs
+            ]
         }
 
   sequence_
@@ -267,6 +293,8 @@ allocExpr [] (RFuncRef fref) (SAbs (Abs t paramNames bindings expr)) = do
   funcRef fref t $ \args ref -> withEnv (innerEnv args) (allocChoice ref (toChoice expr))
 allocExpr idxs ref (SApp _ n args) = do
   env <- R.ask
+   
+   -- TODO if no args just use ref
 
   case M.lookup n env.refs of
     Just (t, RFuncRef fr) -> do

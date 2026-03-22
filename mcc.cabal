@@ -43,6 +43,7 @@ library
       Microc.Utils
       OSC.AST
       OSC.Box
+      OSC.Call
       OSC.Ctx
   other-modules:
       Paths_mcc
