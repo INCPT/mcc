@@ -212,6 +212,7 @@ allocRef TNumber = RLocal <$> allocLocal LTNumber
 allocRef t@(TArr _ _) = RArr (newSlice t) <$> allocArray t
 allocRef (TAbs _ _) = RFuncRef <$> allocFuncRef
 
+-- TODO: take spillover selection indices into account
 allocExpr :: Ref -> SExpr Expr -> R.ReaderT Env AllocM ()
 allocExpr (RLocal ref) (SConst n) = lift $ writeLocal ref n
 allocExpr (RArr slice ref) (SConst n) = lift $ writeArray ref slice n
