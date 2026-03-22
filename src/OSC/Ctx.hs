@@ -2,7 +2,6 @@
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedRecordDot #-}
-{-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE TupleSections #-}
 
 module OSC.Ctx where
@@ -235,26 +234,26 @@ allocExpr [] (RLocal ref) (SOp op a b) = do
   allocChoice (RLocal bref) (toChoice b)
   lift $ callOp op aref bref ref
 allocExpr idxs ref (SExtern _ _ _) = undefined
-allocExpr [] (RFuncRef fref) (SAbs (Abs t ns bindings e)) = mdo
+allocExpr [] (RFuncRef fref) (SAbs (Abs t paramNames bindings expr)) = do
   env <- R.ask
 
-  bindingRefs <- fmap (M.fromList . mconcat) $ sequence
-    [ case exprType bexpr of
-        t@(TAbs _ _) -> do
-          -- TODO: inline args in (toChoice bexpr)
-          fr <- lift allocFuncRef
-          lift $ funcRef fr t $ \args ref -> R.runReaderT (allocChoice ref (toChoice bexpr)) $ env
-            { refs = bindingRefs `M.union` env.refs }
-
-          pure [(bname, (t, RFuncRef fr))]
-        t -> do
-          ref <- lift $ allocRef t
-          pure [(bname, (t, ref))]
+  bindingRefs' <- sequence
+    [ do
+        ref <- lift $ allocRef (exprType bexpr)
+        pure (bname, (t, ref))
     | (bname, bexpr) <- bindings
     ]
 
+  let bindingRefs = M.fromList bindingRefs'
+
+  lift $ sequence_
+    [ funcRef fr t $ \args ref -> R.runReaderT (allocChoice ref (toChoice bexpr)) $ env
+        { refs = bindingRefs `M.union` env.refs }
+    | ((_, bexpr), (_, (t, RFuncRef fr))) <- zip bindings bindingRefs'
+    ]
+
   -- TODO: inline bindingRefs in toChoice expr
-  lift $ funcRef fref t $ \args ref -> R.runReaderT (allocChoice ref (toChoice e)) $ env
+  lift $ funcRef fref t $ \args ref -> R.runReaderT (allocChoice ref (toChoice expr)) $ env
     { refs = bindingRefs `M.union` env.refs }
 allocExpr idxs ref (SApp _ n args) = do
   env <- R.ask
