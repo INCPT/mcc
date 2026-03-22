@@ -9,6 +9,7 @@ module OSC.Ctx where
 
 import Control.Applicative ((<|>))
 import Data.Functor.Identity
+import Control.Monad (when)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans (lift)
 import qualified Control.Monad.Reader as R
@@ -274,10 +275,11 @@ allocExpr idxs ref (SApp _ n args) = do
           -- no spillover indices
           [] -> lift $ call fr argRefs ref
           idxs' -> do
-            let t' = peelType t (length idxs')
+            let tempType = peelType t (length idxs')
+
             lift $ do
-              tempRef <- allocArray t'
-              call fr argRefs (RArr (newSlice t') tempRef)
+              tempRef <- allocArray tempType
+              call fr argRefs (RArr (newSlice tempType) tempRef)
               lidx <- allocLocal
               computeIndex lidx idxs'
 
@@ -286,6 +288,9 @@ allocExpr idxs ref (SApp _ n args) = do
                 e -> error $ "allocExpr: SApp: RArr: " <> show e <> " (this is a bug)"
 
         params' -> lift $ do
+          when (not $ null idxs) $
+            error $ "allocExpr: SApp: curried function with spillover indices: (this is a bug)"
+
           case ref of
             RFuncRef curriedFr -> 
               funcRef curriedFr (TAbs params' (returnType t)) $ \curriedArgRefs ref' ->
