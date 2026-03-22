@@ -178,8 +178,11 @@ data Ref = RLocal LocalRef | RFuncRef FuncRef | RArr Slice ArrayRef
 -- the most recent returned binding (or argument) gets tagged with "write to return value ref"
 
 -- type is needed for type signature in WASM/C
-funcRef :: FuncRef -> Type -> ([Ref] -> Ref -> AllocM ()) -> AllocM ()
+funcRef :: FuncRef -> Type -> (Ref -> AllocM ()) -> AllocM ()
 funcRef = undefined
+
+arg :: Int -> AllocM Ref
+arg = undefined
 
 allocFuncRef :: AllocM FuncRef
 allocFuncRef = undefined
@@ -191,8 +194,8 @@ allocLocal :: AllocM LocalRef
 allocLocal = undefined
 
 -- slice must be focused on a simple element here
-writeArray :: ArrayRef -> Slice -> Number -> AllocM ()
-writeArray = undefined
+writeElement :: ArrayRef -> Slice -> Number -> AllocM ()
+writeElement = undefined
 
 copySlice :: ArrayRef -> LocalRef -> ArrayRef -> Slice -> AllocM ()
 copySlice = undefined
@@ -222,7 +225,7 @@ computeIndex = undefined
 
 allocExpr :: [(Type, Index Expr)] -> Ref -> SExpr Expr -> R.ReaderT Env AllocM ()
 allocExpr [] (RLocal ref) (SConst n) = lift $ writeLocal ref n
-allocExpr [] (RArr slice ref) (SConst n) = lift $ writeArray ref slice n
+allocExpr [] (RArr slice ref) (SConst n) = lift $ writeElement ref slice n
 allocExpr [] (RArr slice ref) (SArr _ es) = sequence_
   [ allocChoice (RArr (focusSlice i slice) ref) (toChoice e)
   | (i, e) <- zip [0..] es
@@ -247,13 +250,13 @@ allocExpr [] (RFuncRef fref) (SAbs (Abs t paramNames bindings expr)) = do
   let bindingRefs = M.fromList bindingRefs'
 
   lift $ sequence_
-    [ funcRef fr t $ \args ref -> R.runReaderT (allocChoice ref (toChoice bexpr)) $ env
+    [ funcRef fr t $ \ref -> R.runReaderT (allocChoice ref (toChoice bexpr)) $ env
         { refs = bindingRefs `M.union` env.refs }
     | ((_, bexpr), (_, (t, RFuncRef fr))) <- zip bindings bindingRefs'
     ]
 
   -- TODO: inline bindingRefs in toChoice expr
-  lift $ funcRef fref t $ \args ref -> R.runReaderT (allocChoice ref (toChoice expr)) $ env
+  lift $ funcRef fref t $ \ref -> R.runReaderT (allocChoice ref (toChoice expr)) $ env
     { refs = bindingRefs `M.union` env.refs }
 allocExpr idxs ref (SApp _ n args) = do
   env <- R.ask
@@ -292,8 +295,10 @@ allocExpr idxs ref (SApp _ n args) = do
 
           case ref of
             RFuncRef curriedFr -> 
-              funcRef curriedFr (TAbs params' (returnType t)) $ \curriedArgRefs ref' ->
+              funcRef curriedFr (TAbs params' (returnType t)) $ \ref' -> do
+                curriedArgRefs <- sequence [ arg i | (i, _) <- zip [0..] params' ]
                 call fr (argRefs <> curriedArgRefs) ref'
+
             ref' ->  error $ "allocExpr: SApp: ref: " <> show ref' <> " (this is a bug)"
     e -> error $ "allocExpr: SApp: " <> show e <> " (this is a bug)"
 
