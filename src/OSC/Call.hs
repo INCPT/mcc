@@ -16,11 +16,12 @@ import qualified Control.Monad.State as ST
 import Data.Functor.Product (Product (Pair))
 import Data.Map (Map)
 import qualified Data.Map as M
+import Control.Monad.Morph (MFunctor, hoist)
 
-data Type = TNumber | TArr Type {- length -} Int | TAbs Ident Type Type
+data Type = TNumber | TArr Type {- length -} Int | TAbs Type Type
 
-paramTypes :: Type -> [(Ident, Type)]
-paramTypes (TAbs i t r) = (i, t):paramTypes r
+paramTypes :: Type -> [Type]
+paramTypes (TAbs t r) = t:paramTypes r
 paramTypes _ = []
 
 data VType = VTNumber | VTArr Type Int
@@ -28,14 +29,13 @@ data VType = VTNumber | VTArr Type Int
 returnType :: Type -> VType
 returnType TNumber = VTNumber
 returnType (TArr t dim) = VTArr t dim
-returnType (TAbs _ _ r) = returnType r
+returnType (TAbs _ r) = returnType r
 
 data Slice = Slice { start :: Int, length :: Int, innerDims :: [Int] }
 
 data Ident
 data Number
 newtype FuncRef = FuncRef Int
-data Projection
 
 data Ref = RConst Number | RLocal Int | RArray Int [Int] | RFuncRef FuncRef
 
@@ -48,23 +48,29 @@ data Env = Env
   }
 
 newtype CallM m a = CallM (R.ReaderT Env m a)
-  deriving (Functor, Applicative, Monad)
+  deriving (Functor, Applicative, Monad, MonadTrans, MFunctor)
 
 ret :: Ref -> CallM m ()
 ret = undefined
 
+focus :: Int -> CallM m () -> CallM m ()
+focus = undefined
+
 external :: Ident -> [Ref] -> CallM m ()
 external = undefined
 
-funcRef :: Type -> CallM m () -> CallM m FuncRef
-funcRef bindings = undefined
+funcRef :: Type -> ([Ref] -> CallM m ()) -> CallM m FuncRef
+funcRef = undefined
 
 call :: FuncRef -> [Ref] -> CallM m ()
 call = undefined
 
 -- allocation happens here
-runCallM :: Type -> CallM m () -> m Ref
+runCallM :: Type -> CallM m () -> CallM m Ref
 runCallM t (CallM m) = undefined
+
+possible :: (Env -> Env) -> CallM (R.Reader Env) a -> CallM (R.Reader Env) a
+possible f = hoist (R.local f)
 
 -- select :: Value Any -> [Value Number] -> CallM (Value Any)
 -- select = undefined

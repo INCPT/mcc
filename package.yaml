@@ -20,6 +20,7 @@ dependencies:
     - array
     - cereal
     - containers
+    - mmorph
     - text
     - string-conversions
     - deepseq

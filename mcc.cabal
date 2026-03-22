@@ -63,6 +63,7 @@ library
     , directory
     , filepath
     , megaparsec
+    , mmorph
     , mtl
     , parser-combinators
     , prettyprinter
@@ -96,6 +97,7 @@ executable mcc
     , filepath
     , mcc
     , megaparsec
+    , mmorph
     , mtl
     , optparse-applicative
     , parser-combinators
