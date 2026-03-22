@@ -51,6 +51,7 @@ data Expr
   = EConst Number
   | EOp Op Expr Expr -- both args and the result are simple types
   | EArr Type [Expr]
+  | EVar Type Ident
 
   | EAbs Abs
   | EApp Type Ident [Expr]
@@ -164,6 +165,8 @@ focusSlice = undefined
 
 data Ref = RLocal LocalRef | RArr Slice ArrayRef
 
+data Arg = Arg Int
+
 -- TODO: optimization is performed on the Choice datatype
 
 -- TODO: alignment in AllocM!
@@ -173,7 +176,7 @@ data Ref = RLocal LocalRef | RArr Slice ArrayRef
 -- the most recent returned binding (or argument) gets tagged with "write to return value ref"
 
 -- type is needed for type signature in WASM/C
-funcRef :: Type -> ([Ref] -> Ref -> AllocM ()) -> AllocM FuncRef
+funcRef :: Type -> ([Arg] -> Ref -> AllocM ()) -> AllocM FuncRef
 funcRef = undefined
 
 allocArray :: Type -> AllocM ArrayRef
