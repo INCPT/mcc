@@ -269,8 +269,8 @@ allocExpr ref (SApp _ n args) = do
             RFuncRef curriedFr -> 
               funcRef curriedFr (TAbs params' (returnType t)) $ \curriedArgRefs ref' ->
                 call fr (argRefs <> curriedArgRefs) ref'
-            ref' ->  error $ "allocExpr: SApp: ref: " <> show ref'
-    e -> error $ "allocExpr: SApp: " <> show e
+            ref' ->  error $ "allocExpr: SApp: ref: " <> show ref' <> " (this is a bug)"
+    e -> error $ "allocExpr: SApp: " <> show e <> " (this is a bug)"
 
 allocChoice :: Ref -> Choice Expr -> R.ReaderT Env AllocM ()
 allocChoice ref (CExpr _ e) = allocExpr ref e
