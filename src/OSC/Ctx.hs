@@ -148,7 +148,11 @@ elimConstIndices (CChoice t chs (IdxVar idx)) = CChoice t (map elimConstIndices 
 toChoice :: Expr -> Choice Expr
 toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
 
+--------------------------------------------------------------------------------
+
 -- call ------------------------------------------------------------------------
+
+{-
 
 data CallM a = CallM a
 
@@ -369,3 +373,5 @@ e2 = ESelect (t [3, 2]) (
         ])
     (IdxConst 1))
   (IdxConst 1)
+
+-}

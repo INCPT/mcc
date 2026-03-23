@@ -82,7 +82,6 @@ focusLensTo i l = l { to = i:l.to }
 data Env = Env {
   typ :: Type,
   ret :: Ref,
-  refs :: Map Ident Ref,
   lens :: Lens
 }
 
@@ -108,7 +107,7 @@ data IRF n
 type IR = Free IRF
 type IRT = FreeT IRF
 
-data IIRF n
+data LIR n
   = IFuncRef FuncRef
   | IAlloc Type Bool (Ref -> n)
   | IArg Int Type (Ref -> n)
@@ -120,7 +119,6 @@ data IIRF n
   | ICall n [n] Ref n
   deriving (Functor)
 
--- Smart constructors
 alloc :: Type -> AllocRegion -> IR Ref
 alloc t b = liftF (Alloc t b id)
 
@@ -211,17 +209,20 @@ select ir ref = TF.hoistFreeT (R.local $ \env -> env { lens = focusLensFrom (ref
 focus :: Int -> IRT (R.Reader Env) a -> IRT (R.Reader Env) a
 focus i = TF.hoistFreeT $ R.local $ \env -> env { lens = focusLensTo i env.lens }
 
+choice :: [IRT (R.Reader Env) ()] -> Ref -> IRT (R.Reader Env) ()
+choice = undefined
+
 allocAndCall :: Type -> AllocRegion -> IRT (R.Reader Env) () -> IRT (R.Reader Env) Ref
-allocAndCall t region ir = TF.FreeT $ pure $ TF.Free $ Alloc t region $ \ref -> TF.FreeT $ R.local (fenv ref) $ TF.runFreeT (ir >> pure ref)
+allocAndCall t region ir = TF.FreeT $ pure $ TF.Free $ Alloc t region $ \ref -> TF.FreeT $ R.local (const $ env ref) $ TF.runFreeT (ir >> pure ref)
   where
-    fenv ref env = env {
+    env ref = Env {
       typ = t,
       ret = ref,
       lens = Lens { from = [], to = [] }
     }
 
-funcRef :: IRT (R.Reader Env) Ref -> IRT (R.Reader Env) ()
-funcRef ir = TF.FreeT $ TF.runFreeT (ir >>= retRef)
+funcRef :: IRT (R.Reader Env) (Either Number Ref) -> IRT (R.Reader Env) ()
+funcRef ir = TF.FreeT $ TF.runFreeT (ir >>= either retVal retRef)
 
 --------------------------------------------------------------------------------
 
@@ -229,22 +230,22 @@ newtype CallM m a = CallM { callM :: R.ReaderT Env (ST.StateT Mut m) a }
   deriving (Functor, Applicative, Monad) -- , MonadTrans, MFunctor)
 
 -- this doesn't need to be here
-withBindings :: MonadFix m => [(Ident, CallM m Ref)] -> CallM m () -> CallM m ()
-withBindings bs f = CallM $ mdo
-  bsRefs <- fmap M.fromList $ sequence
-    [ do
-        r <- R.local (\env -> env { refs = bsRefs <> env.refs }) b.callM
-        pure (i, r)
-    | (i, b) <- bs
-    ]
-
-  R.local (\env -> env { refs = bsRefs <> env.refs }) f.callM
-
--- this doesn't need to be here
-capture :: Monad m => Ident -> CallM m Ref
-capture n = CallM $ R.asks (M.lookup n . (.refs)) >>= \case
-  Just ref -> pure ref
-  Nothing -> error "capture: no binding (this is a bug)"
-
-external :: Ident -> [Ref] -> CallM m ()
-external = undefined
+-- withBindings :: MonadFix m => [(Ident, CallM m Ref)] -> CallM m () -> CallM m ()
+-- withBindings bs f = CallM $ mdo
+--   bsRefs <- fmap M.fromList $ sequence
+--     [ do
+--         r <- R.local (\env -> env { refs = bsRefs <> env.refs }) b.callM
+--         pure (i, r)
+--     | (i, b) <- bs
+--     ]
+-- 
+--   R.local (\env -> env { refs = bsRefs <> env.refs }) f.callM
+-- 
+-- -- this doesn't need to be here
+-- capture :: Monad m => Ident -> CallM m Ref
+-- capture n = CallM $ R.asks (M.lookup n . (.refs)) >>= \case
+--   Just ref -> pure ref
+--   Nothing -> error "capture: no binding (this is a bug)"
+-- 
+-- external :: Ident -> [Ref] -> CallM m ()
+-- external = undefined
