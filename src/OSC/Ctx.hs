@@ -98,27 +98,29 @@ runStack = flip ST.evalState []
 
 newtype FuncRef = FuncRef Int deriving (Eq, Ord, Show)
 
-data SExpr idx
+data SExpr
   = SConst Number
-  | SArr Type [Choice idx]
-  | SOp Op (Choice idx) (Choice idx)
-  | SAbs Type {- bindings -} [(Ident, Choice idx)] (Choice idx)
-  | SApp Type Ident [Choice idx]
-  | SExtern Type Ident [Choice idx]
+  | SArr Type [Choice]
+  | SOp Op Choice Choice
+  | SAbs Type {- bindings -} [(Ident, Choice)] Choice
+
+  | SApp Type Ident [Choice]
+  | SExtern Type Ident [Choice]
+
   | SFuncRef FuncRef
   deriving (Show)
 
-data Choice idx
-  = CChoice Type [Choice idx] idx
-  | CExpr [(Type, Index (Choice idx))] (SExpr idx) -- selection indices that flow into the inner expression
+data Choice
+  = CChoice Type [Choice] (Index Choice)
+  | CExpr [(Type, Index (Choice))] SExpr -- selection indices that flow into the inner expression
   deriving (Show)
 
 traverseChoice
   :: Monad f
-  => (Choice idx -> f (Choice idx))
-  -> (SExpr idx -> f (SExpr idx))
-  -> Choice idx
-  -> f (Choice idx)
+  => (Choice -> f Choice)
+  -> (SExpr -> f SExpr)
+  -> Choice
+  -> f Choice
 traverseChoice fChoice fSExpr = go
   where
     go (CChoice t choices idx) = do
@@ -137,13 +139,16 @@ traverseChoice fChoice fSExpr = go
     goSExpr (SAbs t bs c) = SAbs t <$> traverse (sequenceA . fmap go) bs <*> go c
     goSExpr (SApp t n cs) = SApp t n <$> traverse go cs
     goSExpr (SExtern t n cs) = SExtern t n <$> traverse go cs
+    goSExpr (SFuncRef fr) = pure (SFuncRef fr)
 
-toC :: Monad m => SExpr (Index Expr) -> StackM (Type, Index Expr) m (Choice (Index Expr))
+--------------------------------------------------------------------------------
+
+toC :: Monad m => SExpr -> StackM (Type, Index Expr) m Choice
 toC e = do
   idxs <- ST.get
   pure $ CExpr (map (second (fmap toChoice)) idxs) e
 
-choiceTree :: Monad m => Expr -> StackM (Type, Index Expr) m (Choice (Index Expr))
+choiceTree :: Monad m => Expr -> StackM (Type, Index Expr) m Choice
 choiceTree (EConst n) = toC (SConst n)
 choiceTree (EOp op a b) = toC (SOp op (toChoice a) (toChoice b))
 choiceTree (EExtern t n es) = toC (SExtern t n $ map toChoice es)
@@ -155,7 +160,7 @@ choiceTree (EArr t es) = do
     Just (t, idx) -> do
       es' <- traverse choiceTree es
       push (t, idx)
-      pure $ CChoice t es' idx
+      pure $ CChoice t es' (fmap toChoice idx)
     Nothing -> pure $ CExpr [] (SArr t $ map toChoice es)
 choiceTree (ESelect t e idx) = do
   push (t, idx)
@@ -164,21 +169,21 @@ choiceTree (ESelect t e idx) = do
   pure c
 choiceTree (ERec _ _ _ e) = choiceTree e -- TODO: need to inline ident with delay boxes
 
-elimIndices :: [(Type, Index (Choice (Index Expr)))] -> [(Type, Index (Choice Expr))]
+elimIndices :: [(Type, Index Choice)] -> [(Type, Index Choice)]
 elimIndices = map (\(t, idx) -> (t, fmap elimConstIndices idx))
 
 -- TODO: optimization, cluster generation and so on go here
-elimConstIndices :: Choice (Index Expr) -> Choice Expr
+elimConstIndices :: Choice -> Choice
 elimConstIndices (CExpr idxs (SConst n)) = CExpr (elimIndices idxs) (SConst n)
 elimConstIndices (CExpr idxs (SApp t n es)) = CExpr (elimIndices idxs) (SApp t n $ map elimConstIndices es)
 elimConstIndices (CExpr idxs (SExtern t n es)) = CExpr (elimIndices idxs) (SExtern t n $ map elimConstIndices es)
 elimConstIndices (CExpr idxs (SArr t es)) = CExpr (elimIndices idxs) (SArr t $ map elimConstIndices es)
 elimConstIndices (CChoice _ chs (IdxConst idx)) = elimConstIndices (chs !! idx)
-elimConstIndices (CChoice t chs (IdxVar idx)) = CChoice t (map elimConstIndices chs) idx
+elimConstIndices (CChoice t chs idx) = CChoice t (map elimConstIndices chs) idx
 
 elimConstIndices _ = undefined
 
-toChoice :: Expr -> Choice (Index Expr)
+toChoice :: Expr -> Choice
 toChoice = flip ST.evalState [] . choiceTree
 
 -- toChoice :: Expr -> Choice Expr
@@ -186,25 +191,25 @@ toChoice = flip ST.evalState [] . choiceTree
 
 --------------------------------------------------------------------------------
 
-data AbsEnv = AbsEnv {
-  absMap :: Map FuncRef (Type, [(Ident, Choice Expr)], Choice Expr),
-  nextFuncRef :: Int
-}
+data AbsEnv = AbsEnv
+  { absMap :: Map FuncRef (Type, [(Ident, Choice)], Choice)
+  , nextFuncRef :: Int
+  }
 
-gatherAbstractions :: Choice Expr -> ST.State AbsEnv (Choice Expr)
-gatherAbstractions = traverseChoice fChoice pure
+gatherAbstractions :: Choice -> ST.State AbsEnv Choice
+gatherAbstractions = traverseChoice pure fSExpr
   where
-    fChoice :: Choice Expr -> ST.State AbsEnv (Choice Expr)
-    fChoice (CExpr idxs (SAbs t bs body)) = do
+    fSExpr :: SExpr -> ST.State AbsEnv SExpr
+    fSExpr (SAbs t bs body) = do
       fr <- FuncRef <$> ST.gets (.nextFuncRef)
 
-      ST.modify $ \st -> st {
-        nextFuncRef = st.nextFuncRef + 1,
-        absMap = M.insert fr (t, bs, body) st.absMap
-      }
+      ST.modify $ \st -> st
+        { nextFuncRef = st.nextFuncRef + 1
+        , absMap = M.insert fr (t, bs, body) st.absMap
+        }
 
-      pure $ CExpr idxs (SFuncRef fr)
-    fChoice ch = pure ch
+      pure $ SFuncRef fr
+    fSExpr e = pure e
 
 -- call ------------------------------------------------------------------------
 
