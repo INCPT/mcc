@@ -128,7 +128,8 @@ funcref :: IR (ST.State Mut) Ref -> IR (ST.State Mut) Ref
 funcref = undefined
 
 higher :: Applicative m => F.Free IRF () -> FreeT IRF m ()
-higher = undefined
+higher (F.Pure a) = FreeT $ pure $ Pure a
+higher (F.Free f) = FreeT $ pure $ Free $ fmap higher f
 
 lower :: IR (ST.State Mut) () -> ST.State Mut (F.Free IRF ())
 lower (FreeT m) = do
