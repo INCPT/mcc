@@ -120,5 +120,7 @@ funcRef t f = CallM $ do
 -- call = undefined
 
 -- TODO: here we must know the captured values
+-- in graph code if a function returns a function we can just fold everything inside the returned function (everything is immutable)
+-- in sync code we'll need to allocate the Ref in a the global area
 allocAndCall :: MonadCodegen m => Type -> CallM m () -> CallM m Ref
 allocAndCall t (CallM m) = undefined
