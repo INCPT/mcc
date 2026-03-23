@@ -98,9 +98,9 @@ data IIRF n
   deriving (Functor)
 
 -- Smart constructors
--- alloc :: Type -> Bool -> IR m Ref
--- alloc t b = liftF (Alloc t b id)
--- 
+alloc :: Type -> Bool -> F.Free IRF Ref
+alloc t b = liftF (Alloc t b id)
+
 -- arg :: Int -> Type -> IR m Ref
 -- arg i t = liftF (Arg i t id)
 -- 
@@ -123,6 +123,14 @@ data Mut = Mut
   }
 
 data Expr
+
+interpret :: F.Free IRF () -> ST.State Mut (F.Free IRF ())
+interpret (F.Pure a) = pure $ F.Pure a
+interpret (F.Free (Abs t body)) = do
+  idx <- ST.gets (.nextFuncRefIdx); ST.modify $ \st -> st { nextFuncRefIdx = st.nextFuncRefIdx + 1 }
+  lbody <- interpret body
+  ST.modify $ \st -> st { funcRefs = M.insert (FuncRef idx) lbody st.funcRefs }
+  pure lbody
 
 funcref :: IR (ST.State Mut) Ref -> IR (ST.State Mut) Ref
 funcref = undefined
