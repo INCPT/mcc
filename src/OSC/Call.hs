@@ -19,8 +19,7 @@ import qualified Control.Monad.State as ST
 import Data.Functor.Product (Product (Pair))
 import Data.Map (Map)
 import qualified Data.Map as M
-import qualified Control.Monad.Free as F
-import Control.Monad.Trans.Free
+import Control.Monad.Free (Free (Free, Pure), liftF)
 
 data Type = TNumber | TArr Type {- length -} Int | TAbs Type Type
 
@@ -83,7 +82,7 @@ data IRF n
   | Abs Type n
   deriving (Functor)
 
-type IR = FreeT IRF
+type IR = Free IRF
 
 data IIRF n
   = IRef Ref
@@ -98,7 +97,7 @@ data IIRF n
   deriving (Functor)
 
 -- Smart constructors
-alloc :: Type -> Bool -> F.Free IRF Ref
+alloc :: Type -> Bool -> IR Ref
 alloc t b = liftF (Alloc t b id)
 
 -- arg :: Int -> Type -> IR m Ref
@@ -117,54 +116,23 @@ alloc t b = liftF (Alloc t b id)
 -- call r rs r' = liftF (Call r rs r' ())
 
 data Mut = Mut
-  { funcRefs :: Map FuncRef (F.Free IRF ())
+  { funcRefs :: Map FuncRef (IR ())
   , nextFuncRefIdx :: Int
   , nextAlloc :: Int
   }
 
 data Expr
 
-interpret :: F.Free IRF () -> ST.State Mut (F.Free IRF ())
-interpret (F.Pure a) = pure $ F.Pure a
-interpret (F.Free (Abs t body)) = do
+interpret :: IR () -> ST.State Mut (IR ())
+interpret (Pure a) = pure $ Pure a
+interpret (Free (Abs t body)) = do
   idx <- ST.gets (.nextFuncRefIdx); ST.modify $ \st -> st { nextFuncRefIdx = st.nextFuncRefIdx + 1 }
   lbody <- interpret body
   ST.modify $ \st -> st { funcRefs = M.insert (FuncRef idx) lbody st.funcRefs }
-  pure lbody
+  pure $ liftF $ Ref $ RFuncRef $ FuncRef idx
+interpret (Free f) = undefined
 
-funcref :: IR (ST.State Mut) Ref -> IR (ST.State Mut) Ref
-funcref = undefined
-
-higher :: Applicative m => F.Free IRF () -> FreeT IRF m ()
-higher (F.Pure a) = FreeT $ pure $ Pure a
-higher (F.Free f) = FreeT $ pure $ Free $ fmap higher f
-
-lower :: IR (ST.State Mut) () -> ST.State Mut (F.Free IRF ())
-lower (FreeT m) = do
-  m' <- m
-
-  case m' of
-    Pure () -> pure $ F.Pure ()
-    Free (Abs t body) -> do
-      idx <- ST.gets (.nextFuncRefIdx); ST.modify $ \st -> st { nextFuncRefIdx = st.nextFuncRefIdx + 1 }
-      lbody <- lower body
-      ST.modify $ \st -> st { funcRefs = M.insert (FuncRef idx) lbody st.funcRefs }
-      pure lbody
-      
-
-lower _ = undefined
-
--- bla :: Expr -> ST.StateT Mut (R.Reader Env) IR
--- bla = undefined
--- 
--- lol :: ST.StateT Mut (R.Reader Env) IR -> ST.StateT Mut (R.Reader Env) IR
--- lol m = do
---   idx <- ST.gets (.nextFuncRefIdx); ST.modify $ \st -> st { nextFuncRefIdx = st.nextFuncRefIdx + 1 }
--- 
---   ir <- m
--- 
---   ST.modify $ \st -> st { funcRefs = M.insert (FuncRef idx) ir st.funcRefs }
---   pure ir
+--------------------------------------------------------------------------------
 
 newtype CallM m a = CallM { callM :: R.ReaderT Env (ST.StateT Mut m) a }
   deriving (Functor, Applicative, Monad) -- , MonadTrans, MFunctor)
