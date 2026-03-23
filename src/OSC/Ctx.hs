@@ -8,6 +8,8 @@ module OSC.Ctx where
 
 import Data.Bifunctor (second)
 import Data.Functor.Identity
+import Data.Map (Map)
+import qualified Data.Map as M
 import Control.Monad (when)
 import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
@@ -94,6 +96,8 @@ runStack = flip ST.evalState []
 -- ** if not possible, then demand clamp/wrap in dynamic select index expressions
 -- * TODO: in the CallM monad, arguments that get written to the output can pass their array ctx slice to the argument expression, so no need for copy
 
+newtype FuncRef = FuncRef Int deriving (Eq, Ord, Show)
+
 data SExpr idx
   = SConst Number
   | SArr Type [Choice idx]
@@ -101,6 +105,7 @@ data SExpr idx
   | SAbs Type {- bindings -} [(Ident, Choice idx)] (Choice idx)
   | SApp Type Ident [Choice idx]
   | SExtern Type Ident [Choice idx]
+  | SFuncRef FuncRef
   deriving (Show)
 
 data Choice idx
@@ -173,17 +178,6 @@ elimConstIndices (CChoice t chs (IdxVar idx)) = CChoice t (map elimConstIndices 
 
 elimConstIndices _ = undefined
 
--- Version using traverseChoice
-elimConstIndices' :: Choice (Index Expr) -> Choice Expr
-elimConstIndices' c = runIdentity $ traverseChoice fChoice fSExpr c
-  where
-    fChoice :: Choice (Index Expr) -> Identity (Choice (Index Expr))
-    fChoice (CChoice _ chs (IdxConst idx)) = pure (chs !! idx)
-    fChoice ch = pure ch
-
-    fSExpr :: SExpr (Index Expr) -> Identity (SExpr (Index Expr))
-    fSExpr = pure
-
 toChoice :: Expr -> Choice (Index Expr)
 toChoice = flip ST.evalState [] . choiceTree
 
@@ -191,6 +185,26 @@ toChoice = flip ST.evalState [] . choiceTree
 -- toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
 
 --------------------------------------------------------------------------------
+
+data AbsEnv = AbsEnv {
+  absMap :: Map FuncRef (Type, [(Ident, Choice Expr)], Choice Expr),
+  nextFuncRef :: Int
+}
+
+gatherAbstractions :: Choice Expr -> ST.State AbsEnv (Choice Expr)
+gatherAbstractions = traverseChoice fChoice pure
+  where
+    fChoice :: Choice Expr -> ST.State AbsEnv (Choice Expr)
+    fChoice (CExpr idxs (SAbs t bs body)) = do
+      fr <- FuncRef <$> ST.gets (.nextFuncRef)
+
+      ST.modify $ \st -> st {
+        nextFuncRef = st.nextFuncRef + 1,
+        absMap = M.insert fr (t, bs, body) st.absMap
+      }
+
+      pure $ CExpr idxs (SFuncRef fr)
+    fChoice ch = pure ch
 
 -- call ------------------------------------------------------------------------
 
