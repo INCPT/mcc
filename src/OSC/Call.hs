@@ -21,6 +21,7 @@ import Data.Map (Map)
 import qualified Data.Map as M
 import Control.Monad.Free (Free (Free, Pure), liftF)
 import qualified Control.Monad.Trans.Free as TF
+import Control.Monad.Trans.Free (FreeT (FreeT), FreeF)
 
 data Type = TNumber | TArr Type {- length -} Int | TAbs Type Type
 
@@ -60,12 +61,12 @@ data Value = VConst Number | VRef Idx | VVRef Idx
 
 data Lens = Lens { typ :: Type, from :: Value, to :: Int, count :: Int }
 
-data Env = Env
-  { typ :: Type
-  , ret :: Ref
-  , refs :: Map Ident Ref
-  , lens :: Lens
-  }
+data Env = Env {
+  typ :: Type,
+  ret :: Ref,
+  refs :: Map Ident Ref,
+  lens :: Lens
+}
 
 data Op
 
@@ -85,6 +86,7 @@ data IRF n
   deriving (Functor)
 
 type IR = Free IRF
+type IRT = FreeT IRF
 
 data IIRF n
   = IFuncRef FuncRef
@@ -121,11 +123,11 @@ abs t n = Free (Abs t n)
 -- call :: Ref -> [Ref] -> Ref -> IR m ()
 -- call r rs r' = liftF (Call r rs r' ())
 
-data Mut = Mut
-  { funcRefs :: Map FuncRef (IR ())
-  , nextFuncRefIdx :: Int
-  , nextAlloc :: Int
-  }
+data Mut = Mut {
+  funcRefs :: Map FuncRef (IR ()),
+  nextFuncRefIdx :: Int,
+  nextAlloc :: Int
+}
 
 data Expr
 
@@ -157,7 +159,7 @@ interpret (Free (Call r rs r' next)) = do
   rest <- interpret next
   pure $ Free $ Call r rs r' rest
 
-lower :: Env -> TF.FreeT IRF (R.Reader Env) a -> IR a
+lower :: Env -> IRT (R.Reader Env) a -> IR a
 lower env m = case R.runReader (TF.runFreeT m) env of
   TF.Pure a -> Pure a
   TF.Free ir -> case ir of
@@ -170,8 +172,23 @@ lower env m = case R.runReader (TF.runFreeT m) env of
     Call r rs r' next -> Free $ Call r rs r' (lower env next)
     Abs t body -> Free $ Abs t (lower env body)
 
-focus :: Int -> TF.FreeT IRF (R.Reader Env) a -> TF.FreeT IRF (R.Reader Env) a
+focus :: Int -> IRT (R.Reader Env) a -> IRT (R.Reader Env) a
 focus idx = TF.hoistFreeT $ R.local _
+
+copyValWithLens :: Number -> Ref -> IRT (R.Reader Env) ()
+copyValWithLens n ref = FreeT $ do
+  env <- R.ask
+  pure $ TF.Free $ CopyVal n ref env.lens (pure ())
+
+allocAndCall' :: Type -> Bool -> IRT (R.Reader Env) () -> IRT (R.Reader Env) Ref
+allocAndCall' t global ir = TF.FreeT $ pure $ TF.Free $ Alloc t global $ \ref -> TF.FreeT $ R.local (fenv ref) $ do
+  let TF.FreeT rir = ir >> pure ref
+  rir
+  where
+    fenv ref env = env {
+      ret = ref,
+      lens = undefined
+    }
 
 --------------------------------------------------------------------------------
 
@@ -221,3 +238,19 @@ funcRef t f = CallM $ do
 -- in sync code we'll need to allocate the Ref in a the global area
 allocAndCall :: Type -> Bool -> CallM m () -> CallM m Ref
 allocAndCall t global (CallM m) = undefined
+
+--------------------------------------------------------------------------------
+
+data ARF
+  = ARef Ref
+  | AArg Int
+
+  | AAlloc Type Bool (Ref -> ARF)
+
+  | ACopyVal Number Ref Lens ARF
+  | ACopyRef Ref Ref Lens ARF
+
+  | ABinOp Op Ref Ref Ref ARF
+  | ACall Ref [Ref] Ref ARF
+
+  | AAbs Type ARF
