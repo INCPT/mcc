@@ -191,11 +191,7 @@ lower env m = case R.runReader (TF.runFreeT m) env of
     Call r rs r' -> Free $ Call r rs r'
     Abs t body -> Free $ Abs t (lower env body)
 
-select :: IRT (R.Reader Env) a -> Either Int Ref -> IRT (R.Reader Env) a
-select ir ref = TF.hoistFreeT (R.local $ \env -> env { lens = focusLensFrom (refToValue ref) env.lens }) ir
-
-focus :: Int -> IRT (R.Reader Env) a -> IRT (R.Reader Env) a
-focus i = TF.hoistFreeT $ R.local $ \env -> env { lens = focusLensTo i env.lens }
+--------------------------------------------------------------------------------
 
 retVal :: Number -> IRT (R.Reader Env) ()
 retVal n = FreeT $ do
@@ -206,6 +202,14 @@ retRef :: Ref -> IRT (R.Reader Env) ()
 retRef ref = FreeT $ do
   env <- R.ask
   pure $ TF.Free $ CopyRef env.typ ref env.ret env.lens (pure ())
+
+-- API -------------------------------------------------------------------------
+
+select :: IRT (R.Reader Env) a -> Either Int Ref -> IRT (R.Reader Env) a
+select ir ref = TF.hoistFreeT (R.local $ \env -> env { lens = focusLensFrom (refToValue ref) env.lens }) ir
+
+focus :: Int -> IRT (R.Reader Env) a -> IRT (R.Reader Env) a
+focus i = TF.hoistFreeT $ R.local $ \env -> env { lens = focusLensTo i env.lens }
 
 allocAndCall :: Type -> AllocRegion -> IRT (R.Reader Env) () -> IRT (R.Reader Env) Ref
 allocAndCall t region ir = TF.FreeT $ pure $ TF.Free $ Alloc t region $ \ref -> TF.FreeT $ R.local (fenv ref) $ TF.runFreeT (ir >> pure ref)
