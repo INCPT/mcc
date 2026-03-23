@@ -108,8 +108,32 @@ data Expr
 funcref :: IR (ST.State Mut) Ref -> IR (ST.State Mut) Ref
 funcref = undefined
 
-lower :: IR (ST.State Mut) () -> (Mut, IR m ())
-lower = undefined
+lower :: Monad m => IR (ST.State Mut) () -> (Mut, IR m ())
+lower ir = ST.runState (lowerFreeT ir) (Mut M.empty 0)
+  where
+    lowerFreeT :: Monad m => FreeT (ST.State Mut) IRF () -> ST.State Mut (IR m ())
+    lowerFreeT (FreeT m) = do
+      step <- m
+      case step of
+        Pure a -> return (return a)
+        Free (Alloc t b k) -> do
+          rest <- lowerFreeT (k undefined)
+          return $ FreeT $ return $ Free $ Alloc t b (\r -> rest)
+        Free (Arg i t k) -> do
+          rest <- lowerFreeT (k undefined)
+          return $ FreeT $ return $ Free $ Arg i t (\r -> rest)
+        Free (CopyVal n r l next) -> do
+          rest <- lowerFreeT next
+          return $ FreeT $ return $ Free $ CopyVal n r l rest
+        Free (CopyRef r1 r2 l next) -> do
+          rest <- lowerFreeT next
+          return $ FreeT $ return $ Free $ CopyRef r1 r2 l rest
+        Free (BinOp op r1 r2 r3 next) -> do
+          rest <- lowerFreeT next
+          return $ FreeT $ return $ Free $ BinOp op r1 r2 r3 rest
+        Free (Call r rs r' next) -> do
+          rest <- lowerFreeT next
+          return $ FreeT $ return $ Free $ Call r rs r' next
 
 -- bla :: Expr -> ST.StateT Mut (R.Reader Env) IR
 -- bla = undefined
