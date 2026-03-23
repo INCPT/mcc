@@ -19,7 +19,7 @@ import qualified Control.Monad.State as ST
 import Data.Functor.Product (Product (Pair))
 import Data.Map (Map)
 import qualified Data.Map as M
-import Control.Monad.Free (Free(..), liftF)
+import Control.Monad.Trans.Free
 
 data Type = TNumber | TArr Type {- length -} Int | TAbs Type Type
 
@@ -77,38 +77,38 @@ data IRF a
   | Call Ref [Ref] Ref a
   deriving (Functor)
 
-type IR = Free IRF
+type IR m = FreeT m IRF
 
 -- Smart constructors
-alloc :: Type -> Bool -> IR Ref
-alloc t b = liftF (Alloc t b id)
-
-arg :: Int -> Type -> IR Ref
-arg i t = liftF (Arg i t id)
-
-copyVal :: Number -> Ref -> Lens -> IR ()
-copyVal n r l = liftF (CopyVal n r l ())
-
-copyRef :: Ref -> Ref -> Lens -> IR ()
-copyRef r1 r2 l = liftF (CopyRef r1 r2 l ())
-
-binOp :: Op -> Ref -> Ref -> Ref -> IR ()
-binOp op r1 r2 r3 = liftF (BinOp op r1 r2 r3 ())
-
-call :: Ref -> [Ref] -> Ref -> IR ()
-call r rs r' = liftF (Call r rs r' ())
+-- alloc :: Type -> Bool -> IR m Ref
+-- alloc t b = liftF (Alloc t b id)
+-- 
+-- arg :: Int -> Type -> IR m Ref
+-- arg i t = liftF (Arg i t id)
+-- 
+-- copyVal :: Number -> Ref -> Lens -> IR m ()
+-- copyVal n r l = liftF (CopyVal n r l ())
+-- 
+-- copyRef :: Ref -> Ref -> Lens -> IR m ()
+-- copyRef r1 r2 l = liftF (CopyRef r1 r2 l ())
+-- 
+-- binOp :: Op -> Ref -> Ref -> Ref -> IR m ()
+-- binOp op r1 r2 r3 = liftF (BinOp op r1 r2 r3 ())
+-- 
+-- call :: Ref -> [Ref] -> Ref -> IR m ()
+-- call r rs r' = liftF (Call r rs r' ())
 
 data Mut = Mut
-  { funcRefs :: Map FuncRef IR
+  { funcRefs :: Map FuncRef (IR Identity ())
   , nextFuncRefIdx :: Int
   }
 
 data Expr
 
-fr :: IR -> IR
-fr = undefined
+funcref :: IR (ST.State Mut) Ref -> IR (ST.State Mut) Ref
+funcref = undefined
 
-lower :: IR -> IR
+lower :: IR (ST.State Mut) () -> (Mut, IR m ())
 lower = undefined
 
 -- bla :: Expr -> ST.StateT Mut (R.Reader Env) IR
