@@ -150,8 +150,18 @@ interpret (Free (Call r rs r' next)) = do
   rest <- interpret next
   pure $ Free $ Call r rs r' rest
 
-lower :: Env -> TF.FreeT IR (R.Reader Env) a -> IR a
-lower = undefined
+lower :: Env -> TF.FreeT IRF (R.Reader Env) a -> IR a
+lower env m = case R.runReader (TF.runFreeT m) env of
+  TF.Pure a -> Pure a
+  TF.Free ir -> case ir of
+    Ref r -> Free $ Ref r
+    Arg i -> Free $ Arg i
+    Alloc t g next -> Free $ Alloc t g (\r -> lower env (next r))
+    CopyVal n r l next -> Free $ CopyVal n r l (lower env next)
+    CopyRef r1 r2 l next -> Free $ CopyRef r1 r2 l (lower env next)
+    BinOp op r1 r2 r3 next -> Free $ BinOp op r1 r2 r3 (lower env next)
+    Call r rs r' next -> Free $ Call r rs r' (lower env next)
+    Abs t body -> Free $ Abs t (lower env body)
 
 --------------------------------------------------------------------------------
 
