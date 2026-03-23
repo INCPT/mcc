@@ -29,7 +29,7 @@ returnType TNumber = TNumber
 returnType t@(TArr _ _) = t
 returnType (TAbs _ _ t) = t
 
-peelType :: Type -> Int -> Type
+peelType :: Type -> Type
 peelType = undefined
 
 paramTypes :: Type -> [Type]
@@ -113,6 +113,8 @@ data SExpr
 data Choice
   = CChoice Type [Choice] (Index Choice)
   | CExpr [(Type, Index (Choice))] SExpr -- selection indices that flow into the inner expression
+
+  | CFuncRefTable Type [FuncRef] (Index Choice)
   deriving (Show)
 
 traverseChoice
@@ -125,13 +127,18 @@ traverseChoice fChoice fSExpr = go
   where
     go (CChoice t choices idx) = do
       choices' <- traverse go choices
-      fChoice (CChoice t choices' idx)
+      idx' <- sequenceA $ fmap go idx
+      fChoice (CChoice t choices' idx')
 
     go (CExpr idxs sexpr) = do
       idxs' <- traverse (\(t, idx) -> (t,) <$> traverse go idx) idxs
       sexpr' <- goSExpr sexpr
       sexpr'' <- fSExpr sexpr'
       fChoice (CExpr idxs' sexpr'')
+
+    go (CFuncRefTable t frs idx) = do
+      idx' <- sequenceA $ fmap go idx
+      fChoice (CFuncRefTable t frs idx')
 
     goSExpr (SConst n) = pure (SConst n)
     goSExpr (SArr t cs) = SArr t <$> traverse go cs
@@ -192,26 +199,49 @@ toChoice = flip ST.evalState [] . choiceTree
 --------------------------------------------------------------------------------
 
 data AbsEnv = AbsEnv
-  { absMap :: Map FuncRef (Type, [(Ident, Choice)], Choice)
+  { funcRefMap :: Map FuncRef (Type, [(Ident, Choice)], Choice)
   , nextFuncRef :: Int
   }
 
-gatherAbstractions :: Choice -> ST.State AbsEnv Choice
-gatherAbstractions = traverseChoice pure fSExpr
+gatherAbstractions :: (Type -> Bool) -> Choice -> ST.State AbsEnv Choice
+gatherAbstractions allocTablePred = traverseChoice fChoice fSExpr
   where
+    fChoice :: Choice -> ST.State AbsEnv Choice
+    fChoice ch@(CChoice t chs idx)
+      | allocTablePred t = do
+          frIdx <- ST.gets (.nextFuncRef)
+
+          let cht = peelType t
+          let frs = [ (FuncRef (frIdx + i), (cht, [], ch)) | (i, ch) <- zip [0..] chs ]
+
+          ST.modify $ \st -> st
+            { nextFuncRef = st.nextFuncRef + length chs
+            , funcRefMap = M.fromList frs <> st.funcRefMap
+            }
+
+          pure $ CFuncRefTable t (map fst frs) idx
+      | otherwise = pure ch
+    fChoice ch = pure ch
+
     fSExpr :: SExpr -> ST.State AbsEnv SExpr
     fSExpr (SAbs t bs body) = do
       fr <- FuncRef <$> ST.gets (.nextFuncRef)
 
       ST.modify $ \st -> st
         { nextFuncRef = st.nextFuncRef + 1
-        , absMap = M.insert fr (t, bs, body) st.absMap
+        , funcRefMap = M.insert fr (t, bs, body) st.funcRefMap
         }
 
       pure $ SFuncRef fr
     fSExpr e = pure e
 
--- call ------------------------------------------------------------------------
+-- NEXT
+-- * mark captured bindings for storing in global
+-- * introduce global bindings for captured arguments, assign argument to them, replace reference to argument with ref to binding in closure
+-- * alloc funcref tables for choices
+-- * codegen while maintaining focus/select lens
+-- * alloc when calling
+-- * when choice, call funcref table index or do if/elses
 
 {-
 
