@@ -6,6 +6,7 @@
 
 module OSC.Ctx where
 
+import Data.Bifunctor (second)
 import Data.Functor.Identity
 import Control.Monad (when)
 import Control.Monad.Trans (MonadTrans, lift)
@@ -13,18 +14,18 @@ import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
 import qualified Data.Map as M
 
-data Type = TNumber | TArr Type {- length -} Int | TAbs [Type] Type
+data Type = TNumber | TArr Type {- length -} Int | TAbs (Maybe Ident) Type Type
   deriving Show
 
 sizeOfType :: Type -> Int
 sizeOfType TNumber = 4
 sizeOfType (TArr t dim) = sizeOfType t * dim
-sizeOfType (TAbs _ _) = 4 -- funcref is an integer
+sizeOfType (TAbs _ _ _) = 4 -- funcref is an integer
 
 returnType :: Type -> Type
 returnType TNumber = TNumber
 returnType t@(TArr _ _) = t
-returnType (TAbs _ t) = t
+returnType (TAbs _ _ t) = t
 
 peelType :: Type -> Int -> Type
 peelType = undefined
@@ -32,7 +33,7 @@ peelType = undefined
 paramTypes :: Type -> [Type]
 paramTypes TNumber = error "paramTypes: number (this is a bug)"
 paramTypes t@(TArr _ _) = error "paramTypes: array (this is a bug)"
-paramTypes (TAbs ps _) = ps
+paramTypes (TAbs _ t ts) = t:paramTypes ts
 
 data Number = I Int | F Double
   deriving Show
@@ -46,15 +47,12 @@ data Index a = IdxConst Int | IdxVar a
 data Op = Plus | Minus | Mul | Div
   deriving Show
 
-data Abs = Abs Type [Ident] {- bindings -} [(Ident, Expr)] Expr
-  deriving Show
-
 data Expr
   = EConst Number
   | EOp Op Expr Expr -- both args and the result are simple types
   | EArr Type [Expr]
 
-  | EAbs Abs
+  | EAbs Type {- bindings -} [(Ident, Expr)] Expr
   | EApp Type Ident [Expr]
 
   | EExtern Type Ident [Expr] -- can reference functions or shared mem
@@ -98,29 +96,53 @@ runStack = flip ST.evalState []
 
 data SExpr idx
   = SConst Number
-  | SArr Type [Expr]
-  | SOp Op Expr Expr
-  | SAbs Abs
-  | SApp Type Ident [Expr]
-  | SExtern Type Ident [Expr]
+  | SArr Type [Choice idx]
+  | SOp Op (Choice idx) (Choice idx)
+  | SAbs Type {- bindings -} [(Ident, Expr)] (Choice idx)
+  | SApp Type Ident [Choice idx]
+  | SExtern Type Ident [Choice idx]
   deriving (Show)
 
 data Choice idx
   = CChoice Type [Choice idx] idx
-  | CExpr [(Type, Index Expr)] (SExpr idx) -- selection indices that flow into the inner expression
+  | CExpr [(Type, Index (Choice idx))] (SExpr idx) -- selection indices that flow into the inner expression
   deriving (Show)
+
+traverseChoice
+  :: Monad f
+  => (Choice idx -> f (Choice idx))
+  -> (SExpr idx -> f (SExpr idx))
+  -> Choice idx
+  -> f (Choice idx)
+traverseChoice fChoice fSExpr = go
+  where
+    go (CChoice t choices idx) = do
+      choices' <- traverse go choices
+      fChoice (CChoice t choices' idx)
+
+    go (CExpr idxs sexpr) = do
+      sexpr' <- goSExpr sexpr
+      sexpr'' <- fSExpr sexpr'
+      fChoice (CExpr idxs sexpr'')
+
+    goSExpr (SConst n) = pure (SConst n)
+    goSExpr (SArr t cs) = SArr t <$> traverse go cs
+    goSExpr (SOp op a b) = SOp op <$> go a <*> go b
+    goSExpr (SAbs t bs c) = SAbs t bs <$> go c
+    goSExpr (SApp t n cs) = SApp t n <$> traverse go cs
+    goSExpr (SExtern t n cs) = SExtern t n <$> traverse go cs
 
 toC :: Monad m => SExpr (Index Expr) -> StackM (Type, Index Expr) m (Choice (Index Expr))
 toC e = do
   idxs <- ST.get
-  pure $ CExpr idxs e
+  pure $ CExpr (map (second (fmap toChoice)) idxs) e
 
 choiceTree :: Monad m => Expr -> StackM (Type, Index Expr) m (Choice (Index Expr))
 choiceTree (EConst n) = toC (SConst n)
-choiceTree (EOp op a b) = toC (SOp op a b)
-choiceTree (EExtern t n es) = toC (SExtern t n es)
-choiceTree (EApp t n es) = toC (SApp t n es)
-choiceTree (EAbs abs) = toC (SAbs abs)
+choiceTree (EOp op a b) = toC (SOp op (toChoice a) (toChoice b))
+choiceTree (EExtern t n es) = toC (SExtern t n $ map toChoice es)
+choiceTree (EApp t n es) = toC (SApp t n $ map toChoice es)
+choiceTree (EAbs t bs e) = toC (SAbs t bs (toChoice e))
 choiceTree (EArr t es) = do
   s <- pop
   case s of
@@ -128,7 +150,7 @@ choiceTree (EArr t es) = do
       es' <- traverse choiceTree es
       push (t, idx)
       pure $ CChoice t es' idx
-    Nothing -> pure $ CExpr [] (SArr t es)
+    Nothing -> pure $ CExpr [] (SArr t $ map toChoice es)
 choiceTree (ESelect t e idx) = do
   push (t, idx)
   c <- choiceTree e
@@ -136,17 +158,25 @@ choiceTree (ESelect t e idx) = do
   pure c
 choiceTree (ERec _ _ _ e) = choiceTree e -- TODO: need to inline ident with delay boxes
 
+elimIndices :: [(Type, Index (Choice (Index Expr)))] -> [(Type, Index (Choice Expr))]
+elimIndices = undefined
+
 -- TODO: optimization, cluster generation and so on go here
 elimConstIndices :: Choice (Index Expr) -> Choice Expr
-elimConstIndices (CExpr idxs (SConst n)) = CExpr idxs (SConst n)
-elimConstIndices (CExpr idxs (SApp t n es)) = CExpr idxs (SApp t n es)
-elimConstIndices (CExpr idxs (SExtern t n es)) = CExpr idxs (SExtern t n es)
-elimConstIndices (CExpr idxs (SArr t es)) = CExpr idxs (SArr t es)
+elimConstIndices (CExpr idxs (SConst n)) = CExpr (elimIndices idxs) (SConst n)
+elimConstIndices (CExpr idxs (SApp t n es)) = CExpr (elimIndices idxs) (SApp t n $ map elimConstIndices es)
+elimConstIndices (CExpr idxs (SExtern t n es)) = CExpr (elimIndices idxs) (SExtern t n $ map elimConstIndices es)
+elimConstIndices (CExpr idxs (SArr t es)) = CExpr (elimIndices idxs) (SArr t $ map elimConstIndices es)
 elimConstIndices (CChoice _ chs (IdxConst idx)) = elimConstIndices (chs !! idx)
 elimConstIndices (CChoice t chs (IdxVar idx)) = CChoice t (map elimConstIndices chs) idx
 
-toChoice :: Expr -> Choice Expr
-toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
+elimConstIndices _ = undefined
+
+toChoice :: Expr -> Choice (Index Expr)
+toChoice = flip ST.evalState [] . choiceTree
+
+-- toChoice :: Expr -> Choice Expr
+-- toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
 
 --------------------------------------------------------------------------------
 
