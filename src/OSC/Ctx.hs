@@ -191,10 +191,7 @@ elimConstIndices (CChoice t chs idx) = CChoice t (map elimConstIndices chs) idx
 elimConstIndices _ = undefined
 
 toChoice :: Expr -> Choice
-toChoice = flip ST.evalState [] . choiceTree
-
--- toChoice :: Expr -> Choice Expr
--- toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
+toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
 
 --------------------------------------------------------------------------------
 
