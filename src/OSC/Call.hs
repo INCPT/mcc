@@ -66,21 +66,26 @@ data Env = Env
   , focus :: Lens
   }
 
--- data State = State
---   { captured :: Set Ref
---   }
+data Op
 
-class MonadCodegen m where
-  arg :: Int -> Type -> m Ref
+data IR
+  = Alloc Type Bool (Ref -> IR)
+  | Arg Int Type (Ref -> IR)
 
-  copyVal :: Number -> Ref -> Lens -> m ()
-  copyRef :: Ref -> Ref -> Lens -> m ()
+  | CopyVal Number Ref Lens IR
+  | CopyRef Ref Ref Lens IR
 
-  call :: Ref -> [Ref] -> Ref -> m ()
+  | BinOp Op Ref Ref Ref
+  | Call Ref [Ref] Ref
 
-newtype CallM m a = CallM { callM :: ST.StateT () (R.ReaderT Env m) a }
-  deriving (Functor, Applicative, Monad)
+data Mut = Mut
+  { funcRefs :: Map FuncRef IR
+  }
 
+newtype CallM m a = CallM { callM :: R.ReaderT Env (ST.StateT Mut m) a }
+  deriving (Functor, Applicative, Monad) -- , MonadTrans, MFunctor)
+
+-- this doesn't need to be here
 withBindings :: MonadFix m => [(Ident, CallM m Ref)] -> CallM m () -> CallM m ()
 withBindings bs f = CallM $ mdo
   bsRefs <- fmap M.fromList $ sequence
@@ -92,7 +97,7 @@ withBindings bs f = CallM $ mdo
 
   R.local (\env -> env { refs = bsRefs <> env.refs }) f.callM
 
--- if capturing argument need to declare it globally; otherwise just declare Ref global
+-- this doesn't need to be here
 capture :: Monad m => Ident -> CallM m Ref
 capture n = CallM $ R.asks (M.lookup n . (.refs)) >>= \case
   Just ref -> pure ref
@@ -107,20 +112,19 @@ select = undefined
 external :: Ident -> [Ref] -> CallM m ()
 external = undefined
 
--- we need Map FuncRef [m ()] and a memory layout 
+-- TODO: we need Map FuncRef [m ()] and a memory layout 
 
 funcRef :: Type -> ([Ref] -> CallM m Ref) -> CallM m Ref
 funcRef t f = CallM $ do
+  -- let a = R.runReaderT (ST.runStateT (f []).callM undefined) undefined
+  -- let a = ST.runStateT (R.runReaderT (f []).callM undefined)
   -- args <- lift $ sequence [ arg i p | (i, p) <- zip [0..] (paramTypes t) ]
   
   -- TODO: call retVal
   undefined
 
--- call :: Ref -> [Ref] -> CallM m ()
--- call = undefined
-
 -- TODO: here we must know the captured values
 -- in graph code if a function returns a function we can just fold everything inside the returned function (everything is immutable)
 -- in sync code we'll need to allocate the Ref in a the global area
-allocAndCall :: MonadCodegen m => Type -> CallM m () -> CallM m Ref
-allocAndCall t (CallM m) = undefined
+allocAndCall :: Type -> Bool -> CallM m () -> CallM m Ref
+allocAndCall t global (CallM m) = undefined
