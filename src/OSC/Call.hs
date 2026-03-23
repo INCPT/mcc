@@ -69,13 +69,13 @@ data Env = Env
 
 data Op
 
-data IRF a
-  = Alloc Type Bool (Ref -> a)
-  | Arg Int Type (Ref -> a)
-  | CopyVal Number Ref Lens a
-  | CopyRef Ref Ref Lens a
-  | BinOp Op Ref Ref Ref a
-  | Call Ref [Ref] Ref a
+data IRF n
+  = Alloc Type Bool (Ref -> n)
+  | Arg Int Type (Ref -> n)
+  | CopyVal Number Ref Lens n
+  | CopyRef Ref Ref Lens n
+  | BinOp Op Ref Ref Ref n
+  | Call Ref [Ref] Ref n
   deriving (Functor)
 
 type IR m = FreeT m IRF
@@ -110,13 +110,17 @@ data Expr
 funcref :: IR (ST.State Mut) Ref -> IR (ST.State Mut) Ref
 funcref = undefined
 
-lower :: IR (ST.State Mut) () -> ST.State Mut (Free IRF ())
+lower :: IR (ST.State Mut) () -> ST.State Mut (IR Identity ())
 lower (FreeT (Alloc t b next)) = do
   st <- ST.get; ST.modify $ \st -> st { nextAlloc = st.nextAlloc + 1 }
 
   case (next (RVar $ Local st.nextAlloc)) of
-    Pure () -> pure $ liftF $ Alloc t b (const ())
-    Free f -> ST.StateT (ST.runStateT f) >>= lower
+    Pure () -> pure $ FreeT $ Alloc t b $ \_ -> Pure ()
+    Free f -> do
+      r' <- ST.StateT (ST.runStateT f)
+      r <- lower r'
+      ST.modify $ \st -> st { funcRefs = M.insert (FuncRef st.nextAlloc) r st.funcRefs }
+      pure r
 
 lower _ = undefined
 
