@@ -19,7 +19,7 @@ import qualified Control.Monad.State as ST
 import Data.Functor.Product (Product (Pair))
 import Data.Map (Map)
 import qualified Data.Map as M
-import Control.Monad.Morph (MFunctor, hoist)
+import Control.Monad.Free (Free(..), liftF)
 
 data Type = TNumber | TArr Type {- length -} Int | TAbs Type Type
 
@@ -68,38 +68,47 @@ data Env = Env
 
 data Op
 
-data IR m
-  = Alloc Type Bool (Ref -> m (IR m))
-  | Arg Int Type (Ref -> m (IR m))
+data IRF a
+  = Alloc Type Bool (Ref -> a)
+  | Arg Int Type (Ref -> a)
+  | CopyVal Number Ref Lens a
+  | CopyRef Ref Ref Lens a
+  | BinOp Op Ref Ref Ref a
+  | Call Ref [Ref] Ref a
+  deriving (Functor)
 
-  | CopyVal Number Ref Lens (IR m)
-  | CopyRef Ref Ref Lens (IR m)
+type IR = Free IRF
 
-  | BinOp Op Ref Ref Ref (IR m)
-  | Call Ref [Ref] Ref (IR m)
+-- Smart constructors
+alloc :: Type -> Bool -> IR Ref
+alloc t b = liftF (Alloc t b id)
 
-  | Done
+arg :: Int -> Type -> IR Ref
+arg i t = liftF (Arg i t id)
 
-hfmap :: Functor f => (f (IR m) -> m (IR m)) -> IR f -> IR m
-hfmap nat (Alloc t b k) = Alloc t b (\r -> nat (fmap (hfmap nat) (k r)))
-hfmap nat (Arg i t k) = Arg i t (\r -> nat (fmap (hfmap nat) (k r)))
-hfmap nat (CopyVal n r l ir) = CopyVal n r l (hfmap nat ir)
-hfmap nat (CopyRef r1 r2 l ir) = CopyRef r1 r2 l (hfmap nat ir)
-hfmap nat (BinOp op r1 r2 r3 ir) = BinOp op r1 r2 r3 (hfmap nat ir)
-hfmap nat (Call r rs r' ir) = Call r rs r' (hfmap nat ir)
-hfmap _ Done = Done
+copyVal :: Number -> Ref -> Lens -> IR ()
+copyVal n r l = liftF (CopyVal n r l ())
+
+copyRef :: Ref -> Ref -> Lens -> IR ()
+copyRef r1 r2 l = liftF (CopyRef r1 r2 l ())
+
+binOp :: Op -> Ref -> Ref -> Ref -> IR ()
+binOp op r1 r2 r3 = liftF (BinOp op r1 r2 r3 ())
+
+call :: Ref -> [Ref] -> Ref -> IR ()
+call r rs r' = liftF (Call r rs r' ())
 
 data Mut = Mut
-  { funcRefs :: Map FuncRef (IR Identity)
+  { funcRefs :: Map FuncRef IR
   , nextFuncRefIdx :: Int
   }
 
 data Expr
 
-fr :: IR (ST.StateT Mut (R.Reader Env)) -> IR (ST.StateT Mut (R.Reader Env))
+fr :: IR -> IR
 fr = undefined
 
-lower :: IR (ST.StateT Mut (R.Reader Env)) -> IR Identity
+lower :: IR -> IR
 lower = undefined
 
 -- bla :: Expr -> ST.StateT Mut (R.Reader Env) IR
