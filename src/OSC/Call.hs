@@ -80,6 +80,15 @@ data IR m
 
   | Done
 
+instance Functor IR where
+  fmap f (Alloc t b k) = Alloc t b (\r -> f <$> k r)
+  fmap f (Arg i t k) = Arg i t (\r -> f <$> k r)
+  fmap f (CopyVal n r l ir) = CopyVal n r l (f ir)
+  fmap f (CopyRef r1 r2 l ir) = CopyRef r1 r2 l (f ir)
+  fmap f (BinOp op r1 r2 r3 ir) = BinOp op r1 r2 r3 (f ir)
+  fmap f (Call r rs r' ir) = Call r rs r' (f ir)
+  fmap _ Done = Done
+
 data Mut = Mut
   { funcRefs :: Map FuncRef (IR Identity)
   , nextFuncRefIdx :: Int
