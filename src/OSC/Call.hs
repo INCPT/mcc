@@ -10,7 +10,7 @@
 
 module OSC.Call where
 
-import Data.Functor.Identity
+import Data.Functor.Identity (Identity)
 import Control.Monad (when)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans (MonadTrans, lift)
@@ -68,36 +68,42 @@ data Env = Env
 
 data Op
 
-data IR
-  = Alloc Type Bool (Ref -> IR)
-  | Arg Int Type (Ref -> IR)
+data IR m
+  = Alloc Type Bool (Ref -> m (IR m))
+  | Arg Int Type (Ref -> m (IR m))
 
-  | CopyVal Number Ref Lens IR
-  | CopyRef Ref Ref Lens IR
+  | CopyVal Number Ref Lens (IR m)
+  | CopyRef Ref Ref Lens (IR m)
 
-  | BinOp Op Ref Ref Ref IR
-  | Call Ref [Ref] Ref IR
+  | BinOp Op Ref Ref Ref (IR m)
+  | Call Ref [Ref] Ref (IR m)
 
   | Done
 
 data Mut = Mut
-  { funcRefs :: Map FuncRef IR
+  { funcRefs :: Map FuncRef (IR Identity)
   , nextFuncRefIdx :: Int
   }
 
 data Expr
 
-bla :: Expr -> ST.StateT Mut (R.Reader Env) IR
-bla = undefined
+fr :: IR (ST.StateT Mut (R.Reader Env)) -> IR (ST.StateT Mut (R.Reader Env))
+fr = undefined
 
-lol :: ST.StateT Mut (R.Reader Env) IR -> ST.StateT Mut (R.Reader Env) IR
-lol m = do
-  idx <- ST.gets (.nextFuncRefIdx); ST.modify $ \st -> st { nextFuncRefIdx = st.nextFuncRefIdx + 1 }
+lower :: IR (ST.StateT Mut (R.Reader Env)) -> IR Identity
+lower = undefined
 
-  ir <- m
-
-  ST.modify $ \st -> st { funcRefs = M.insert (FuncRef idx) ir st.funcRefs }
-  pure ir
+-- bla :: Expr -> ST.StateT Mut (R.Reader Env) IR
+-- bla = undefined
+-- 
+-- lol :: ST.StateT Mut (R.Reader Env) IR -> ST.StateT Mut (R.Reader Env) IR
+-- lol m = do
+--   idx <- ST.gets (.nextFuncRefIdx); ST.modify $ \st -> st { nextFuncRefIdx = st.nextFuncRefIdx + 1 }
+-- 
+--   ir <- m
+-- 
+--   ST.modify $ \st -> st { funcRefs = M.insert (FuncRef idx) ir st.funcRefs }
+--   pure ir
 
 newtype CallM m a = CallM { callM :: R.ReaderT Env (ST.StateT Mut m) a }
   deriving (Functor, Applicative, Monad) -- , MonadTrans, MFunctor)
