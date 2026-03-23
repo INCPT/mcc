@@ -108,10 +108,10 @@ data Expr
 funcref :: IR (ST.State Mut) Ref -> IR (ST.State Mut) Ref
 funcref = undefined
 
-lower :: Monad m => IR (ST.State Mut) () -> (Mut, IR m ())
+lower :: IR (ST.State Mut) () -> (Mut, IR Identity ())
 lower ir = ST.runState (lowerFreeT ir) (Mut M.empty 0)
   where
-    lowerFreeT :: Monad m => FreeT (ST.State Mut) IRF () -> ST.State Mut (IR m ())
+    lowerFreeT :: FreeT (ST.State Mut) IRF () -> ST.State Mut (IR Identity ())
     lowerFreeT (FreeT m) = do
       step <- ST.lift m
       case step of
