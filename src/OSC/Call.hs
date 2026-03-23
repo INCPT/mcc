@@ -19,6 +19,7 @@ import qualified Control.Monad.State as ST
 import Data.Functor.Product (Product (Pair))
 import Data.Map (Map)
 import qualified Data.Map as M
+import qualified Control.Monad.Free as F
 import Control.Monad.Trans.Free
 
 data Type = TNumber | TArr Type {- length -} Int | TAbs Type Type
@@ -101,6 +102,7 @@ type IR m = FreeT m IRF
 data Mut = Mut
   { funcRefs :: Map FuncRef (IR Identity ())
   , nextFuncRefIdx :: Int
+  , nextAlloc :: Int
   }
 
 data Expr
@@ -108,15 +110,15 @@ data Expr
 funcref :: IR (ST.State Mut) Ref -> IR (ST.State Mut) Ref
 funcref = undefined
 
-lower :: IR (ST.State Mut) () -> ST.State Mut (IR Identity ())
-lower (FreeT (Alloc t b next)) = undefined
+lower :: IR (ST.State Mut) () -> ST.State Mut (Free IRF ())
+lower (FreeT (Alloc t b next)) = do
+  st <- ST.get; ST.modify $ \st -> st { nextAlloc = st.nextAlloc + 1 }
 
---   case (next undefined) of
---     Pure a -> pure ()
---     Free f -> do
---       r <- ST.StateT (ST.runStateT f)
---       s <- runFreeT (_ r)
---       undefined
+  case (next (RVar $ Local st.nextAlloc)) of
+    Pure () -> pure $ liftF $ Alloc t b (const ())
+    Free f -> ST.StateT (ST.runStateT f) >>= lower
+
+lower _ = undefined
 
 -- bla :: Expr -> ST.StateT Mut (R.Reader Env) IR
 -- bla = undefined
