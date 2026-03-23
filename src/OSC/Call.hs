@@ -20,6 +20,7 @@ import Data.Functor.Product (Product (Pair))
 import Data.Map (Map)
 import qualified Data.Map as M
 import Control.Monad.Free (Free (Free, Pure), liftF)
+import qualified Control.Monad.Trans.Free as TF
 
 data Type = TNumber | TArr Type {- length -} Int | TAbs Type Type
 
@@ -147,7 +148,10 @@ interpret (Free (BinOp op r1 r2 r3 next)) = do
   pure $ Free $ BinOp op r1 r2 r3 rest
 interpret (Free (Call r rs r' next)) = do
   rest <- interpret next
-  pure $ Free $ Call r rs r' next
+  pure $ Free $ Call r rs r' rest
+
+lower :: Env -> TF.FreeT IR (R.Reader Env) a -> IR a
+lower = undefined
 
 --------------------------------------------------------------------------------
 
