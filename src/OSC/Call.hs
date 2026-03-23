@@ -70,15 +70,32 @@ data Env = Env
 data Op
 
 data IRF n
-  = Alloc Type Bool (Ref -> n)
+  = Ref Ref
+  | Alloc Type Bool (Ref -> n)
   | Arg Int Type (Ref -> n)
+
   | CopyVal Number Ref Lens n
   | CopyRef Ref Ref Lens n
+
   | BinOp Op Ref Ref Ref n
   | Call Ref [Ref] Ref n
+
+  | Abs Type n
   deriving (Functor)
 
-type IR m = FreeT m IRF
+type IR = FreeT IRF
+
+data IIRF n
+  = IRef Ref
+  | IAlloc Type Bool (Ref -> n)
+  | IArg Int Type (Ref -> n)
+
+  | ICopyVal Number Ref Lens n
+  | ICopyRef Ref Ref Lens n
+
+  | IBinOp Op n n Ref n
+  | ICall n [n] Ref n
+  deriving (Functor)
 
 -- Smart constructors
 -- alloc :: Type -> Bool -> IR m Ref
@@ -100,7 +117,7 @@ type IR m = FreeT m IRF
 -- call r rs r' = liftF (Call r rs r' ())
 
 data Mut = Mut
-  { funcRefs :: Map FuncRef (IR Identity ())
+  { funcRefs :: Map FuncRef (F.Free IRF ())
   , nextFuncRefIdx :: Int
   , nextAlloc :: Int
   }
@@ -110,17 +127,21 @@ data Expr
 funcref :: IR (ST.State Mut) Ref -> IR (ST.State Mut) Ref
 funcref = undefined
 
-lower :: IR (ST.State Mut) () -> ST.State Mut (IR Identity ())
-lower (FreeT (Alloc t b next)) = do
-  st <- ST.get; ST.modify $ \st -> st { nextAlloc = st.nextAlloc + 1 }
+higher :: Applicative m => F.Free IRF () -> FreeT IRF m ()
+higher = undefined
 
-  case (next (RVar $ Local st.nextAlloc)) of
-    Pure () -> pure $ FreeT $ Alloc t b $ \_ -> Pure ()
-    Free f -> do
-      r' <- ST.StateT (ST.runStateT f)
-      r <- lower r'
-      ST.modify $ \st -> st { funcRefs = M.insert (FuncRef st.nextAlloc) r st.funcRefs }
-      pure r
+lower :: IR (ST.State Mut) () -> ST.State Mut (F.Free IRF ())
+lower (FreeT m) = do
+  m' <- m
+
+  case m' of
+    Pure () -> pure $ F.Pure ()
+    Free (Abs t body) -> do
+      idx <- ST.gets (.nextFuncRefIdx); ST.modify $ \st -> st { nextFuncRefIdx = st.nextFuncRefIdx + 1 }
+      lbody <- lower body
+      ST.modify $ \st -> st { funcRefs = M.insert (FuncRef idx) lbody st.funcRefs }
+      pure lbody
+      
 
 lower _ = undefined
 
