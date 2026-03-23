@@ -19,7 +19,7 @@ import qualified Control.Monad.State as ST
 import Data.Functor.Product (Product (Pair))
 import Data.Map (Map)
 import qualified Data.Map as M
-import Control.Monad.Morph (MFunctor, hoist, HFunctor(..))
+import Control.Monad.Morph (MFunctor, hoist)
 
 data Type = TNumber | TArr Type {- length -} Int | TAbs Type Type
 
@@ -80,14 +80,14 @@ data IR m
 
   | Done
 
-instance HFunctor IR where
-  hfmap nat (Alloc t b k) = Alloc t b (\r -> nat (hfmap nat <$> k r))
-  hfmap nat (Arg i t k) = Arg i t (\r -> nat (hfmap nat <$> k r))
-  hfmap nat (CopyVal n r l ir) = CopyVal n r l (hfmap nat ir)
-  hfmap nat (CopyRef r1 r2 l ir) = CopyRef r1 r2 l (hfmap nat ir)
-  hfmap nat (BinOp op r1 r2 r3 ir) = BinOp op r1 r2 r3 (hfmap nat ir)
-  hfmap nat (Call r rs r' ir) = Call r rs r' (hfmap nat ir)
-  hfmap _ Done = Done
+hfmap :: Functor f => (f (IR m) -> m (IR m)) -> IR f -> IR m
+hfmap nat (Alloc t b k) = Alloc t b (\r -> nat (hfmap nat <$> k r))
+hfmap nat (Arg i t k) = Arg i t (\r -> nat (hfmap nat <$> k r))
+hfmap nat (CopyVal n r l ir) = CopyVal n r l (hfmap nat ir)
+hfmap nat (CopyRef r1 r2 l ir) = CopyRef r1 r2 l (hfmap nat ir)
+hfmap nat (BinOp op r1 r2 r3 ir) = BinOp op r1 r2 r3 (hfmap nat ir)
+hfmap nat (Call r rs r' ir) = Call r rs r' (hfmap nat ir)
+hfmap _ Done = Done
 
 data Mut = Mut
   { funcRefs :: Map FuncRef (IR Identity)
