@@ -134,6 +134,20 @@ interpret (Free (Abs t body)) = do
 interpret (Free (Alloc t g next)) = do
   idx <- ST.gets (.nextAlloc); ST.modify $ \st -> st { nextAlloc = st.nextAlloc + 1 }
   interpret (next $ RVar $ Local $ idx)
+interpret (Free (Ref r)) = pure $ liftF $ Ref r
+interpret (Free (Arg i)) = pure $ liftF $ Arg i
+interpret (Free (CopyVal n r l next)) = do
+  rest <- interpret next
+  pure $ Free $ CopyVal n r l rest
+interpret (Free (CopyRef r1 r2 l next)) = do
+  rest <- interpret next
+  pure $ Free $ CopyRef r1 r2 l rest
+interpret (Free (BinOp op r1 r2 r3 next)) = do
+  rest <- interpret next
+  pure $ Free $ BinOp op r1 r2 r3 rest
+interpret (Free (Call r rs r' next)) = do
+  rest <- interpret next
+  pure $ Free $ Call r rs r' next
 
 --------------------------------------------------------------------------------
 
