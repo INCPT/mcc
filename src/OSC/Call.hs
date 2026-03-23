@@ -24,6 +24,7 @@ import qualified Control.Monad.Trans.Free as TF
 import Control.Monad.Trans.Free (FreeT (FreeT), FreeF)
 
 data Type = TNumber | TArr Type {- length -} Int | TAbs Type Type
+  deriving Show
 
 sizeOfType :: Type -> Int
 sizeOfType = undefined
@@ -40,13 +41,13 @@ returnType (TArr t dim) = VTArr t dim
 returnType (TAbs _ r) = returnType r
 
 data Ident = Ident Int deriving (Eq, Ord, Show)
-data Number
+data Number = I32 Int | I64 Int | F32 Float | F64 Double deriving (Eq, Ord, Show)
 
 newtype FuncRef = FuncRef Int deriving (Eq, Ord, Show)
-newtype GlobalIdx = GlobalIdx Int
-data Idx = Local Int | Global Int
-newtype ArrayIdx = ArrayIdx Idx
-newtype ArgPos = ArgPos Int
+newtype GlobalIdx = GlobalIdx Int deriving (Eq, Ord, Show)
+data Idx = Local Int | Global Int deriving (Eq, Ord, Show)
+newtype ArrayIdx = ArrayIdx Idx deriving (Eq, Ord, Show)
+newtype ArgPos = ArgPos Int deriving (Eq, Ord, Show)
 
 data Ref 
   = RVar Idx
@@ -54,18 +55,29 @@ data Ref
   | RFuncRef FuncRef
 
   -- double references
-  | RRLocal Idx -- var pointing to var (?)
+  | RRVar Idx -- var pointing to var (?)
   | RRArray Type Int Idx -- var containing base address
   | RRFuncRef Idx -- var containing func idx
+  deriving Show
+
+data Value = VConst Int | VVar Idx | VVVar Idx
+  deriving Show
+
+refToValue :: Either Int Ref -> Value
+refToValue (Left idx) = VConst idx
+refToValue (Right (RVar idx)) = VVar idx
+refToValue (Right (RRVar idx)) = VVVar idx
+refToValue e = error $ "refToValue: " <> show e <> " (this is a bug)"
 
 --------------------------------------------------------------------------------
 
-data Value = VConst Int | VRef Idx | VVRef Idx
-
 data Lens = Lens { from :: [Value], to :: [Int] }
 
-focusLens :: Int -> Lens -> Lens
-focusLens i l = l { to = i:l.to }
+focusLensFrom :: Value -> Lens -> Lens
+focusLensFrom i l = l { from = i:l.from }
+
+focusLensTo :: Int -> Lens -> Lens
+focusLensTo i l = l { to = i:l.to }
 
 data Env = Env {
   typ :: Type,
@@ -76,17 +88,19 @@ data Env = Env {
 
 data Op
 
+data AllocRegion = ARGlobal | ARLocal
+
 data IRF n
   = Ref Ref
   | Arg Int
 
-  | Alloc Type Bool (Ref -> n)
+  | Alloc Type AllocRegion (Ref -> n)
 
   | CopyVal Type Number Ref Lens n
-  | CopyRef Ref Ref Lens n
+  | CopyRef Type Ref Ref Lens n
 
   | BinOp Op Ref Ref Ref n
-  | Call Ref [Ref] Ref n
+  | Call Ref [Ref] Ref
 
   | Abs Type n
   deriving (Functor)
@@ -107,7 +121,7 @@ data IIRF n
   deriving (Functor)
 
 -- Smart constructors
-alloc :: Type -> Bool -> IR Ref
+alloc :: Type -> AllocRegion -> IR Ref
 alloc t b = liftF (Alloc t b id)
 
 arg :: Int -> IR ()
@@ -116,7 +130,9 @@ arg i = liftF (Arg i)
 abs :: Type -> IR () -> IR ()
 abs t n = Free (Abs t n)
 
--- 
+call :: Ref -> [Ref] -> Ref -> IR ()
+call fr args ret = Free (Call fr args ret)
+
 -- copyVal :: Number -> Ref -> Lens -> IR m ()
 -- copyVal n r l = liftF (CopyVal n r l ())
 -- 
@@ -154,15 +170,13 @@ interpret (Free (Arg i)) = pure $ liftF $ Arg i
 interpret (Free (CopyVal t n r l next)) = do
   rest <- interpret next
   pure $ Free $ CopyVal t n r l rest
-interpret (Free (CopyRef r1 r2 l next)) = do
+interpret (Free (CopyRef t r1 r2 l next)) = do
   rest <- interpret next
-  pure $ Free $ CopyRef r1 r2 l rest
+  pure $ Free $ CopyRef t r1 r2 l rest
 interpret (Free (BinOp op r1 r2 r3 next)) = do
   rest <- interpret next
   pure $ Free $ BinOp op r1 r2 r3 rest
-interpret (Free (Call r rs r' next)) = do
-  rest <- interpret next
-  pure $ Free $ Call r rs r' rest
+interpret (Free (Call r rs r')) = pure $ Free $ Call r rs r'
 
 lower :: Env -> IRT (R.Reader Env) a -> IR a
 lower env m = case R.runReader (TF.runFreeT m) env of
@@ -172,27 +186,38 @@ lower env m = case R.runReader (TF.runFreeT m) env of
     Arg i -> Free $ Arg i
     Alloc t g next -> Free $ Alloc t g (\r -> lower env (next r))
     CopyVal t n r l next -> Free $ CopyVal t n r l (lower env next)
-    CopyRef r1 r2 l next -> Free $ CopyRef r1 r2 l (lower env next)
+    CopyRef t r1 r2 l next -> Free $ CopyRef t r1 r2 l (lower env next)
     BinOp op r1 r2 r3 next -> Free $ BinOp op r1 r2 r3 (lower env next)
-    Call r rs r' next -> Free $ Call r rs r' (lower env next)
+    Call r rs r' -> Free $ Call r rs r'
     Abs t body -> Free $ Abs t (lower env body)
 
+select :: IRT (R.Reader Env) a -> Either Int Ref -> IRT (R.Reader Env) a
+select ir ref = TF.hoistFreeT (R.local $ \env -> env { lens = focusLensFrom (refToValue ref) env.lens }) ir
+
 focus :: Int -> IRT (R.Reader Env) a -> IRT (R.Reader Env) a
-focus i = TF.hoistFreeT $ R.local $ \env -> env { lens = focusLens i env.lens }
+focus i = TF.hoistFreeT $ R.local $ \env -> env { lens = focusLensTo i env.lens }
 
 retVal :: Number -> IRT (R.Reader Env) ()
 retVal n = FreeT $ do
   env <- R.ask
   pure $ TF.Free $ CopyVal env.typ n env.ret env.lens (pure ())
 
-allocAndCall' :: Type -> Bool -> IRT (R.Reader Env) () -> IRT (R.Reader Env) Ref
-allocAndCall' t global ir = TF.FreeT $ pure $ TF.Free $ Alloc t global $ \ref -> TF.FreeT $ R.local (fenv ref) $ TF.runFreeT (ir >> pure ref)
+retRef :: Ref -> IRT (R.Reader Env) ()
+retRef ref = FreeT $ do
+  env <- R.ask
+  pure $ TF.Free $ CopyRef env.typ ref env.ret env.lens (pure ())
+
+allocAndCall :: Type -> AllocRegion -> IRT (R.Reader Env) () -> IRT (R.Reader Env) Ref
+allocAndCall t region ir = TF.FreeT $ pure $ TF.Free $ Alloc t region $ \ref -> TF.FreeT $ R.local (fenv ref) $ TF.runFreeT (ir >> pure ref)
   where
     fenv ref env = env {
       typ = t,
       ret = ref,
       lens = Lens { from = [], to = [] }
     }
+
+funcRef :: IRT (R.Reader Env) Ref -> IRT (R.Reader Env) ()
+funcRef ir = TF.FreeT $ TF.runFreeT (ir >>= retRef)
 
 --------------------------------------------------------------------------------
 
@@ -217,44 +242,5 @@ capture n = CallM $ R.asks (M.lookup n . (.refs)) >>= \case
   Just ref -> pure ref
   Nothing -> error "capture: no binding (this is a bug)"
 
--- focus :: Int -> CallM m () -> CallM m ()
--- focus = undefined
--- 
--- select :: CallM m () -> Ref -> CallM m ()
--- select = undefined
-
 external :: Ident -> [Ref] -> CallM m ()
 external = undefined
-
--- TODO: we need Map FuncRef [m ()] and a memory layout 
-
-funcRef :: Type -> ([Ref] -> CallM m Ref) -> CallM m Ref
-funcRef t f = CallM $ do
-  -- let a = R.runReaderT (ST.runStateT (f []).callM undefined) undefined
-  -- let a = ST.runStateT (R.runReaderT (f []).callM undefined)
-  -- args <- lift $ sequence [ arg i p | (i, p) <- zip [0..] (paramTypes t) ]
-  
-  -- TODO: call retVal
-  undefined
-
--- TODO: here we must know the captured values
--- in graph code if a function returns a function we can just fold everything inside the returned function (everything is immutable)
--- in sync code we'll need to allocate the Ref in a the global area
-allocAndCall :: Type -> Bool -> CallM m () -> CallM m Ref
-allocAndCall t global (CallM m) = undefined
-
---------------------------------------------------------------------------------
-
-data ARF
-  = ARef Ref
-  | AArg Int
-
-  | AAlloc Type Bool (Ref -> ARF)
-
-  | ACopyVal Number Ref Lens ARF
-  | ACopyRef Ref Ref Lens ARF
-
-  | ABinOp Op Ref Ref Ref ARF
-  | ACall Ref [Ref] Ref ARF
-
-  | AAbs Type ARF
