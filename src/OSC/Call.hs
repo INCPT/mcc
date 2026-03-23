@@ -113,7 +113,7 @@ lower ir = ST.runState (lowerFreeT ir) (Mut M.empty 0)
   where
     lowerFreeT :: Monad m => FreeT (ST.State Mut) IRF () -> ST.State Mut (IR m ())
     lowerFreeT (FreeT m) = do
-      step <- m
+      step <- ST.lift m
       case step of
         Pure a -> return (return a)
         Free (Alloc t b k) -> do
