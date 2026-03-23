@@ -98,7 +98,7 @@ data SExpr idx
   = SConst Number
   | SArr Type [Choice idx]
   | SOp Op (Choice idx) (Choice idx)
-  | SAbs Type {- bindings -} [(Ident, Expr)] (Choice idx)
+  | SAbs Type {- bindings -} [(Ident, Choice idx)] (Choice idx)
   | SApp Type Ident [Choice idx]
   | SExtern Type Ident [Choice idx]
   deriving (Show)
@@ -129,7 +129,7 @@ traverseChoice fChoice fSExpr = go
     goSExpr (SConst n) = pure (SConst n)
     goSExpr (SArr t cs) = SArr t <$> traverse go cs
     goSExpr (SOp op a b) = SOp op <$> go a <*> go b
-    goSExpr (SAbs t bs c) = SAbs t bs <$> go c
+    goSExpr (SAbs t bs c) = SAbs t <$> traverse (sequenceA . fmap go) bs <*> go c
     goSExpr (SApp t n cs) = SApp t n <$> traverse go cs
     goSExpr (SExtern t n cs) = SExtern t n <$> traverse go cs
 
@@ -143,7 +143,7 @@ choiceTree (EConst n) = toC (SConst n)
 choiceTree (EOp op a b) = toC (SOp op (toChoice a) (toChoice b))
 choiceTree (EExtern t n es) = toC (SExtern t n $ map toChoice es)
 choiceTree (EApp t n es) = toC (SApp t n $ map toChoice es)
-choiceTree (EAbs t bs e) = toC (SAbs t bs (toChoice e))
+choiceTree (EAbs t bs e) = toC (SAbs t (map (second toChoice) bs) (toChoice e))
 choiceTree (EArr t es) = do
   s <- pop
   case s of
