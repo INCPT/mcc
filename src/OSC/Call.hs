@@ -34,43 +34,52 @@ returnType TNumber = VTNumber
 returnType (TArr t dim) = VTArr t dim
 returnType (TAbs _ r) = returnType r
 
-data Slice = Slice { start :: Int, length :: Int, innerDims :: [Int] }
-
 data Ident = Ident Int deriving (Eq, Ord, Show)
 data Number
 
 newtype FuncRef = FuncRef Int
-newtype LocalIdx = LocalIdx Int
-newtype ArrayIdx = ArrayIdx Int
+newtype GlobalIdx = GlobalIdx Int
+data Idx = Local Int | Global Int
+newtype ArrayIdx = ArrayIdx Idx
 newtype ArgPos = ArgPos Int
 
 data Ref 
-  = RLocal LocalIdx
+  = RVar Idx
   | RArray Type Int ArrayIdx
   | RFuncRef FuncRef
 
   -- double references
-  | RRLocal LocalIdx -- local pointing to local (?)
-  | RRArray Type Int LocalIdx -- local containing base address
-  | RRFuncRef LocalIdx -- local containing func idx
+  | RRLocal Idx -- var pointing to var (?)
+  | RRArray Type Int Idx -- var containing base address
+  | RRFuncRef Idx -- var containing func idx
 
 --------------------------------------------------------------------------------
 
+data Value = VConst Number | VRef Idx | VVRef Idx
+
+data Lens = Lens { typ :: Type, from :: Value, to :: Int, count :: Int }
+
 data Env = Env
-  { ret :: Ref
+  { typ :: Type
+  , ret :: Ref
   , refs :: Map Ident Ref
+  , focus :: Lens
   }
+
+-- data State = State
+--   { captured :: Set Ref
+--   }
 
 class MonadCodegen m where
   arg :: Int -> Type -> m Ref
 
-  retVal :: Number -> Ref -> m ()
-  retRef :: Ref -> Ref -> m ()
+  copyVal :: Number -> Ref -> Lens -> m ()
+  copyRef :: Ref -> Ref -> Lens -> m ()
 
   call :: Ref -> [Ref] -> Ref -> m ()
 
-newtype CallM m a = CallM { callM :: R.ReaderT Env m a }
-  deriving (Functor, Applicative, Monad, MonadTrans, MFunctor)
+newtype CallM m a = CallM { callM :: ST.StateT () (R.ReaderT Env m) a }
+  deriving (Functor, Applicative, Monad)
 
 withBindings :: MonadFix m => [(Ident, CallM m Ref)] -> CallM m () -> CallM m ()
 withBindings bs f = CallM $ mdo
@@ -83,6 +92,7 @@ withBindings bs f = CallM $ mdo
 
   R.local (\env -> env { refs = bsRefs <> env.refs }) f.callM
 
+-- if capturing argument need to declare it globally; otherwise just declare Ref global
 capture :: Monad m => Ident -> CallM m Ref
 capture n = CallM $ R.asks (M.lookup n . (.refs)) >>= \case
   Just ref -> pure ref
@@ -91,8 +101,13 @@ capture n = CallM $ R.asks (M.lookup n . (.refs)) >>= \case
 focus :: Int -> CallM m () -> CallM m ()
 focus = undefined
 
+select :: CallM m () -> Ref -> CallM m ()
+select = undefined
+
 external :: Ident -> [Ref] -> CallM m ()
 external = undefined
+
+-- we need Map FuncRef [m ()] and a memory layout 
 
 funcRef :: Type -> ([Ref] -> CallM m Ref) -> CallM m Ref
 funcRef t f = CallM $ do
@@ -104,6 +119,6 @@ funcRef t f = CallM $ do
 -- call :: Ref -> [Ref] -> CallM m ()
 -- call = undefined
 
--- allocation happens here
-runCallM :: MonadCodegen m => Type -> CallM m () -> CallM m Ref
-runCallM t (CallM m) = undefined
+-- TODO: here we must know the captured values
+allocAndCall :: MonadCodegen m => Type -> CallM m () -> CallM m Ref
+allocAndCall t (CallM m) = undefined
