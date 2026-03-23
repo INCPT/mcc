@@ -64,7 +64,7 @@ data Env = Env
   { typ :: Type
   , ret :: Ref
   , refs :: Map Ident Ref
-  , focus :: Lens
+  , lens :: Lens
   }
 
 data Op
@@ -87,7 +87,7 @@ data IRF n
 type IR = Free IRF
 
 data IIRF n
-  = IRef Ref
+  = IFuncRef FuncRef
   | IAlloc Type Bool (Ref -> n)
   | IArg Int Type (Ref -> n)
 
@@ -104,6 +104,10 @@ alloc t b = liftF (Alloc t b id)
 
 arg :: Int -> IR ()
 arg i = liftF (Arg i)
+
+abs :: Type -> IR () -> IR ()
+abs t n = Free (Abs t n)
+
 -- 
 -- copyVal :: Number -> Ref -> Lens -> IR m ()
 -- copyVal n r l = liftF (CopyVal n r l ())
@@ -132,9 +136,11 @@ interpret (Free (Abs t body)) = do
   lbody <- interpret body
   ST.modify $ \st -> st { funcRefs = M.insert (FuncRef idx) lbody st.funcRefs }
   pure $ liftF $ Ref $ RFuncRef $ FuncRef idx
-interpret (Free (Alloc t g next)) = do
-  idx <- ST.gets (.nextAlloc); ST.modify $ \st -> st { nextAlloc = st.nextAlloc + 1 }
-  interpret (next $ RVar $ Local $ idx)
+-- interpret (Free (Alloc t g next)) = do
+--   idx <- ST.gets (.nextAlloc); ST.modify $ \st -> st { nextAlloc = st.nextAlloc + 1 }
+--   interpret (next $ RVar $ Local $ idx)
+-- interpret (Free (Alloc t g next)) = do
+--   pure $ Free $ Alloc t g $ \ref -> 
 interpret (Free (Ref r)) = pure $ liftF $ Ref r
 interpret (Free (Arg i)) = pure $ liftF $ Arg i
 interpret (Free (CopyVal n r l next)) = do
@@ -163,6 +169,9 @@ lower env m = case R.runReader (TF.runFreeT m) env of
     Call r rs r' next -> Free $ Call r rs r' (lower env next)
     Abs t body -> Free $ Abs t (lower env body)
 
+focus :: Int -> TF.FreeT IRF (R.Reader Env) a -> TF.FreeT IRF (R.Reader Env) a
+focus idx = TF.hoistFreeT $ R.local _
+
 --------------------------------------------------------------------------------
 
 newtype CallM m a = CallM { callM :: R.ReaderT Env (ST.StateT Mut m) a }
@@ -186,11 +195,11 @@ capture n = CallM $ R.asks (M.lookup n . (.refs)) >>= \case
   Just ref -> pure ref
   Nothing -> error "capture: no binding (this is a bug)"
 
-focus :: Int -> CallM m () -> CallM m ()
-focus = undefined
-
-select :: CallM m () -> Ref -> CallM m ()
-select = undefined
+-- focus :: Int -> CallM m () -> CallM m ()
+-- focus = undefined
+-- 
+-- select :: CallM m () -> Ref -> CallM m ()
+-- select = undefined
 
 external :: Ident -> [Ref] -> CallM m ()
 external = undefined
