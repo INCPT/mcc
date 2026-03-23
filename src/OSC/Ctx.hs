@@ -121,9 +121,10 @@ traverseChoice fChoice fSExpr = go
       fChoice (CChoice t choices' idx)
 
     go (CExpr idxs sexpr) = do
+      idxs' <- traverse (\(t, idx) -> (t,) <$> traverse go idx) idxs
       sexpr' <- goSExpr sexpr
       sexpr'' <- fSExpr sexpr'
-      fChoice (CExpr idxs sexpr'')
+      fChoice (CExpr idxs' sexpr'')
 
     goSExpr (SConst n) = pure (SConst n)
     goSExpr (SArr t cs) = SArr t <$> traverse go cs
