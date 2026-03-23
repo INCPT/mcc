@@ -129,6 +129,9 @@ data Mut = Mut
 
 data Expr
 
+-- TODO: IR must be in state so that allocation is done by the backend
+-- TODO: or interpret allocates given an allocation strategy (Type Bool -> ST.State st Ref)
+
 interpret :: IR () -> ST.State Mut (IR ())
 interpret (Pure a) = pure $ Pure a
 interpret (Free (Abs t body)) = do
@@ -136,11 +139,9 @@ interpret (Free (Abs t body)) = do
   lbody <- interpret body
   ST.modify $ \st -> st { funcRefs = M.insert (FuncRef idx) lbody st.funcRefs }
   pure $ liftF $ Ref $ RFuncRef $ FuncRef idx
--- interpret (Free (Alloc t g next)) = do
---   idx <- ST.gets (.nextAlloc); ST.modify $ \st -> st { nextAlloc = st.nextAlloc + 1 }
---   interpret (next $ RVar $ Local $ idx)
--- interpret (Free (Alloc t g next)) = do
---   pure $ Free $ Alloc t g $ \ref -> 
+interpret (Free (Alloc t g next)) = do
+  idx <- ST.gets (.nextAlloc); ST.modify $ \st -> st { nextAlloc = st.nextAlloc + 1 }
+  interpret (next $ RVar $ Local $ idx)
 interpret (Free (Ref r)) = pure $ liftF $ Ref r
 interpret (Free (Arg i)) = pure $ liftF $ Arg i
 interpret (Free (CopyVal n r l next)) = do
