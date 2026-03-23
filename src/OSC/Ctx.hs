@@ -160,7 +160,7 @@ choiceTree (ESelect t e idx) = do
 choiceTree (ERec _ _ _ e) = choiceTree e -- TODO: need to inline ident with delay boxes
 
 elimIndices :: [(Type, Index (Choice (Index Expr)))] -> [(Type, Index (Choice Expr))]
-elimIndices = undefined
+elimIndices = map (\(t, idx) -> (t, fmap elimConstIndices idx))
 
 -- TODO: optimization, cluster generation and so on go here
 elimConstIndices :: Choice (Index Expr) -> Choice Expr
@@ -172,6 +172,17 @@ elimConstIndices (CChoice _ chs (IdxConst idx)) = elimConstIndices (chs !! idx)
 elimConstIndices (CChoice t chs (IdxVar idx)) = CChoice t (map elimConstIndices chs) idx
 
 elimConstIndices _ = undefined
+
+-- Version using traverseChoice
+elimConstIndices' :: Choice (Index Expr) -> Choice Expr
+elimConstIndices' = runIdentity . traverseChoice fChoice fSExpr
+  where
+    fChoice :: Choice Expr -> Identity (Choice Expr)
+    fChoice (CChoice _ chs (IdxConst idx)) = pure (chs !! idx)
+    fChoice c = pure c
+
+    fSExpr :: SExpr Expr -> Identity (SExpr Expr)
+    fSExpr = pure
 
 toChoice :: Expr -> Choice (Index Expr)
 toChoice = flip ST.evalState [] . choiceTree
