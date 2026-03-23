@@ -37,7 +37,7 @@ returnType (TAbs _ r) = returnType r
 data Ident = Ident Int deriving (Eq, Ord, Show)
 data Number
 
-newtype FuncRef = FuncRef Int
+newtype FuncRef = FuncRef Int deriving (Eq, Ord, Show)
 newtype GlobalIdx = GlobalIdx Int
 data Idx = Local Int | Global Int
 newtype ArrayIdx = ArrayIdx Idx
@@ -75,12 +75,29 @@ data IR
   | CopyVal Number Ref Lens IR
   | CopyRef Ref Ref Lens IR
 
-  | BinOp Op Ref Ref Ref
-  | Call Ref [Ref] Ref
+  | BinOp Op Ref Ref Ref IR
+  | Call Ref [Ref] Ref IR
+
+  | Done
 
 data Mut = Mut
   { funcRefs :: Map FuncRef IR
+  , nextFuncRefIdx :: Int
   }
+
+data Expr
+
+bla :: Expr -> ST.StateT Mut (R.Reader Env) IR
+bla = undefined
+
+lol :: ST.StateT Mut (R.Reader Env) IR -> ST.StateT Mut (R.Reader Env) IR
+lol m = do
+  idx <- ST.gets (.nextFuncRefIdx); ST.modify $ \st -> st { nextFuncRefIdx = st.nextFuncRefIdx + 1 }
+
+  ir <- m
+
+  ST.modify $ \st -> st { funcRefs = M.insert (FuncRef idx) ir st.funcRefs }
+  pure ir
 
 newtype CallM m a = CallM { callM :: R.ReaderT Env (ST.StateT Mut m) a }
   deriving (Functor, Applicative, Monad) -- , MonadTrans, MFunctor)
