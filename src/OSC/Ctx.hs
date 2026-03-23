@@ -175,13 +175,13 @@ elimConstIndices _ = undefined
 
 -- Version using traverseChoice
 elimConstIndices' :: Choice (Index Expr) -> Choice Expr
-elimConstIndices' = runIdentity . traverseChoice fChoice fSExpr
+elimConstIndices' c = runIdentity $ traverseChoice fChoice fSExpr c
   where
-    fChoice :: Choice Expr -> Identity (Choice Expr)
+    fChoice :: Choice (Index Expr) -> Identity (Choice (Index Expr))
     fChoice (CChoice _ chs (IdxConst idx)) = pure (chs !! idx)
-    fChoice c = pure c
+    fChoice ch = pure ch
 
-    fSExpr :: SExpr Expr -> Identity (SExpr Expr)
+    fSExpr :: SExpr (Index Expr) -> Identity (SExpr (Index Expr))
     fSExpr = pure
 
 toChoice :: Expr -> Choice (Index Expr)
