@@ -70,8 +70,9 @@ data Op
 
 data IRF n
   = Ref Ref
+  | Arg Int
+
   | Alloc Type Bool (Ref -> n)
-  | Arg Int Type (Ref -> n)
 
   | CopyVal Number Ref Lens n
   | CopyRef Ref Ref Lens n
@@ -100,8 +101,8 @@ data IIRF n
 alloc :: Type -> Bool -> IR Ref
 alloc t b = liftF (Alloc t b id)
 
--- arg :: Int -> Type -> IR m Ref
--- arg i t = liftF (Arg i t id)
+arg :: Int -> IR ()
+arg i = liftF (Arg i)
 -- 
 -- copyVal :: Number -> Ref -> Lens -> IR m ()
 -- copyVal n r l = liftF (CopyVal n r l ())
@@ -130,7 +131,9 @@ interpret (Free (Abs t body)) = do
   lbody <- interpret body
   ST.modify $ \st -> st { funcRefs = M.insert (FuncRef idx) lbody st.funcRefs }
   pure $ liftF $ Ref $ RFuncRef $ FuncRef idx
-interpret (Free f) = Free <$> traverse interpret f
+interpret (Free (Alloc t g next)) = do
+  idx <- ST.gets (.nextAlloc); ST.modify $ \st -> st { nextAlloc = st.nextAlloc + 1 }
+  interpret (next $ RVar $ Local $ idx)
 
 --------------------------------------------------------------------------------
 
