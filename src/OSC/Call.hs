@@ -80,9 +80,9 @@ data IR m
 
   | Done
 
-hfmap :: Functor f => (f (IR m) -> m (IR m)) -> IR f -> IR m
-hfmap nat (Alloc t b k) = Alloc t b (\r -> nat (hfmap nat <$> k r))
-hfmap nat (Arg i t k) = Arg i t (\r -> nat (hfmap nat <$> k r))
+hfmap :: Functor f => (f (IR f) -> m (IR m)) -> IR f -> IR m
+hfmap nat (Alloc t b k) = Alloc t b (\r -> nat (fmap (hfmap nat) (k r)))
+hfmap nat (Arg i t k) = Arg i t (\r -> nat (fmap (hfmap nat) (k r)))
 hfmap nat (CopyVal n r l ir) = CopyVal n r l (hfmap nat ir)
 hfmap nat (CopyRef r1 r2 l ir) = CopyRef r1 r2 l (hfmap nat ir)
 hfmap nat (BinOp op r1 r2 r3 ir) = BinOp op r1 r2 r3 (hfmap nat ir)
