@@ -130,7 +130,7 @@ interpret (Free (Abs t body)) = do
   lbody <- interpret body
   ST.modify $ \st -> st { funcRefs = M.insert (FuncRef idx) lbody st.funcRefs }
   pure $ liftF $ Ref $ RFuncRef $ FuncRef idx
-interpret (Free f) = undefined
+interpret (Free f) = Free <$> traverse interpret f
 
 --------------------------------------------------------------------------------
 
