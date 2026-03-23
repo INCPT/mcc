@@ -25,6 +25,9 @@ import Control.Monad.Trans.Free (FreeT (FreeT), FreeF)
 
 data Type = TNumber | TArr Type {- length -} Int | TAbs Type Type
 
+sizeOfType :: Type -> Int
+sizeOfType = undefined
+
 paramTypes :: Type -> [Type]
 paramTypes (TAbs t r) = t:paramTypes r
 paramTypes _ = []
@@ -57,9 +60,12 @@ data Ref
 
 --------------------------------------------------------------------------------
 
-data Value = VConst Number | VRef Idx | VVRef Idx
+data Value = VConst Int | VRef Idx | VVRef Idx
 
-data Lens = Lens { typ :: Type, from :: Value, to :: Int, count :: Int }
+data Lens = Lens { from :: [Value], to :: [Int] }
+
+focusLens :: Int -> Lens -> Lens
+focusLens i l = l { to = i:l.to }
 
 data Env = Env {
   typ :: Type,
@@ -76,7 +82,7 @@ data IRF n
 
   | Alloc Type Bool (Ref -> n)
 
-  | CopyVal Number Ref Lens n
+  | CopyVal Type Number Ref Lens n
   | CopyRef Ref Ref Lens n
 
   | BinOp Op Ref Ref Ref n
@@ -131,8 +137,7 @@ data Mut = Mut {
 
 data Expr
 
--- TODO: IR must be in state so that allocation is done by the backend
--- TODO: or interpret allocates given an allocation strategy (Type Bool -> ST.State st Ref)
+-- TODO: interpret allocates given an allocation strategy (Type Bool -> ST.State st Ref)
 
 interpret :: IR () -> ST.State Mut (IR ())
 interpret (Pure a) = pure $ Pure a
@@ -146,9 +151,9 @@ interpret (Free (Alloc t g next)) = do
   interpret (next $ RVar $ Local $ idx)
 interpret (Free (Ref r)) = pure $ liftF $ Ref r
 interpret (Free (Arg i)) = pure $ liftF $ Arg i
-interpret (Free (CopyVal n r l next)) = do
+interpret (Free (CopyVal t n r l next)) = do
   rest <- interpret next
-  pure $ Free $ CopyVal n r l rest
+  pure $ Free $ CopyVal t n r l rest
 interpret (Free (CopyRef r1 r2 l next)) = do
   rest <- interpret next
   pure $ Free $ CopyRef r1 r2 l rest
@@ -166,28 +171,27 @@ lower env m = case R.runReader (TF.runFreeT m) env of
     Ref r -> Free $ Ref r
     Arg i -> Free $ Arg i
     Alloc t g next -> Free $ Alloc t g (\r -> lower env (next r))
-    CopyVal n r l next -> Free $ CopyVal n r l (lower env next)
+    CopyVal t n r l next -> Free $ CopyVal t n r l (lower env next)
     CopyRef r1 r2 l next -> Free $ CopyRef r1 r2 l (lower env next)
     BinOp op r1 r2 r3 next -> Free $ BinOp op r1 r2 r3 (lower env next)
     Call r rs r' next -> Free $ Call r rs r' (lower env next)
     Abs t body -> Free $ Abs t (lower env body)
 
 focus :: Int -> IRT (R.Reader Env) a -> IRT (R.Reader Env) a
-focus idx = TF.hoistFreeT $ R.local _
+focus i = TF.hoistFreeT $ R.local $ \env -> env { lens = focusLens i env.lens }
 
-copyValWithLens :: Number -> Ref -> IRT (R.Reader Env) ()
-copyValWithLens n ref = FreeT $ do
+retVal :: Number -> IRT (R.Reader Env) ()
+retVal n = FreeT $ do
   env <- R.ask
-  pure $ TF.Free $ CopyVal n ref env.lens (pure ())
+  pure $ TF.Free $ CopyVal env.typ n env.ret env.lens (pure ())
 
 allocAndCall' :: Type -> Bool -> IRT (R.Reader Env) () -> IRT (R.Reader Env) Ref
-allocAndCall' t global ir = TF.FreeT $ pure $ TF.Free $ Alloc t global $ \ref -> TF.FreeT $ R.local (fenv ref) $ do
-  let TF.FreeT rir = ir >> pure ref
-  rir
+allocAndCall' t global ir = TF.FreeT $ pure $ TF.Free $ Alloc t global $ \ref -> TF.FreeT $ R.local (fenv ref) $ TF.runFreeT (ir >> pure ref)
   where
     fenv ref env = env {
+      typ = t,
       ret = ref,
-      lens = undefined
+      lens = Lens { from = [], to = [] }
     }
 
 --------------------------------------------------------------------------------
