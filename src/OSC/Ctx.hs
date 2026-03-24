@@ -224,7 +224,7 @@ uniqueName = undefined
 -- * choose the appropriate monad stack for the task
 -- * try to use traverseChoice if possible
 
-markCapturedBindings :: Choice -> Choice
+markCapturedBindings :: Choice -> UniqueM m Choice
 markCapturedBindings = undefined
 
 --------------------------------------------------------------------------------
