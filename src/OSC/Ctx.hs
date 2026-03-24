@@ -18,6 +18,7 @@ import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
 import Data.Generics.Uniplate.Data
+import Control.Lens
 
 data Type = TNumber | TArr Type {- length -} Int | TAbs (Maybe Ident) Type Type
   deriving (Data, Show)
@@ -346,6 +347,85 @@ markCapturedBindings choice = UniqueM $ ST.evalStateT (R.runReaderT (transformBi
       pure (SAbs t finalBindings finalBody)
     
     processSAbs e = pure e
+
+-- Lens-based implementation
+markCapturedBindingsL :: Monad m => Choice -> UniqueM m Choice
+markCapturedBindingsL choice = UniqueM $ ST.evalStateT (R.runReaderT (go choice) emptyMarkEnv) 0
+  where
+    go :: Monad m => Choice -> R.ReaderT MarkEnv (ST.StateT Int m) Choice
+    go = biplate processSAbs
+    
+    processSAbs :: Monad m => SExpr -> R.ReaderT MarkEnv (ST.StateT Int m) SExpr
+    processSAbs (SAbs t bs body) = do
+      env <- R.ask
+      
+      -- Extract parameter names and types from the function type
+      let paramList = namedParamTypes t
+      let paramMap = M.fromList paramList
+      
+      -- Collect all bindings (name, region)
+      let bindingMap = M.fromList [(n, r) | (n, r, _) <- bs]
+      
+      -- Create new environment for processing bindings and body
+      let newEnv = env
+            { bindings = bindingMap <> env.bindings
+            , params = paramMap <> env.params
+            }
+      
+      -- Process binding expressions using lens traversal
+      processedBs <- (traverse . _3) (R.local (const newEnv) . go) 
+                     [(n, r, expr) | (n, r, expr) <- bs]
+      
+      -- Process body
+      body' <- R.local (const newEnv) (go body)
+      
+      -- Collect free variables from body
+      let bodyFvs = collectFreeVars body'
+      
+      -- Captured = free in body AND bound in outer scope
+      let capturedParams = M.filterWithKey (\n _ -> S.member n bodyFvs && M.member n env.params) paramMap
+      let capturedBindings = M.filterWithKey (\n _ -> S.member n bodyFvs && M.member n env.bindings) bindingMap
+      
+      -- Create new bindings for captured parameters
+      newBindings <- traverse
+        (\paramName -> do
+            newName <- lift $ do
+              n <- ST.get
+              ST.put (n + 1)
+              pure $ Ident ("_captured_" ++ show n)
+            pure (paramName, newName)
+        ) (M.keys capturedParams)
+      
+      let capturedParamMap = M.fromList newBindings
+      
+      -- Update bindings: mark captured bindings as AGlobal and add new bindings for captured params
+      let updatedBindings = 
+            (processedBs & traverse . filtered (\(n, _, _) -> M.member n capturedBindings) . _2 .~ AGlobal)
+            ++
+            [ (newName, AGlobal, CExpr [] (SVar paramName))
+            | (paramName, newName) <- newBindings
+            ]
+      
+      -- Substitute captured param references in body using lens
+      let substitutedBody = body' & biplate %~ substVar capturedParamMap
+      
+      -- Recursively process the substituted body with captured param mappings
+      let finalEnv = newEnv { captured = capturedParamMap <> env.captured }
+      finalBody <- R.local (const finalEnv) (go substitutedBody)
+      
+      -- Process updated bindings with the final environment
+      finalBindings <- (traverse . _3) (R.local (const finalEnv) . go) updatedBindings
+      
+      pure (SAbs t finalBindings finalBody)
+    
+    processSAbs e = pure e
+    
+    substVar :: Map Ident Ident -> SExpr -> SExpr
+    substVar subst (SVar n) = SVar (M.findWithDefault n n subst)
+    substVar _ e = e
+    
+    _3 :: Lens (a, b, c) (a, b, c') c c'
+    _3 f (a, b, c) = (\c' -> (a, b, c')) <$> f c
 
 --------------------------------------------------------------------------------
 
