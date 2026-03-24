@@ -367,6 +367,43 @@ gatherAbstractions allocTablePred = traverseChoice fChoice fSExpr
       pure $ SFuncRef fr
     fSExpr e = pure e
 
+-- Version using uniplate
+gatherAbstractionsU :: (Type -> Bool) -> Choice -> ST.State AbsEnv Choice
+gatherAbstractionsU allocTablePred choice = do
+  -- First pass: transform all SAbs to SFuncRef
+  choice' <- transformBiM processSAbs choice
+  -- Second pass: transform all CChoice to CFuncRefTable where predicate holds
+  transformBiM processCChoice choice'
+  where
+    processSAbs :: SExpr -> ST.State AbsEnv SExpr
+    processSAbs (SAbs t bs body) = do
+      fr <- FuncRef <$> ST.gets (.nextFuncRef)
+
+      ST.modify $ \st -> st
+        { nextFuncRef = st.nextFuncRef + 1
+        , funcRefMap = M.insert fr (t, bs, body) st.funcRefMap
+        }
+
+      pure $ SFuncRef fr
+    processSAbs e = pure e
+
+    processCChoice :: Choice -> ST.State AbsEnv Choice
+    processCChoice ch@(CChoice t chs idx)
+      | allocTablePred t = do
+          frIdx <- ST.gets (.nextFuncRef)
+
+          let cht = peelType t
+          let frs = [ (FuncRef (frIdx + i), (cht, [], ch)) | (i, ch) <- zip [0..] chs ]
+
+          ST.modify $ \st -> st
+            { nextFuncRef = st.nextFuncRef + length chs
+            , funcRefMap = M.fromList frs <> st.funcRefMap
+            }
+
+          pure $ CFuncRefTable t (map fst frs) idx
+      | otherwise = pure ch
+    processCChoice ch = pure ch
+
 -- NEXT
 -- * mark captured bindings for storing in global
 -- * introduce global bindings for captured arguments, assign argument to them, replace reference to argument with ref to binding in closure
