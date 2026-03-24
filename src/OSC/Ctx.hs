@@ -18,7 +18,8 @@ import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
 import Data.Generics.Uniplate.Data
-import Control.Lens
+import Control.Lens hiding (Index, Choice, transform)
+import qualified Control.Lens as L
 
 data Type = TNumber | TArr Type {- length -} Int | TAbs (Maybe Ident) Type Type
   deriving (Data, Show)
