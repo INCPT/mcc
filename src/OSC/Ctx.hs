@@ -18,6 +18,7 @@ import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
 import Data.Generics.Uniplate.Data
+import Data.Generics.Str
 
 data Type = TNumber | TArr Type {- length -} Int | TAbs (Maybe Ident) Type Type
   deriving (Data, Show)
@@ -346,6 +347,58 @@ markCapturedBindings choice = UniqueM $ ST.evalStateT (R.runReaderT (transformBi
       pure (SAbs t finalBindings finalBody)
     
     processSAbs e = pure e
+
+foldCapped
+  :: Data on
+  => (on -> Bool)      -- Predicate: stop here?
+  -> (on -> r)         -- Extract result from matched nodes
+  -> (r -> r -> r)     -- Combine results
+  -> r                 -- Identity/empty value
+  -> on
+  -> r
+foldCapped stop extract combine empty = go
+  where
+    go x
+      | stop x    = extract x  -- Stop here, don't descend
+      | otherwise = case uniplate x of
+          (children, _) -> strFold go children
+
+    strFold _ Zero = empty
+    strFold f (One x) = f x
+    strFold f (Two l r) = combine (strFold f l) (strFold f r)
+
+foldCappedBi
+  :: Data to
+  => Data from
+  => (to -> Bool)
+  -> (to -> r)
+  -> (r -> r -> r)
+  -> r
+  -> from
+  -> r
+foldCappedBi stop extract combine empty x =
+    case biplate x of
+      (children, _) -> strFold go children
+  where
+    go y
+      | stop y    = extract y
+      | otherwise = case uniplate y of
+          (children, _) -> strFold go children
+
+    strFold _ Zero = empty
+    strFold f (One x) = f x
+    strFold f (Two l r) = combine (strFold f l) (strFold f r)
+
+markCapturedBindings2 :: Monad m => Choice -> UniqueM m Choice
+markCapturedBindings2 = undefined
+  where
+    isAbs :: Choice -> Bool
+    isAbs (CExpr _ (SAbs _ _ _)) = True
+    isAbs _ = False
+
+    freeVars :: Choice -> [Ident]
+    freeVars (CExpr _(SAbs _ _ body)) = foldCapped isAbs undefined undefined [] body
+    freeVars _ = []
 
 --------------------------------------------------------------------------------
 
