@@ -352,6 +352,7 @@ markCapturedBindings freeVarMap funcRefMap
 -- * codegen while maintaining focus/select lens
 -- * alloc when calling
 -- * when choice, call funcref table index or do if/elses
+-- * delay lines (they must have configurable delay); must also be initialized with 0
 
 {-
 
