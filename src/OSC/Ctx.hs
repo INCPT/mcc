@@ -17,6 +17,7 @@ import qualified Data.Set as S
 import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
+import qualified Control.Monad.Trans.Writer.CPS as W
 import Data.Generics.Uniplate.Data
 import Data.Generics.Str
 
@@ -267,16 +268,15 @@ substituteVars subst = transformBi substVar
     substVar e = e
 
 -- Single-pass implementation using uniplate for traversal
-markCapturedBindings :: Choice -> Choice
-markCapturedBindings choice = runUnique (R.runReaderT (transformBiM processSAbs choice) emptyMarkEnv)
+markCapturedBindings :: Choice -> (Choice, FreeVars)
+markCapturedBindings choice = runUnique (R.runReaderT (W.runWriterT (transformBiM processSAbs choice)) emptyMarkEnv)
   where
-    processSAbs :: SExpr -> R.ReaderT MarkEnv Unique SExpr
+    processSAbs :: SExpr -> W.WriterT FreeVars (R.ReaderT MarkEnv Unique) SExpr
     processSAbs (SAbs t bs body) = do
       env <- R.ask
       
       -- Extract parameter names and types from the function type
-      let paramList = namedParamTypes t
-      let paramMap = M.fromList paramList
+      let paramMap = M.fromList (namedParamTypes t)
       
       -- Collect all bindings (name, region)
       let bindingMap = M.fromList [(n, r) | (n, r, _) <- bs]
@@ -288,7 +288,7 @@ markCapturedBindings choice = runUnique (R.runReaderT (transformBiM processSAbs 
             }
       
       -- Process binding expressions
-      processedBs <- sequence
+      (processedBs, bsFreeVars) <- W.listen $ sequence
         [ do
             expr' <- R.local (const newEnv) (transformBiM processSAbs expr)
             pure (n, r, expr')
@@ -296,22 +296,19 @@ markCapturedBindings choice = runUnique (R.runReaderT (transformBiM processSAbs 
         ]
       
       -- Process body
-      body' <- R.local (const newEnv) (transformBiM processSAbs body)
-      
-      -- Collect free variables from body
-      let bodyFvs = collectFreeVars body'
+      (body', bodyFreeVars) <- W.listen $ R.local (const newEnv) (transformBiM processSAbs body)
       
       -- All bound names (parameters and bindings)
       let bound = S.fromList [n | (n, _, _) <- bs] <> M.keysSet paramMap
       
       -- Captured = free in body AND bound in outer scope
-      let capturedParams = M.filterWithKey (\n _ -> S.member n bodyFvs && M.member n env.params) paramMap
-      let capturedBindings = M.filterWithKey (\n _ -> S.member n bodyFvs && M.member n env.bindings) bindingMap
+      let capturedParams = M.filterWithKey (\n _ -> S.member n bodyFreeVars && M.member n env.params) paramMap
+      let capturedBindings = M.filterWithKey (\n _ -> S.member n bsFreeVars && M.member n env.bindings) bindingMap
       
       -- Create new bindings for captured parameters
       newBindings <- sequence
         [ do
-            newName <- lift fresh
+            newName <- lift $ lift fresh
             pure (paramName, newName)
         | paramName <- M.keys capturedParams
         ]
@@ -319,14 +316,15 @@ markCapturedBindings choice = runUnique (R.runReaderT (transformBiM processSAbs 
       let capturedParamMap = M.fromList newBindings
       
       -- Update bindings: mark captured bindings as AGlobal and add new bindings for captured params
-      let updatedBindings = 
-            [ case M.lookup n capturedBindings of
-                Just _ -> (n, AGlobal, expr')  -- Mark as global if captured
-                Nothing -> (n, r, expr')       -- Keep original region
-            | (n, r, expr') <- processedBs
-            ] ++
-            [ (newName, AGlobal, CExpr [] (SVar paramName))  -- New binding for captured param
-            | (paramName, newName) <- newBindings
+      let updatedBindings = mconcat
+            [ [ case M.lookup n capturedBindings of
+                  Just _ -> (n, AGlobal, expr')  -- Mark as global if captured
+                  Nothing -> (n, r, expr')       -- Keep original region
+              | (n, r, expr') <- processedBs
+              ]
+            , [ (newName, AGlobal, CExpr [] (SVar paramName))  -- New binding for captured param
+              | (paramName, newName) <- newBindings
+              ]
             ]
       
       -- Substitute captured param references in body
