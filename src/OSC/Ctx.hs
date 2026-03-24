@@ -354,7 +354,7 @@ markCapturedBindingsL :: Monad m => Choice -> UniqueM m Choice
 markCapturedBindingsL choice = UniqueM $ ST.evalStateT (R.runReaderT (go choice) emptyMarkEnv) 0
   where
     go :: Monad m => Choice -> R.ReaderT MarkEnv (ST.StateT Int m) Choice
-    go = biplate processSAbs
+    go c = L.transformM processSAbs c
     
     processSAbs :: Monad m => SExpr -> R.ReaderT MarkEnv (ST.StateT Int m) SExpr
     processSAbs (SAbs t bs body) = do
@@ -408,7 +408,7 @@ markCapturedBindingsL choice = UniqueM $ ST.evalStateT (R.runReaderT (go choice)
             ]
       
       -- Substitute captured param references in body using lens
-      let substitutedBody = body' & biplate %~ substVar capturedParamMap
+      let substitutedBody = body' & L.transform (substVar capturedParamMap)
       
       -- Recursively process the substituted body with captured param mappings
       let finalEnv = newEnv { captured = capturedParamMap <> env.captured }
