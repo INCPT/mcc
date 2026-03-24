@@ -374,8 +374,7 @@ markCapturedBindingsL choice = UniqueM $ ST.evalStateT (R.runReaderT (go choice)
             }
       
       -- Process binding expressions using lens traversal
-      processedBs <- (traverse . _3) (R.local (const newEnv) . go) 
-                     [(n, r, expr) | (n, r, expr) <- bs]
+      processedBs <- (traverse . _3) (R.local (const newEnv) . go) bs
       
       -- Process body
       body' <- R.local (const newEnv) (go body)

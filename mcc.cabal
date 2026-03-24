@@ -63,6 +63,7 @@ library
     , directory
     , filepath
     , free
+    , lens
     , megaparsec
     , mmorph
     , mtl
@@ -98,6 +99,7 @@ executable mcc
     , directory
     , filepath
     , free
+    , lens
     , mcc
     , megaparsec
     , mmorph

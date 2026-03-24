@@ -21,6 +21,7 @@ dependencies:
     - cereal
     - containers
     - free
+    - lens
     - mmorph
     - text
     - string-conversions
