@@ -230,11 +230,14 @@ toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
 
 --------------------------------------------------------------------------------
 
-newtype UniqueM m a = UniqueM (ST.StateT Int m a)
-  deriving (Functor, Applicative, Monad, MonadTrans)
+newtype Unique a = Unique (ST.State Int a)
+  deriving (Functor, Applicative, Monad)
 
-uniqueName :: Monad m => UniqueM m Ident
-uniqueName = UniqueM $ do
+runUnique :: Unique a -> a
+runUnique (Unique m) = ST.evalState m 0
+
+fresh :: Unique Ident
+fresh = Unique $ do
   n <- ST.get
   ST.put (n + 1)
   pure $ Ident ("_captured_" ++ show n)
@@ -264,10 +267,10 @@ substituteVars subst = transformBi substVar
     substVar e = e
 
 -- Single-pass implementation using uniplate for traversal
-markCapturedBindings :: Monad m => Choice -> UniqueM m Choice
-markCapturedBindings choice = UniqueM $ ST.evalStateT (R.runReaderT (transformBiM processSAbs choice) emptyMarkEnv) 0
+markCapturedBindings :: Choice -> Choice
+markCapturedBindings choice = runUnique (R.runReaderT (transformBiM processSAbs choice) emptyMarkEnv)
   where
-    processSAbs :: Monad m => SExpr -> R.ReaderT MarkEnv (ST.StateT Int m) SExpr
+    processSAbs :: SExpr -> R.ReaderT MarkEnv Unique SExpr
     processSAbs (SAbs t bs body) = do
       env <- R.ask
       
@@ -308,10 +311,7 @@ markCapturedBindings choice = UniqueM $ ST.evalStateT (R.runReaderT (transformBi
       -- Create new bindings for captured parameters
       newBindings <- sequence
         [ do
-            newName <- lift $ do
-              n <- ST.get
-              ST.put (n + 1)
-              pure $ Ident ("_captured_" ++ show n)
+            newName <- lift fresh
             pure (paramName, newName)
         | paramName <- M.keys capturedParams
         ]
@@ -347,58 +347,6 @@ markCapturedBindings choice = UniqueM $ ST.evalStateT (R.runReaderT (transformBi
       pure (SAbs t finalBindings finalBody)
     
     processSAbs e = pure e
-
-foldCapped
-  :: Data on
-  => (on -> Bool)      -- Predicate: stop here?
-  -> (on -> r)         -- Extract result from matched nodes
-  -> (r -> r -> r)     -- Combine results
-  -> r                 -- Identity/empty value
-  -> on
-  -> r
-foldCapped stop extract combine empty = go
-  where
-    go x
-      | stop x    = extract x  -- Stop here, don't descend
-      | otherwise = case uniplate x of
-          (children, _) -> strFold go children
-
-    strFold _ Zero = empty
-    strFold f (One x) = f x
-    strFold f (Two l r) = combine (strFold f l) (strFold f r)
-
-foldCappedBi
-  :: Data to
-  => Data from
-  => (to -> Bool)
-  -> (to -> r)
-  -> (r -> r -> r)
-  -> r
-  -> from
-  -> r
-foldCappedBi stop extract combine empty x =
-    case biplate x of
-      (children, _) -> strFold go children
-  where
-    go y
-      | stop y    = extract y
-      | otherwise = case uniplate y of
-          (children, _) -> strFold go children
-
-    strFold _ Zero = empty
-    strFold f (One x) = f x
-    strFold f (Two l r) = combine (strFold f l) (strFold f r)
-
-freeVars :: Choice -> [Ident]
-freeVars _ = []
-freeVars (CExpr _(SAbs _ _ body)) = foldCapped isAbs undefined undefined [] body
-  where
-    isAbs :: Choice -> Bool
-    isAbs (CExpr _ (SAbs _ _ _)) = True
-    isAbs _ = False
-
-markCapturedBindings2 :: Monad m => Choice -> UniqueM m Choice
-markCapturedBindings2 = undefined
 
 --------------------------------------------------------------------------------
 
