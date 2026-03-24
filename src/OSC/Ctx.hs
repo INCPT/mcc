@@ -54,10 +54,10 @@ data Expr
   | EOp Op Expr Expr -- both args and the result are simple types
   | EArr Type [Expr]
 
-  | EAbs Type {- bindings -} [(Ident, Expr)] Expr
-  | EApp Type Ident [Expr]
+  | EVar Ident
 
-  | EExtern Type Ident [Expr] -- can reference functions or shared mem
+  | EAbs Type {- bindings -} [(Ident, Expr)] Expr
+  | EApp Type Expr Expr
 
   | ESelect Type Expr (Index Expr)
   | ERec Type Int Ident Expr -- rec delay |prev| -> expr
@@ -102,10 +102,11 @@ data SExpr
   = SConst Number
   | SArr Type [Choice]
   | SOp Op Choice Choice
-  | SAbs Type {- bindings -} [(Ident, Choice)] Choice
 
-  | SApp Type Ident [Choice]
-  | SExtern Type Ident [Choice]
+  | SVar Ident
+
+  | SAbs Type {- bindings -} [(Ident, Choice)] Choice
+  | SApp Type Choice Choice
 
   | SFuncRef FuncRef
   deriving (Show)
@@ -143,9 +144,9 @@ traverseChoice fChoice fSExpr = go
     goSExpr (SConst n) = pure (SConst n)
     goSExpr (SArr t cs) = SArr t <$> traverse go cs
     goSExpr (SOp op a b) = SOp op <$> go a <*> go b
+    goSExpr (SVar n) = pure (SVar n)
     goSExpr (SAbs t bs c) = SAbs t <$> traverse (sequenceA . fmap go) bs <*> go c
-    goSExpr (SApp t n cs) = SApp t n <$> traverse go cs
-    goSExpr (SExtern t n cs) = SExtern t n <$> traverse go cs
+    goSExpr (SApp t f a) = SApp t <$> go f <*> go a
     goSExpr (SFuncRef fr) = pure (SFuncRef fr)
 
 --------------------------------------------------------------------------------
@@ -158,8 +159,8 @@ toC e = do
 choiceTree :: Monad m => Expr -> StackM (Type, Index Expr) m Choice
 choiceTree (EConst n) = toC (SConst n)
 choiceTree (EOp op a b) = toC (SOp op (toChoice a) (toChoice b))
-choiceTree (EExtern t n es) = toC (SExtern t n $ map toChoice es)
-choiceTree (EApp t n es) = toC (SApp t n $ map toChoice es)
+choiceTree (EVar n) = toC (SVar n)
+choiceTree (EApp t a b) = toC (SApp t (toChoice a) (toChoice b))
 choiceTree (EAbs t bs e) = toC (SAbs t (map (second toChoice) bs) (toChoice e))
 choiceTree (EArr t es) = do
   s <- pop
@@ -182,8 +183,8 @@ elimIndices = map (\(t, idx) -> (t, fmap elimConstIndices idx))
 -- TODO: optimization, cluster generation and so on go here
 elimConstIndices :: Choice -> Choice
 elimConstIndices (CExpr idxs (SConst n)) = CExpr (elimIndices idxs) (SConst n)
-elimConstIndices (CExpr idxs (SApp t n es)) = CExpr (elimIndices idxs) (SApp t n $ map elimConstIndices es)
-elimConstIndices (CExpr idxs (SExtern t n es)) = CExpr (elimIndices idxs) (SExtern t n $ map elimConstIndices es)
+elimConstIndices (CExpr idxs (SVar n)) = CExpr (elimIndices idxs) (SVar n)
+elimConstIndices (CExpr idxs (SApp t a b)) = CExpr (elimIndices idxs) (SApp t (elimConstIndices a) (elimConstIndices b))
 elimConstIndices (CExpr idxs (SArr t es)) = CExpr (elimIndices idxs) (SArr t $ map elimConstIndices es)
 elimConstIndices (CChoice _ chs (IdxConst idx)) = elimConstIndices (chs !! idx)
 elimConstIndices (CChoice t chs idx) = CChoice t (map elimConstIndices chs) idx
