@@ -10,11 +10,11 @@ import Data.Bifunctor (second)
 import Data.Functor.Identity
 import Data.Map (Map)
 import qualified Data.Map as M
-import Control.Monad (when)
+import Data.Set (Set)
+import qualified Data.Set as S
 import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
-import qualified Data.Map as M
 
 data Type = TNumber | TArr Type {- length -} Int | TAbs (Maybe Ident) Type Type
   deriving Show
@@ -216,8 +216,6 @@ uniqueName = UniqueM $ do
   ST.put (n + 1)
   pure $ Ident ("_captured_" ++ show n)
 
--- prerequisite: assume all Idents are unique (e.g. there is no identifier shadowing)
-
 -- Environment tracking bindings and parameters in scope
 data MarkEnv = MarkEnv
   { bindings :: Map Ident AllocRegion  -- Current bindings in scope
@@ -229,7 +227,7 @@ emptyMarkEnv :: MarkEnv
 emptyMarkEnv = MarkEnv M.empty M.empty M.empty
 
 -- Track which identifiers are referenced
-type ReferencedSet = Map Ident ()
+type ReferencedSet = Set Ident
 
 markCapturedBindings :: Monad m => Choice -> UniqueM m Choice
 markCapturedBindings choice = UniqueM $ ST.evalStateT (R.runReaderT (markChoice choice) emptyMarkEnv) 0
@@ -256,8 +254,8 @@ markCapturedBindings choice = UniqueM $ ST.evalStateT (R.runReaderT (markChoice 
       let refs = findReferences body
       
       -- Determine which params and bindings are captured (referenced and defined in outer scope)
-      let capturedParams = M.filterWithKey (\n _ -> M.member n refs && M.member n env.params) paramMap
-      let capturedBindings = M.filterWithKey (\n _ -> M.member n refs && M.member n env.bindings) bindingMap
+      let capturedParams = M.filterWithKey (\n _ -> S.member n refs && M.member n env.params) paramMap
+      let capturedBindings = M.filterWithKey (\n _ -> S.member n refs && M.member n env.bindings) bindingMap
       
       -- Create new bindings for captured parameters
       newBindings <- sequence
@@ -322,14 +320,14 @@ markCapturedBindings choice = UniqueM $ ST.evalStateT (R.runReaderT (markChoice 
       foldMap findReferences idx
     
     findRefsSExpr :: SExpr -> ReferencedSet
-    findRefsSExpr (SConst _) = M.empty
+    findRefsSExpr (SConst _) = S.empty
     findRefsSExpr (SArr _ cs) = mconcat (map findReferences cs)
     findRefsSExpr (SOp _ a b) = findReferences a <> findReferences b
-    findRefsSExpr (SVar n) = M.singleton n ()
+    findRefsSExpr (SVar n) = S.singleton n
     findRefsSExpr (SAbs _ bs body) = 
       mconcat [ findReferences expr | (_, _, expr) <- bs ] <> findReferences body
     findRefsSExpr (SApp _ f a) = findReferences f <> findReferences a
-    findRefsSExpr (SFuncRef _) = M.empty
+    findRefsSExpr (SFuncRef _) = S.empty
     
     -- Substitute variable references in a Choice
     substituteRefs :: Map Ident Ident -> Choice -> Choice
