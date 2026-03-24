@@ -389,16 +389,16 @@ foldCappedBi stop extract combine empty x =
     strFold f (One x) = f x
     strFold f (Two l r) = combine (strFold f l) (strFold f r)
 
-markCapturedBindings2 :: Monad m => Choice -> UniqueM m Choice
-markCapturedBindings2 = undefined
+freeVars :: Choice -> [Ident]
+freeVars _ = []
+freeVars (CExpr _(SAbs _ _ body)) = foldCapped isAbs undefined undefined [] body
   where
     isAbs :: Choice -> Bool
     isAbs (CExpr _ (SAbs _ _ _)) = True
     isAbs _ = False
 
-    freeVars :: Choice -> [Ident]
-    freeVars (CExpr _(SAbs _ _ body)) = foldCapped isAbs undefined undefined [] body
-    freeVars _ = []
+markCapturedBindings2 :: Monad m => Choice -> UniqueM m Choice
+markCapturedBindings2 = undefined
 
 --------------------------------------------------------------------------------
 
