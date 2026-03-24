@@ -233,10 +233,7 @@ markCapturedBindings :: Monad m => Choice -> UniqueM m Choice
 markCapturedBindings choice = UniqueM $ ST.evalStateT (R.runReaderT (markChoice choice) emptyMarkEnv) 0
   where
     markChoice :: Monad m => Choice -> R.ReaderT MarkEnv (ST.StateT Int m) Choice
-    markChoice = traverseChoice fChoice fSExpr
-
-    fChoice :: Monad m => Choice -> R.ReaderT MarkEnv (ST.StateT Int m) Choice
-    fChoice ch = pure ch
+    markChoice = traverseChoice pure fSExpr
 
     fSExpr :: Monad m => SExpr -> R.ReaderT MarkEnv (ST.StateT Int m) SExpr
     fSExpr (SAbs t bs body) = do
