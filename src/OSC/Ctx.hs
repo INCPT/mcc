@@ -150,7 +150,7 @@ instance Show SExpr where
         n ++ "@" ++ showRegion region ++ " = " ++ show expr
       showRegion ALocal = "local"
       showRegion AGlobal = "global"
-  show (SApp t f a) = show f ++ "(" ++ show a ++ ")"
+  show (SApp _ f a) = show f ++ "(" ++ show a ++ ")"
   show (SFuncRef (FuncRef n)) = "funcref#" ++ show n
 
 instance Show Choice where
@@ -462,8 +462,14 @@ markCapturedBindings choice = (substituteVars env.capturedParamMap choice', env)
 
 --------------------------------------------------------------------------------
 
+data Abs = Abs Type {- bindings -} [(Ident, AllocRegion, Choice)] Choice
+  deriving Data
+
+instance Show Abs where
+  show (Abs t bs e) = show (SAbs t bs e)
+
 data AbsEnv = AbsEnv
-  { funcRefMap :: Map FuncRef (Type, [(Ident, AllocRegion, Choice)], Choice)
+  { funcRefMap :: Map FuncRef Abs
   , nextFuncRef :: Int
   } deriving Show
 
@@ -482,7 +488,7 @@ gatherAbstractions allocTablePred choice = flip ST.runState (AbsEnv mempty 0) $ 
 
       ST.modify $ \st -> st
         { nextFuncRef = st.nextFuncRef + 1
-        , funcRefMap = M.insert fr (t, bs, body) st.funcRefMap
+        , funcRefMap = M.insert fr (Abs t bs body) st.funcRefMap
         }
 
       pure $ SFuncRef fr
@@ -494,7 +500,7 @@ gatherAbstractions allocTablePred choice = flip ST.runState (AbsEnv mempty 0) $ 
           frIdx <- ST.gets (.nextFuncRef)
 
           let cht = peelType t
-          let frs = [ (FuncRef (frIdx + i), (cht, [], ch)) | (i, ch) <- zip [0..] chs ]
+          let frs = [ (FuncRef (frIdx + i), (Abs cht [] ch)) | (i, ch) <- zip [0..] chs ]
 
           ST.modify $ \st -> st
             { nextFuncRef = st.nextFuncRef + length chs
@@ -504,6 +510,65 @@ gatherAbstractions allocTablePred choice = flip ST.runState (AbsEnv mempty 0) $ 
           pure $ CFuncRefTable t (map fst frs) idx
       | otherwise = pure ch
     processCChoice ch = pure ch
+
+gatherFreeVars :: Map FuncRef Abs -> Map FuncRef (Set Ident)
+gatherFreeVars funcRefMap = freeVarMap
+  where
+    freeVarMap :: Map FuncRef (Set Ident)
+    freeVarMap = M.fromList
+      [ (fr, allVars bindings body \\ (S.fromList [ n | (n, _, _) <- bindings ] <> S.fromList (fmap fst $ namedParamTypes t)))
+      | (fr, (Abs t bindings body)) <- M.toList funcRefMap
+      ]
+      where
+        allVars bindings ch = mconcat $ fmap mconcat
+          [ [ S.fromList [ n | SVar n <- universeBi ch ] ]
+          , [ S.fromList [ n | b <- bindings, SVar n <- universeBi b ] ]
+
+          , [ fvs | SFuncRef fr <- universeBi ch, Just fvs <- [ M.lookup fr freeVarMap ] ]
+          , [ fvs | b <- bindings, SFuncRef fr <- universeBi b, Just fvs <- [ M.lookup fr freeVarMap ] ]
+          ]
+
+markCapturedBindings2 :: Map FuncRef (Set Ident) -> Map FuncRef Abs -> Map FuncRef Abs
+markCapturedBindings2 freeVarMap funcRefMap
+  = fmap (transformBi (substituteVars substMap)) funcRefMapWithGlobalBindings
+
+  where
+    (funcRefMapWithGlobalBindings, substMap) = runUnique $ W.runWriterT (traverse go funcRefMap)
+
+    go :: Abs -> W.WriterT (Map Ident Ident) Unique Abs
+    go abs@(Abs t bindings body) = do
+      capturedParams <- sequence
+        [ (n,) <$> lift fresh
+        | (n, _) <- namedParamTypes t
+        , S.member n fvs
+        ]
+      
+      W.tell (M.fromList capturedParams)
+
+      pure $ Abs t (bindings' capturedParams) body
+      where
+        fvs = freeVars abs
+
+        bindings' capturedParams = mconcat
+          [ [ if S.member n fvs then (n, AGlobal, body) else b
+            | b@(n, _, body) <- bindings
+            ]
+          , [ (n, AGlobal, CExpr [] (SVarNS o) ) | ( o, n) <- capturedParams ] 
+          ]
+
+    freeVars :: Abs -> Set Ident
+    freeVars abs = mconcat
+      [ fvs
+      | SFuncRef fr <- universeBi abs
+      , Just fvs <- [ M.lookup fr freeVarMap ]
+      ]
+
+    -- Substitute variable references using uniplate
+    substituteVars :: Map Ident Ident -> Choice -> Choice
+    substituteVars subst = transformBi substVar
+      where
+        substVar (SVar n) = SVar (M.findWithDefault n n subst)
+        substVar e = e
 
 -- NEXT
 -- * mark captured bindings for storing in global
