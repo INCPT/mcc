@@ -205,6 +205,25 @@ elimConstIndices (CChoice t chs idx) = CChoice t (map elimConstIndices chs) idx
 
 elimConstIndices _ = undefined
 
+--------------------------------------------------------------------------------
+
+elimIndicesU :: [(Type, Index Choice)] -> [(Type, Index Choice)]
+elimIndicesU = map (\(t, idx) -> (t, fmap elimConstIndicesU idx))
+
+-- Uniplate version
+elimConstIndicesU :: Choice -> Choice
+elimConstIndicesU = transform go
+  where
+    go :: Choice -> Choice
+    -- Eliminate constant index selections by directly selecting the choice
+    go (CChoice _ chs (IdxConst idx)) = chs !! idx
+
+    -- Recursively eliminate indices in CExpr
+    go (CExpr idxs sexpr) = CExpr (elimIndicesU idxs) sexpr
+
+    -- Keep everything else as-is
+    go ch = ch
+
 toChoice :: Expr -> Choice
 toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
 
@@ -374,6 +393,7 @@ gatherAbstractionsU allocTablePred choice = do
   choice' <- transformBiM processSAbs choice
   -- Second pass: transform all CChoice to CFuncRefTable where predicate holds
   transformBiM processCChoice choice'
+
   where
     processSAbs :: SExpr -> ST.State AbsEnv SExpr
     processSAbs (SAbs t bs body) = do
