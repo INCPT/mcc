@@ -120,6 +120,7 @@ data SExpr
   | SOp Op Choice Choice
 
   | SVar Ident
+  | SVarNS Ident -- shouldn't be substituted
 
   | SAbs Type {- bindings -} [(Ident, AllocRegion, Choice)] Choice
   | SApp Type Choice Choice
@@ -139,6 +140,7 @@ instance Show SExpr where
   show (SArr t cs) = "[" ++ showType t ++ ": " ++ intercalate ", " (map show cs) ++ "]"
   show (SOp op a b) = "(" ++ show a ++ " " ++ showOp op ++ " " ++ show b ++ ")"
   show (SVar (Ident n)) = n
+  show (SVarNS (Ident n)) = n
   show (SAbs t bs body) = 
     "λ" ++ showType t ++ " " ++ showBindings bs ++ " = " ++ show body
     where
@@ -271,6 +273,7 @@ instance Semigroup MarkEnv where
 instance Monoid MarkEnv where
   mempty = MarkEnv mempty mempty
 
+{-
 markCapturedBindings :: Choice -> (Choice, MarkEnv)
 markCapturedBindings choice = (substituteVars env.capturedParamMap choice', env)
   where
@@ -351,9 +354,10 @@ markCapturedBindings choice = (substituteVars env.capturedParamMap choice', env)
       -- Report any free variables in this expression
       W.tell $ mempty { freeVars = collectSExprFreeVars e }
       pure e
+-}
 
-markCapturedBindings2 :: Choice -> (Choice, MarkEnv)
-markCapturedBindings2 choice = (substituteVars env.capturedParamMap choice', env)
+markCapturedBindings :: Choice -> (Choice, MarkEnv)
+markCapturedBindings choice = (substituteVars env.capturedParamMap choice', env)
   where
     (choice', env) = runUnique (W.runWriterT $ go choice)
 
@@ -384,7 +388,7 @@ markCapturedBindings2 choice = (substituteVars env.capturedParamMap choice', env
       let bindingMap = M.fromList [(n, r) | (n, r, _) <- bindings]
       
       -- Process binding expressions and collect their free variables
-      (processedBs, bsEnv) <- lift $ W.runWriterT $ sequence
+      (processedBindings, bsEnv) <- lift $ W.runWriterT $ sequence
         [ do
             expr' <- go expr
             pure (n, r, expr')
@@ -392,27 +396,25 @@ markCapturedBindings2 choice = (substituteVars env.capturedParamMap choice', env
         ]
       
       -- Process body and collect its free variables
-      (body', bodyEnv) <- lift $ W.runWriterT $ go body
+      (processedBody, bodyEnv) <- lift $ W.runWriterT $ go body
       
       -- All bound names (parameters and bindings)
       let bound = S.fromList [n | (n, _, _) <- bindings] <> M.keysSet paramMap
       
       -- Captured = free in body AND bound in outer scope
-      let capturedParams = M.filterWithKey (\n _ -> S.member n bodyEnv.freeVars && M.member n paramMap) paramMap
-      let capturedBindings = M.filterWithKey (\n _ -> S.member n bsEnv.freeVars && M.member n bindingMap) bindingMap
+      let capturedParams = M.filterWithKey (\n _ -> S.member n bodyEnv.freeVars) paramMap
+      let capturedBindings = M.filterWithKey (\n _ -> S.member n bsEnv.freeVars) bindingMap
       
       -- Create new bindings for captured parameters
-      capturedParams <- sequence
-        [ do
-            newName <- lift fresh
-            pure (paramName, newName)
+      renamedParams <- sequence
+        [ (paramName,) <$> lift fresh
         | paramName <- M.keys capturedParams
         ]
       
       W.tell $ mempty
         -- Filter out bound variables - only report truly free variables up
         { freeVars = (bodyEnv.freeVars <> bsEnv.freeVars) \\ bound
-        , capturedParamMap = M.fromList capturedParams
+        , capturedParamMap = M.fromList renamedParams
         }
       
       -- Update bindings: mark captured bindings as AGlobal and add new bindings for captured params
@@ -420,14 +422,14 @@ markCapturedBindings2 choice = (substituteVars env.capturedParamMap choice', env
             [ [ case M.lookup n capturedBindings of
                   Just _ -> (n, AGlobal, expr')  -- Mark as global if captured
                   Nothing -> (n, r, expr')       -- Keep original region
-              | (n, r, expr') <- processedBs
+              | (n, r, expr') <- processedBindings
               ]
-            , [ (newName, AGlobal, CExpr [] (SVar paramName))  -- New binding for captured param
-              | (paramName, newName) <- capturedParams
+            , [ (newName, AGlobal, CExpr [] (SVarNS paramName))  -- New binding for captured param
+              | (paramName, newName) <- renamedParams
               ]
             ]
       
-      pure (CExpr idxs (SAbs t updatedBindings body'))
+      pure (CExpr idxs (SAbs t updatedBindings processedBody))
 
     go e = cexpr e $ \case
       e@(SConst _) -> pure e
@@ -444,12 +446,13 @@ markCapturedBindings2 choice = (substituteVars env.capturedParamMap choice', env
       e@(SVar n) -> do
         W.tell $ mempty { freeVars = S.singleton n }
         pure e
-    
+
       SApp t a b -> do
         a' <- go a
         b' <- go b
         pure $ SApp t a' b'
 
+      SVarNS _ -> error "SVarNS: shouldn't happen here (this is a bug)"
       SAbs _ _ _ -> error "SAbs: should be pattern matched in go (this is a bug)"
 
       e@(SFuncRef _) -> pure e
@@ -459,7 +462,7 @@ markCapturedBindings2 choice = (substituteVars env.capturedParamMap choice', env
 data AbsEnv = AbsEnv
   { funcRefMap :: Map FuncRef (Type, [(Ident, AllocRegion, Choice)], Choice)
   , nextFuncRef :: Int
-  }
+  } deriving Show
 
 gatherAbstractions :: (Type -> Bool) -> Choice -> (Choice, AbsEnv)
 gatherAbstractions allocTablePred choice = flip ST.runState (AbsEnv mempty 0) $ do
