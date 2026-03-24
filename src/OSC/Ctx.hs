@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -7,6 +8,7 @@
 module OSC.Ctx where
 
 import Data.Bifunctor (second)
+import Data.Data (Typeable, Data)
 import Data.Functor.Identity
 import Data.Map (Map)
 import qualified Data.Map as M
@@ -17,7 +19,7 @@ import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
 
 data Type = TNumber | TArr Type {- length -} Int | TAbs (Maybe Ident) Type Type
-  deriving Show
+  deriving (Data, Show)
 
 sizeOfType :: Type -> Int
 sizeOfType TNumber = 4
@@ -44,16 +46,16 @@ namedParamTypes (TAbs (Just i) t ts) = (i, t):namedParamTypes ts
 namedParamTypes (TAbs Nothing _ _) = error "namedParamTypes: unnamed param (this is a bug)"
 
 data Number = I Int | F Double
-  deriving Show
+  deriving (Show, Data)
 
 data Ident = Ident String
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Data, Show)
 
 data Index a = IdxConst Int | IdxVar a
-  deriving (Show, Functor, Foldable, Traversable)
+  deriving (Show, Functor, Foldable, Traversable, Data)
 
 data Op = Plus | Minus | Mul | Div
-  deriving Show
+  deriving (Show, Data)
 
 data Expr
   = EConst Number
@@ -102,10 +104,10 @@ runStack = flip ST.evalState []
 -- ** if not possible, then demand clamp/wrap in dynamic select index expressions
 -- * TODO: in the CallM monad, arguments that get written to the output can pass their array ctx slice to the argument expression, so no need for copy
 
-newtype FuncRef = FuncRef Int deriving (Eq, Ord, Show)
+newtype FuncRef = FuncRef Int deriving (Eq, Ord, Data, Show)
 
 data AllocRegion = ALocal | AGlobal
-  deriving (Show)
+  deriving (Show, Data)
 
 data SExpr
   = SConst Number
@@ -118,14 +120,14 @@ data SExpr
   | SApp Type Choice Choice
 
   | SFuncRef FuncRef
-  deriving (Show)
+  deriving (Show, Data)
 
 data Choice
   = CChoice Type [Choice] (Index Choice)
   | CExpr [(Type, Index (Choice))] SExpr -- selection indices that flow into the inner expression
 
   | CFuncRefTable Type [FuncRef] (Index Choice)
-  deriving (Show)
+  deriving (Show, Data)
 
 traverseChoice
   :: Monad f
