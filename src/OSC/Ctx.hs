@@ -210,22 +210,145 @@ toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
 newtype UniqueM m a = UniqueM (ST.StateT Int m a)
   deriving (Functor, Applicative, Monad, MonadTrans)
 
-uniqueName :: UniqueM m Ident
-uniqueName = undefined
+uniqueName :: Monad m => UniqueM m Ident
+uniqueName = UniqueM $ do
+  n <- ST.get
+  ST.put (n + 1)
+  pure $ Ident ("_captured_" ++ show n)
 
 -- prerequisite: assume all Idents are unique (e.g. there is no identifier shadowing)
 
--- TODO: this needs to:
--- * traverse Choice and for each lambda abstraction add its binding and arguments to an env (arguments can be extracted from the type of SAbs (e.g. namedParamTypes))
--- * keep track of which Idents have been referenced in nested abstractions
--- * if a binding has been referenced, change its AllocRegion to AGlobal
--- * if a param has been referenced, create a new binding with AllocRegion to AGlobal, assign the param to the binding, and recursively replace all references to the param with the new binding
--- ** use uniqueName for generating new binding Idents
--- * choose the appropriate monad stack for the task
--- * try to use traverseChoice if possible
+-- Environment tracking bindings and parameters in scope
+data MarkEnv = MarkEnv
+  { bindings :: Map Ident AllocRegion  -- Current bindings in scope
+  , params :: Map Ident Type           -- Current parameters in scope
+  , captured :: Map Ident Ident        -- Mapping from captured params to new bindings
+  }
 
-markCapturedBindings :: Choice -> UniqueM m Choice
-markCapturedBindings = undefined
+emptyMarkEnv :: MarkEnv
+emptyMarkEnv = MarkEnv M.empty M.empty M.empty
+
+-- Track which identifiers are referenced
+type ReferencedSet = Map Ident ()
+
+markCapturedBindings :: Monad m => Choice -> UniqueM m Choice
+markCapturedBindings choice = UniqueM $ ST.evalStateT (R.runReaderT (markChoice choice) emptyMarkEnv) 0
+  where
+    markChoice :: Monad m => Choice -> R.ReaderT MarkEnv (ST.StateT Int m) Choice
+    markChoice = traverseChoice fChoice fSExpr
+
+    fChoice :: Monad m => Choice -> R.ReaderT MarkEnv (ST.StateT Int m) Choice
+    fChoice ch = pure ch
+
+    fSExpr :: Monad m => SExpr -> R.ReaderT MarkEnv (ST.StateT Int m) SExpr
+    fSExpr (SAbs t bs body) = do
+      env <- R.ask
+      
+      -- Extract parameter names and types from the function type
+      let paramList = namedParamTypes t
+      let paramMap = M.fromList paramList
+      
+      -- Collect all bindings (name, region, expr)
+      let bindingList = [ (n, r) | (n, r, _) <- bs ]
+      let bindingMap = M.fromList bindingList
+      
+      -- Find all references in the body
+      let refs = findReferences body
+      
+      -- Determine which params and bindings are captured (referenced and defined in outer scope)
+      let capturedParams = M.filterWithKey (\n _ -> M.member n refs && M.member n env.params) paramMap
+      let capturedBindings = M.filterWithKey (\n _ -> M.member n refs && M.member n env.bindings) bindingMap
+      
+      -- Create new bindings for captured parameters
+      newBindings <- sequence
+        [ do
+            newName <- lift $ do
+              n <- ST.get
+              ST.put (n + 1)
+              pure $ Ident ("_captured_" ++ show n)
+            pure (paramName, newName)
+        | paramName <- M.keys capturedParams
+        ]
+      
+      let capturedParamMap = M.fromList newBindings
+      
+      -- Update bindings: mark captured bindings as AGlobal and add new bindings for captured params
+      let updatedBindings = 
+            [ case M.lookup n capturedBindings of
+                Just _ -> (n, AGlobal, expr)  -- Mark as global if captured
+                Nothing -> (n, r, expr)       -- Keep original region
+            | (n, r, expr) <- bs
+            ] ++
+            [ (newName, AGlobal, CExpr [] (SVar paramName))  -- New binding for captured param
+            | (paramName, newName) <- newBindings
+            ]
+      
+      -- Substitute captured param references with new binding references in body
+      let substitutedBody = substituteRefs capturedParamMap body
+      
+      -- Recursively process the body with updated environment
+      let newEnv = env
+            { bindings = bindingMap <> env.bindings
+            , params = paramMap <> env.params
+            , captured = capturedParamMap <> env.captured
+            }
+      
+      processedBody <- R.local (const newEnv) (markChoice substitutedBody)
+      processedBindings <- sequence
+        [ do
+            expr' <- R.local (const newEnv) (markChoice expr)
+            pure (n, r, expr')
+        | (n, r, expr) <- updatedBindings
+        ]
+      
+      pure $ SAbs t processedBindings processedBody
+    
+    fSExpr (SVar n) = do
+      env <- R.ask
+      -- If this variable is a captured param, use the new binding name
+      case M.lookup n env.captured of
+        Just newName -> pure $ SVar newName
+        Nothing -> pure $ SVar n
+    
+    fSExpr e = pure e
+    
+    -- Find all variable references in a Choice
+    findReferences :: Choice -> ReferencedSet
+    findReferences (CChoice _ chs idx) = 
+      mconcat (map findReferences chs) <> foldMap findReferences idx
+    findReferences (CExpr idxs sexpr) = 
+      mconcat [ foldMap findReferences idx | (_, idx) <- idxs ] <> findRefsSExpr sexpr
+    findReferences (CFuncRefTable _ _ idx) = 
+      foldMap findReferences idx
+    
+    findRefsSExpr :: SExpr -> ReferencedSet
+    findRefsSExpr (SConst _) = M.empty
+    findRefsSExpr (SArr _ cs) = mconcat (map findReferences cs)
+    findRefsSExpr (SOp _ a b) = findReferences a <> findReferences b
+    findRefsSExpr (SVar n) = M.singleton n ()
+    findRefsSExpr (SAbs _ bs body) = 
+      mconcat [ findReferences expr | (_, _, expr) <- bs ] <> findReferences body
+    findRefsSExpr (SApp _ f a) = findReferences f <> findReferences a
+    findRefsSExpr (SFuncRef _) = M.empty
+    
+    -- Substitute variable references in a Choice
+    substituteRefs :: Map Ident Ident -> Choice -> Choice
+    substituteRefs subst (CChoice t chs idx) = 
+      CChoice t (map (substituteRefs subst) chs) (fmap (substituteRefs subst) idx)
+    substituteRefs subst (CExpr idxs sexpr) = 
+      CExpr [ (t, fmap (substituteRefs subst) idx) | (t, idx) <- idxs ] (substSExpr subst sexpr)
+    substituteRefs subst (CFuncRefTable t frs idx) = 
+      CFuncRefTable t frs (fmap (substituteRefs subst) idx)
+    
+    substSExpr :: Map Ident Ident -> SExpr -> SExpr
+    substSExpr _ (SConst n) = SConst n
+    substSExpr subst (SArr t cs) = SArr t (map (substituteRefs subst) cs)
+    substSExpr subst (SOp op a b) = SOp op (substituteRefs subst a) (substituteRefs subst b)
+    substSExpr subst (SVar n) = SVar (M.findWithDefault n n subst)
+    substSExpr subst (SAbs t bs body) = 
+      SAbs t [ (n, r, substituteRefs subst expr) | (n, r, expr) <- bs ] (substituteRefs subst body)
+    substSExpr subst (SApp t f a) = SApp t (substituteRefs subst f) (substituteRefs subst a)
+    substSExpr _ (SFuncRef fr) = SFuncRef fr
 
 --------------------------------------------------------------------------------
 
