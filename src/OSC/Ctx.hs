@@ -12,7 +12,7 @@ import Data.Data (Typeable, Data)
 import Data.Functor.Identity
 import Data.Map (Map)
 import qualified Data.Map as M
-import Data.Set (Set)
+import Data.Set (Set, (\\))
 import qualified Data.Set as S
 import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
@@ -243,49 +243,37 @@ fresh = Unique $ do
   ST.put (n + 1)
   pure $ Ident ("_captured_" ++ show n)
 
--- Environment tracking bindings and parameters in scope
+--------------------------------------------------------------------------------
+
 data MarkEnv = MarkEnv
-  { bindings :: Map Ident AllocRegion  -- Current bindings in scope
-  , params :: Map Ident Type           -- Current parameters in scope
-  , captured :: Map Ident Ident        -- Mapping from captured params to new bindings
-  }
-
-emptyMarkEnv :: MarkEnv
-emptyMarkEnv = MarkEnv M.empty M.empty M.empty
-
--- Track which identifiers are referenced (free variables)
-type FreeVars = Set Ident
-
--- Substitute variable references using uniplate
-substituteVars :: Map Ident Ident -> Choice -> Choice
-substituteVars subst = transformBi substVar
-  where
-    substVar (SVar n) = SVar (M.findWithDefault n n subst)
-    substVar e = e
-
--- Collect free variables from SExpr
-collectSExprFreeVars :: SExpr -> FreeVars
-collectSExprFreeVars (SVar n) = S.singleton n
-collectSExprFreeVars _ = S.empty
-
-data MarkEnv2 = MarkEnv2
   { freeVars :: Set Ident
-  , capturedMap :: Map Ident Ident
+  , capturedParamMap :: Map Ident Ident
   }
 
-instance Semigroup MarkEnv2 where
-  MarkEnv2 a b <> MarkEnv2 c d = MarkEnv2 (a <> c) (b <> d)
+instance Semigroup MarkEnv where
+  MarkEnv a b <> MarkEnv c d = MarkEnv (a <> c) (b <> d)
 
-instance Monoid MarkEnv2 where
-  mempty = MarkEnv2 mempty mempty
+instance Monoid MarkEnv where
+  mempty = MarkEnv mempty mempty
 
-emptyMarkEnv2 :: MarkEnv2
-emptyMarkEnv2 = undefined
-
-markCapturedBindings :: Choice -> (Choice, MarkEnv2)
-markCapturedBindings choice = runUnique (W.runWriterT (descendBiM processSAbs choice))
+markCapturedBindings :: Choice -> Choice
+markCapturedBindings choice = substituteVars env.capturedParamMap choice'
   where
-    processSAbs :: SExpr -> W.WriterT MarkEnv2 Unique SExpr
+    (choice', env) = runUnique (W.runWriterT (descendBiM processSAbs choice))
+
+    -- Substitute variable references using uniplate
+    substituteVars :: Map Ident Ident -> Choice -> Choice
+    substituteVars subst = transformBi substVar
+      where
+        substVar (SVar n) = SVar (M.findWithDefault n n subst)
+        substVar e = e
+
+    -- Collect free variables from SExpr
+    collectSExprFreeVars :: SExpr -> Set Ident
+    collectSExprFreeVars (SVar n) = S.singleton n
+    collectSExprFreeVars _ = S.empty
+
+    processSAbs :: SExpr -> W.WriterT MarkEnv Unique SExpr
     processSAbs e@(SVar n) = do
       -- Report this variable as free
       W.tell $ mempty { freeVars = S.singleton n }
@@ -312,22 +300,23 @@ markCapturedBindings choice = runUnique (W.runWriterT (descendBiM processSAbs ch
       -- All bound names (parameters and bindings)
       let bound = S.fromList [n | (n, _, _) <- bindings] <> M.keysSet paramMap
       
-      -- Filter out bound variables - only report truly free variables up
-      -- ST.modify $ \st -> st { freeVars = freeVars S.\\ bound }
-      
       -- Captured = free in body AND bound in outer scope
       let capturedParams = M.filterWithKey (\n _ -> S.member n bodyEnv.freeVars && M.member n paramMap) paramMap
       let capturedBindings = M.filterWithKey (\n _ -> S.member n bsEnv.freeVars && M.member n bindingMap) bindingMap
       
       -- Create new bindings for captured parameters
-      newBindings <- sequence
+      capturedParams <- sequence
         [ do
             newName <- lift fresh
             pure (paramName, newName)
         | paramName <- M.keys capturedParams
         ]
       
-      let capturedParamMap = M.fromList newBindings
+      W.tell $ mempty
+        -- Filter out bound variables - only report truly free variables up
+        { freeVars = (bodyEnv.freeVars <> bsEnv.freeVars) \\ bound
+        , capturedParamMap = M.fromList capturedParams
+        }
       
       -- Update bindings: mark captured bindings as AGlobal and add new bindings for captured params
       let updatedBindings = mconcat
@@ -337,24 +326,9 @@ markCapturedBindings choice = runUnique (W.runWriterT (descendBiM processSAbs ch
               | (n, r, expr') <- processedBs
               ]
             , [ (newName, AGlobal, CExpr [] (SVar paramName))  -- New binding for captured param
-              | (paramName, newName) <- newBindings
+              | (paramName, newName) <- capturedParams
               ]
             ]
-      
-      -- -- Substitute captured param references in body
-      -- let substitutedBody = substituteVars capturedParamMap body'
-      
-      -- -- Recursively process the substituted body with captured param mappings
-      -- let finalEnv = newEnv { captured = capturedParamMap <> env.captured }
-      -- finalBody <- R.local (const finalEnv) (transformBiM processSAbs substitutedBody)
-      
-      -- -- Process updated bindings with the final environment
-      -- finalBindings <- sequence
-      --   [ do
-      --       expr' <- R.local (const finalEnv) (transformBiM processSAbs expr)
-      --       pure (n, r, expr')
-      --   | (n, r, expr) <- updatedBindings
-      --   ]
       
       pure (SAbs t updatedBindings body')
     
@@ -370,43 +344,11 @@ data AbsEnv = AbsEnv
   , nextFuncRef :: Int
   }
 
-gatherAbstractions :: (Type -> Bool) -> Choice -> ST.State AbsEnv Choice
-gatherAbstractions allocTablePred = traverseChoice fChoice fSExpr
-  where
-    fChoice :: Choice -> ST.State AbsEnv Choice
-    fChoice ch@(CChoice t chs idx)
-      | allocTablePred t = do
-          frIdx <- ST.gets (.nextFuncRef)
-
-          let cht = peelType t
-          let frs = [ (FuncRef (frIdx + i), (cht, [], ch)) | (i, ch) <- zip [0..] chs ]
-
-          ST.modify $ \st -> st
-            { nextFuncRef = st.nextFuncRef + length chs
-            , funcRefMap = M.fromList frs <> st.funcRefMap
-            }
-
-          pure $ CFuncRefTable t (map fst frs) idx
-      | otherwise = pure ch
-    fChoice ch = pure ch
-
-    fSExpr :: SExpr -> ST.State AbsEnv SExpr
-    fSExpr (SAbs t bs body) = do
-      fr <- FuncRef <$> ST.gets (.nextFuncRef)
-
-      ST.modify $ \st -> st
-        { nextFuncRef = st.nextFuncRef + 1
-        , funcRefMap = M.insert fr (t, bs, body) st.funcRefMap
-        }
-
-      pure $ SFuncRef fr
-    fSExpr e = pure e
-
--- Version using uniplate
-gatherAbstractionsU :: (Type -> Bool) -> Choice -> ST.State AbsEnv Choice
-gatherAbstractionsU allocTablePred choice = do
+gatherAbstractions :: (Type -> Bool) -> Choice -> (Choice, AbsEnv)
+gatherAbstractions allocTablePred choice = flip ST.runState (AbsEnv mempty 0) $ do
   -- First pass: transform all SAbs to SFuncRef
   choice' <- transformBiM processSAbs choice
+
   -- Second pass: transform all CChoice to CFuncRefTable where predicate holds
   transformBiM processCChoice choice'
 
