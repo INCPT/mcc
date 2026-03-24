@@ -32,10 +32,16 @@ returnType (TAbs _ _ t) = t
 peelType :: Type -> Type
 peelType = undefined
 
-paramTypes :: Type -> [Type]
-paramTypes TNumber = error "paramTypes: number (this is a bug)"
-paramTypes t@(TArr _ _) = error "paramTypes: array (this is a bug)"
-paramTypes (TAbs _ t ts) = t:paramTypes ts
+paramTypes :: Type -> [(Maybe Ident, Type)]
+paramTypes TNumber = []
+paramTypes (TArr _ _) = []
+paramTypes (TAbs i t ts) = (i, t):paramTypes ts
+
+namedParamTypes :: Type -> [(Ident, Type)]
+namedParamTypes TNumber = []
+namedParamTypes (TArr _ _) = []
+namedParamTypes (TAbs (Just i) t ts) = (i, t):namedParamTypes ts
+namedParamTypes (TAbs Nothing _ _) = error "namedParamTypes: unnamed param (this is a bug)"
 
 data Number = I Int | F Double
   deriving Show
@@ -198,6 +204,28 @@ elimConstIndices _ = undefined
 
 toChoice :: Expr -> Choice
 toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
+
+--------------------------------------------------------------------------------
+
+newtype UniqueM m a = UniqueM (ST.StateT Int m a)
+  deriving (Functor, Applicative, Monad, MonadTrans)
+
+uniqueName :: UniqueM m Ident
+uniqueName = undefined
+
+-- prerequisite: assume all Idents are unique (e.g. there is no identifier shadowing)
+
+-- TODO: this needs to:
+-- * traverse Choice and for each lambda abstraction add its binding and arguments to an env (arguments can be extracted from the type of SAbs (e.g. namedParamTypes))
+-- * keep track of which Idents have been referenced in nested abstractions
+-- * if a binding has been referenced, change its AllocRegion to AGlobal
+-- * if a param has been referenced, create a new binding with AllocRegion to AGlobal, assign the param to the binding, and recursively replace all references to the param with the new binding
+-- ** use uniqueName for generating new binding Idents
+-- * choose the appropriate monad stack for the task
+-- * try to use traverseChoice if possible
+
+markCapturedBindings :: Choice -> Choice
+markCapturedBindings = undefined
 
 --------------------------------------------------------------------------------
 
