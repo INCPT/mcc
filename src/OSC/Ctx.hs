@@ -24,7 +24,7 @@ import Data.Generics.Uniplate.Data
 import Data.Generics.Str
 
 data Type = TNumber | TArr Type {- length -} Int | TAbs (Maybe Ident) Type Type
-  deriving (Data, Show)
+  deriving (Data)
 
 sizeOfType :: Type -> Int
 sizeOfType TNumber = 4
@@ -165,6 +165,9 @@ instance Show Choice where
     "table[" ++ showType t ++ "](" ++ intercalate ", " (map showFR frs) ++ ")[" ++ showIndex idx ++ "]"
     where
       showFR (FuncRef n) = "#" ++ show n
+
+instance Show Type where
+  show = showType
 
 showType :: Type -> String
 showType TNumber = "num"
