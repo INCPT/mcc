@@ -268,7 +268,6 @@ collectSExprFreeVars :: SExpr -> FreeVars
 collectSExprFreeVars (SVar n) = S.singleton n
 collectSExprFreeVars _ = S.empty
 
--- Single-pass implementation using uniplate for traversal
 markCapturedBindings :: Choice -> (Choice, FreeVars)
 markCapturedBindings choice = runUnique (R.runReaderT (W.runWriterT (transformBiM processSAbs choice)) emptyMarkEnv)
   where
@@ -337,22 +336,22 @@ markCapturedBindings choice = runUnique (R.runReaderT (W.runWriterT (transformBi
               ]
             ]
       
-      -- Substitute captured param references in body
-      let substitutedBody = substituteVars capturedParamMap body'
+      -- -- Substitute captured param references in body
+      -- let substitutedBody = substituteVars capturedParamMap body'
       
-      -- Recursively process the substituted body with captured param mappings
-      let finalEnv = newEnv { captured = capturedParamMap <> env.captured }
-      finalBody <- R.local (const finalEnv) (transformBiM processSAbs substitutedBody)
+      -- -- Recursively process the substituted body with captured param mappings
+      -- let finalEnv = newEnv { captured = capturedParamMap <> env.captured }
+      -- finalBody <- R.local (const finalEnv) (transformBiM processSAbs substitutedBody)
       
-      -- Process updated bindings with the final environment
-      finalBindings <- sequence
-        [ do
-            expr' <- R.local (const finalEnv) (transformBiM processSAbs expr)
-            pure (n, r, expr')
-        | (n, r, expr) <- updatedBindings
-        ]
+      -- -- Process updated bindings with the final environment
+      -- finalBindings <- sequence
+      --   [ do
+      --       expr' <- R.local (const finalEnv) (transformBiM processSAbs expr)
+      --       pure (n, r, expr')
+      --   | (n, r, expr) <- updatedBindings
+      --   ]
       
-      pure (SAbs t finalBindings finalBody)
+      pure (SAbs t updatedBindings body)
     
     processSAbs e = do
       -- Report any free variables in this expression

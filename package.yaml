@@ -37,6 +37,7 @@ dependencies:
       # - llvm-hs-pretty >= 0.9 && < 1
     - megaparsec
     - parser-combinators
+    - transformers
 
 default-extensions: OverloadedStrings, LambdaCase
 
