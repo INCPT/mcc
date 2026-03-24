@@ -613,3 +613,70 @@ e2 = ESelect (t [3, 2]) (
   (IdxConst 1)
 
 -}
+
+--------------------------------------------------------------------------------
+-- Test expressions for markCapturedBindings
+
+-- Test 1: Simple abstraction with no captures
+testChoice1 :: Choice
+testChoice1 = CExpr [] $ SAbs
+  (TAbs (Just (Ident "x")) TNumber TNumber)
+  [(Ident "x", ALocal, CExpr [] (SConst (I 0)))]
+  (CExpr [] (SVar (Ident "x")))
+
+-- Test 2: Abstraction that captures a parameter in a nested abstraction
+testChoice2 :: Choice
+testChoice2 = CExpr [] $ SAbs
+  (TAbs (Just (Ident "x")) TNumber (TAbs (Just (Ident "y")) TNumber TNumber))
+  [(Ident "x", ALocal, CExpr [] (SConst (I 0)))]
+  (CExpr [] $ SAbs
+    (TAbs (Just (Ident "y")) TNumber TNumber)
+    [(Ident "y", ALocal, CExpr [] (SConst (I 1)))]
+    (CExpr [] $ SOp Plus (CExpr [] (SVar (Ident "x"))) (CExpr [] (SVar (Ident "y")))))
+
+-- Test 3: Abstraction with a binding that references a parameter
+testChoice3 :: Choice
+testChoice3 = CExpr [] $ SAbs
+  (TAbs (Just (Ident "x")) TNumber TNumber)
+  [ (Ident "x", ALocal, CExpr [] (SConst (I 5)))
+  , (Ident "y", ALocal, CExpr [] (SVar (Ident "x")))
+  ]
+  (CExpr [] (SVar (Ident "y")))
+
+-- Test 4: Nested abstractions with multiple captures
+testChoice4 :: Choice
+testChoice4 = CExpr [] $ SAbs
+  (TAbs (Just (Ident "a")) TNumber (TAbs (Just (Ident "b")) TNumber TNumber))
+  [(Ident "a", ALocal, CExpr [] (SConst (I 1)))]
+  (CExpr [] $ SAbs
+    (TAbs (Just (Ident "b")) TNumber TNumber)
+    [ (Ident "b", ALocal, CExpr [] (SConst (I 2)))
+    , (Ident "c", ALocal, CExpr [] (SVar (Ident "a")))
+    ]
+    (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b")))))
+
+-- Test 5: Abstraction with free variable (not captured, just free)
+testChoice5 :: Choice
+testChoice5 = CExpr [] $ SAbs
+  (TAbs (Just (Ident "x")) TNumber TNumber)
+  [(Ident "x", ALocal, CExpr [] (SConst (I 0)))]
+  (CExpr [] $ SOp Plus (CExpr [] (SVar (Ident "x"))) (CExpr [] (SVar (Ident "freeVar"))))
+
+-- Test 6: Complex case with binding that captures and is itself captured
+testChoice6 :: Choice
+testChoice6 = CExpr [] $ SAbs
+  (TAbs (Just (Ident "x")) TNumber (TAbs (Just (Ident "y")) TNumber TNumber))
+  [ (Ident "x", ALocal, CExpr [] (SConst (I 10)))
+  , (Ident "helper", ALocal, CExpr [] $ SAbs
+      (TAbs (Just (Ident "z")) TNumber TNumber)
+      [(Ident "z", ALocal, CExpr [] (SConst (I 0)))]
+      (CExpr [] $ SOp Plus (CExpr [] (SVar (Ident "x"))) (CExpr [] (SVar (Ident "z")))))
+  ]
+  (CExpr [] $ SAbs
+    (TAbs (Just (Ident "y")) TNumber TNumber)
+    [(Ident "y", ALocal, CExpr [] (SConst (I 20)))]
+    (CExpr [] $ SApp TNumber (CExpr [] (SVar (Ident "helper"))) (CExpr [] (SVar (Ident "y")))))
+
+-- Helper function to run the test
+runMarkTest :: Choice -> (Choice, MarkEnv)
+runMarkTest = markCapturedBindings
