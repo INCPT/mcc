@@ -98,6 +98,9 @@ runStack = flip ST.evalState []
 
 newtype FuncRef = FuncRef Int deriving (Eq, Ord, Show)
 
+data AllocRegion = ALocal | AGlobal
+  deriving (Show)
+
 data SExpr
   = SConst Number
   | SArr Type [Choice]
@@ -105,7 +108,7 @@ data SExpr
 
   | SVar Ident
 
-  | SAbs Type {- bindings -} [(Ident, Choice)] Choice
+  | SAbs Type {- bindings -} [(Ident, AllocRegion, Choice)] Choice
   | SApp Type Choice Choice
 
   | SFuncRef FuncRef
@@ -145,7 +148,9 @@ traverseChoice fChoice fSExpr = go
     goSExpr (SArr t cs) = SArr t <$> traverse go cs
     goSExpr (SOp op a b) = SOp op <$> go a <*> go b
     goSExpr (SVar n) = pure (SVar n)
-    goSExpr (SAbs t bs c) = SAbs t <$> traverse (sequenceA . fmap go) bs <*> go c
+    goSExpr (SAbs t bs c) = SAbs t <$> traverse (sequenceA2 . fmap go) bs <*> go c
+      where
+        sequenceA2 (a, b, f) = (,,) <$> pure a <*> pure b <*> f
     goSExpr (SApp t f a) = SApp t <$> go f <*> go a
     goSExpr (SFuncRef fr) = pure (SFuncRef fr)
 
@@ -161,7 +166,7 @@ choiceTree (EConst n) = toC (SConst n)
 choiceTree (EOp op a b) = toC (SOp op (toChoice a) (toChoice b))
 choiceTree (EVar n) = toC (SVar n)
 choiceTree (EApp t a b) = toC (SApp t (toChoice a) (toChoice b))
-choiceTree (EAbs t bs e) = toC (SAbs t (map (second toChoice) bs) (toChoice e))
+choiceTree (EAbs t bs e) = toC (SAbs t (map (second toChoice) [ (n, ALocal, b) | (n, b) <- bs ]) (toChoice e))
 choiceTree (EArr t es) = do
   s <- pop
   case s of
@@ -197,7 +202,7 @@ toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
 --------------------------------------------------------------------------------
 
 data AbsEnv = AbsEnv
-  { funcRefMap :: Map FuncRef (Type, [(Ident, Choice)], Choice)
+  { funcRefMap :: Map FuncRef (Type, [(Ident, AllocRegion, Choice)], Choice)
   , nextFuncRef :: Int
   }
 
