@@ -256,10 +256,6 @@ emptyMarkEnv = MarkEnv M.empty M.empty M.empty
 -- Track which identifiers are referenced (free variables)
 type FreeVars = Set Ident
 
--- Collect free variables from a Choice using uniplate
-collectFreeVars :: Choice -> FreeVars
-collectFreeVars choice = S.fromList [n | SVar n <- universeBi choice]
-
 -- Substitute variable references using uniplate
 substituteVars :: Map Ident Ident -> Choice -> Choice
 substituteVars subst = transformBi substVar
