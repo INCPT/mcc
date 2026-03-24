@@ -226,33 +226,95 @@ data MarkEnv = MarkEnv
 emptyMarkEnv :: MarkEnv
 emptyMarkEnv = MarkEnv M.empty M.empty M.empty
 
--- Track which identifiers are referenced
-type ReferencedSet = Set Ident
+-- Track which identifiers are referenced (free variables)
+type FreeVars = Set Ident
 
+-- Single-pass implementation that computes free variables during transformation
 markCapturedBindings :: Monad m => Choice -> UniqueM m Choice
-markCapturedBindings choice = UniqueM $ ST.evalStateT (R.runReaderT (markChoice choice) emptyMarkEnv) 0
+markCapturedBindings choice = UniqueM $ fmap fst $ ST.evalStateT (R.runReaderT (go choice) emptyMarkEnv) 0
   where
-    markChoice :: Monad m => Choice -> R.ReaderT MarkEnv (ST.StateT Int m) Choice
-    markChoice = traverseChoice pure fSExpr
-
-    fSExpr :: Monad m => SExpr -> R.ReaderT MarkEnv (ST.StateT Int m) SExpr
-    fSExpr (SAbs t bs body) = do
+    -- Returns (transformed choice, free variables)
+    go :: Monad m => Choice -> R.ReaderT MarkEnv (ST.StateT Int m) (Choice, FreeVars)
+    go (CChoice t chs idx) = do
+      (chs', fvsChs) <- unzip <$> traverse go chs
+      (idx', fvsIdx) <- traverse goIndex idx
+      let fvs = S.unions (fvsChs ++ toList fvsIdx)
+      pure (CChoice t chs' idx', fvs)
+    
+    go (CExpr idxs sexpr) = do
+      (idxs', fvsIdxs) <- unzip <$> traverse (\(t, idx) -> do
+        (idx', fvs) <- traverse goIndex idx
+        pure ((t, idx'), fvs)) idxs
+      (sexpr', fvsSExpr) <- goSExpr sexpr
+      let fvs = S.unions (toList fvsSExpr : fvsIdxs)
+      pure (CExpr idxs' sexpr', fvs)
+    
+    go (CFuncRefTable t frs idx) = do
+      (idx', fvsIdx) <- traverse goIndex idx
+      pure (CFuncRefTable t frs idx', foldMap id fvsIdx)
+    
+    goIndex :: Monad m => Index Choice -> R.ReaderT MarkEnv (ST.StateT Int m) (Index Choice, FreeVars)
+    goIndex (IdxConst i) = pure (IdxConst i, S.empty)
+    goIndex (IdxVar ch) = do
+      (ch', fvs) <- go ch
+      pure (IdxVar ch', fvs)
+    
+    goSExpr :: Monad m => SExpr -> R.ReaderT MarkEnv (ST.StateT Int m) (SExpr, FreeVars)
+    goSExpr (SConst n) = pure (SConst n, S.empty)
+    
+    goSExpr (SArr t cs) = do
+      (cs', fvs) <- unzip <$> traverse go cs
+      pure (SArr t cs', S.unions fvs)
+    
+    goSExpr (SOp op a b) = do
+      (a', fvsA) <- go a
+      (b', fvsB) <- go b
+      pure (SOp op a' b', fvsA <> fvsB)
+    
+    goSExpr (SVar n) = do
+      env <- R.ask
+      -- If this variable is a captured param, use the new binding name
+      let n' = M.findWithDefault n n env.captured
+      pure (SVar n', S.singleton n')
+    
+    goSExpr (SAbs t bs body) = do
       env <- R.ask
       
       -- Extract parameter names and types from the function type
       let paramList = namedParamTypes t
       let paramMap = M.fromList paramList
       
-      -- Collect all bindings (name, region, expr)
-      let bindingList = [ (n, r) | (n, r, _) <- bs ]
-      let bindingMap = M.fromList bindingList
+      -- Collect all bindings (name, region)
+      let bindingMap = M.fromList [(n, r) | (n, r, _) <- bs]
       
-      -- Find all references in the body
-      let refs = findReferences body
+      -- Process binding expressions first to get their free variables
+      bindingResults <- sequence
+        [ do
+            (expr', fvs) <- go expr
+            pure ((n, r, expr'), fvs)
+        | (n, r, expr) <- bs
+        ]
       
-      -- Determine which params and bindings are captured (referenced and defined in outer scope)
-      let capturedParams = M.filterWithKey (\n _ -> S.member n refs && M.member n env.params) paramMap
-      let capturedBindings = M.filterWithKey (\n _ -> S.member n refs && M.member n env.bindings) bindingMap
+      let (processedBs, bindingFvs) = unzip bindingResults
+      
+      -- Create new environment for processing body
+      let newEnv = env
+            { bindings = bindingMap <> env.bindings
+            , params = paramMap <> env.params
+            }
+      
+      -- Process body to get its free variables
+      (body', bodyFvs) <- R.local (const newEnv) (go body)
+      
+      -- All bound names (parameters and bindings)
+      let bound = S.fromList [n | (n, _, _) <- bs] <> M.keysSet paramMap
+      
+      -- Free variables of the abstraction (excluding bound names)
+      let absFvs = S.difference (bodyFvs <> S.unions bindingFvs) bound
+      
+      -- Captured = free in body AND bound in outer scope
+      let capturedParams = M.filterWithKey (\n _ -> S.member n bodyFvs && M.member n env.params) paramMap
+      let capturedBindings = M.filterWithKey (\n _ -> S.member n bodyFvs && M.member n env.bindings) bindingMap
       
       -- Create new bindings for captured parameters
       newBindings <- sequence
@@ -270,79 +332,55 @@ markCapturedBindings choice = UniqueM $ ST.evalStateT (R.runReaderT (markChoice 
       -- Update bindings: mark captured bindings as AGlobal and add new bindings for captured params
       let updatedBindings = 
             [ case M.lookup n capturedBindings of
-                Just _ -> (n, AGlobal, expr)  -- Mark as global if captured
-                Nothing -> (n, r, expr)       -- Keep original region
-            | (n, r, expr) <- bs
+                Just _ -> (n, AGlobal, expr')  -- Mark as global if captured
+                Nothing -> (n, r, expr')       -- Keep original region
+            | ((n, r, expr'), _) <- bindingResults
             ] ++
             [ (newName, AGlobal, CExpr [] (SVar paramName))  -- New binding for captured param
             | (paramName, newName) <- newBindings
             ]
       
-      -- Substitute captured param references with new binding references in body
-      let substitutedBody = substituteRefs capturedParamMap body
+      -- Substitute captured param references in body
+      let substitutedBody = substituteChoice capturedParamMap body'
       
-      -- Recursively process the body with updated environment
-      let newEnv = env
-            { bindings = bindingMap <> env.bindings
-            , params = paramMap <> env.params
-            , captured = capturedParamMap <> env.captured
-            }
+      -- Recursively process the substituted body with captured param mappings
+      let finalEnv = newEnv { captured = capturedParamMap <> env.captured }
+      (finalBody, _) <- R.local (const finalEnv) (go substitutedBody)
       
-      processedBody <- R.local (const newEnv) (markChoice substitutedBody)
-      processedBindings <- sequence
+      -- Process updated bindings with the final environment
+      finalBindings <- sequence
         [ do
-            expr' <- R.local (const newEnv) (markChoice expr)
+            (expr', _) <- R.local (const finalEnv) (go expr)
             pure (n, r, expr')
         | (n, r, expr) <- updatedBindings
         ]
       
-      pure $ SAbs t processedBindings processedBody
+      pure (SAbs t finalBindings finalBody, absFvs)
     
-    fSExpr (SVar n) = do
-      env <- R.ask
-      -- If this variable is a captured param, use the new binding name
-      case M.lookup n env.captured of
-        Just newName -> pure $ SVar newName
-        Nothing -> pure $ SVar n
+    goSExpr (SApp t f a) = do
+      (f', fvsF) <- go f
+      (a', fvsA) <- go a
+      pure (SApp t f' a', fvsF <> fvsA)
     
-    fSExpr e = pure e
-    
-    -- Find all variable references in a Choice
-    findReferences :: Choice -> ReferencedSet
-    findReferences (CChoice _ chs idx) = 
-      mconcat (map findReferences chs) <> foldMap findReferences idx
-    findReferences (CExpr idxs sexpr) = 
-      mconcat [ foldMap findReferences idx | (_, idx) <- idxs ] <> findRefsSExpr sexpr
-    findReferences (CFuncRefTable _ _ idx) = 
-      foldMap findReferences idx
-    
-    findRefsSExpr :: SExpr -> ReferencedSet
-    findRefsSExpr (SConst _) = S.empty
-    findRefsSExpr (SArr _ cs) = mconcat (map findReferences cs)
-    findRefsSExpr (SOp _ a b) = findReferences a <> findReferences b
-    findRefsSExpr (SVar n) = S.singleton n
-    findRefsSExpr (SAbs _ bs body) = 
-      mconcat [ findReferences expr | (_, _, expr) <- bs ] <> findReferences body
-    findRefsSExpr (SApp _ f a) = findReferences f <> findReferences a
-    findRefsSExpr (SFuncRef _) = S.empty
+    goSExpr (SFuncRef fr) = pure (SFuncRef fr, S.empty)
     
     -- Substitute variable references in a Choice
-    substituteRefs :: Map Ident Ident -> Choice -> Choice
-    substituteRefs subst (CChoice t chs idx) = 
-      CChoice t (map (substituteRefs subst) chs) (fmap (substituteRefs subst) idx)
-    substituteRefs subst (CExpr idxs sexpr) = 
-      CExpr [ (t, fmap (substituteRefs subst) idx) | (t, idx) <- idxs ] (substSExpr subst sexpr)
-    substituteRefs subst (CFuncRefTable t frs idx) = 
-      CFuncRefTable t frs (fmap (substituteRefs subst) idx)
+    substituteChoice :: Map Ident Ident -> Choice -> Choice
+    substituteChoice subst (CChoice t chs idx) = 
+      CChoice t (map (substituteChoice subst) chs) (fmap (substituteChoice subst) idx)
+    substituteChoice subst (CExpr idxs sexpr) = 
+      CExpr [ (t, fmap (substituteChoice subst) idx) | (t, idx) <- idxs ] (substSExpr subst sexpr)
+    substituteChoice subst (CFuncRefTable t frs idx) = 
+      CFuncRefTable t frs (fmap (substituteChoice subst) idx)
     
     substSExpr :: Map Ident Ident -> SExpr -> SExpr
     substSExpr _ (SConst n) = SConst n
-    substSExpr subst (SArr t cs) = SArr t (map (substituteRefs subst) cs)
-    substSExpr subst (SOp op a b) = SOp op (substituteRefs subst a) (substituteRefs subst b)
+    substSExpr subst (SArr t cs) = SArr t (map (substituteChoice subst) cs)
+    substSExpr subst (SOp op a b) = SOp op (substituteChoice subst a) (substituteChoice subst b)
     substSExpr subst (SVar n) = SVar (M.findWithDefault n n subst)
     substSExpr subst (SAbs t bs body) = 
-      SAbs t [ (n, r, substituteRefs subst expr) | (n, r, expr) <- bs ] (substituteRefs subst body)
-    substSExpr subst (SApp t f a) = SApp t (substituteRefs subst f) (substituteRefs subst a)
+      SAbs t [ (n, r, substituteChoice subst expr) | (n, r, expr) <- bs ] (substituteChoice subst body)
+    substSExpr subst (SApp t f a) = SApp t (substituteChoice subst f) (substituteChoice subst a)
     substSExpr _ (SFuncRef fr) = SFuncRef fr
 
 --------------------------------------------------------------------------------
