@@ -268,56 +268,61 @@ collectSExprFreeVars :: SExpr -> FreeVars
 collectSExprFreeVars (SVar n) = S.singleton n
 collectSExprFreeVars _ = S.empty
 
-markCapturedBindings :: Choice -> (Choice, FreeVars)
-markCapturedBindings choice = runUnique (R.runReaderT (W.runWriterT (transformBiM processSAbs choice)) emptyMarkEnv)
+data MarkEnv2 = MarkEnv2
+  { freeVars :: Set Ident
+  , capturedMap :: Map Ident Ident
+  }
+
+instance Semigroup MarkEnv2 where
+  MarkEnv2 a b <> MarkEnv2 c d = MarkEnv2 (a <> c) (b <> d)
+
+instance Monoid MarkEnv2 where
+  mempty = MarkEnv2 mempty mempty
+
+emptyMarkEnv2 :: MarkEnv2
+emptyMarkEnv2 = undefined
+
+markCapturedBindings :: Choice -> (Choice, MarkEnv2)
+markCapturedBindings choice = runUnique (W.runWriterT (descendBiM processSAbs choice))
   where
-    processSAbs :: SExpr -> W.WriterT FreeVars (R.ReaderT MarkEnv Unique) SExpr
+    processSAbs :: SExpr -> W.WriterT MarkEnv2 Unique SExpr
     processSAbs e@(SVar n) = do
       -- Report this variable as free
-      W.tell (S.singleton n)
+      W.tell $ mempty { freeVars = S.singleton n }
       pure e
     
-    processSAbs (SAbs t bs body) = do
-      env <- R.ask
-      
+    processSAbs (SAbs t bindings body) = do
       -- Extract parameter names and types from the function type
       let paramMap = M.fromList (namedParamTypes t)
       
       -- Collect all bindings (name, region)
-      let bindingMap = M.fromList [(n, r) | (n, r, _) <- bs]
-      
-      -- Create new environment for processing bindings and body
-      let newEnv = env
-            { bindings = bindingMap <> env.bindings
-            , params = paramMap <> env.params
-            }
+      let bindingMap = M.fromList [(n, r) | (n, r, _) <- bindings]
       
       -- Process binding expressions and collect their free variables
-      (processedBs, bsFreeVars) <- W.listen $ sequence
+      (processedBs, bsEnv) <- lift $ W.runWriterT $ sequence
         [ do
-            expr' <- R.local (const newEnv) (transformBiM processSAbs expr)
+            expr' <- descendBiM processSAbs expr
             pure (n, r, expr')
-        | (n, r, expr) <- bs
+        | (n, r, expr) <- bindings
         ]
       
       -- Process body and collect its free variables
-      (body', bodyFreeVars) <- W.listen $ R.local (const newEnv) (transformBiM processSAbs body)
+      (body', bodyEnv) <- lift $ W.runWriterT $ descendBiM processSAbs body
       
       -- All bound names (parameters and bindings)
-      let bound = S.fromList [n | (n, _, _) <- bs] <> M.keysSet paramMap
+      let bound = S.fromList [n | (n, _, _) <- bindings] <> M.keysSet paramMap
       
       -- Filter out bound variables - only report truly free variables up
-      let trulyFree = (bsFreeVars <> bodyFreeVars) S.\\ bound
-      W.tell trulyFree
+      -- ST.modify $ \st -> st { freeVars = freeVars S.\\ bound }
       
       -- Captured = free in body AND bound in outer scope
-      let capturedParams = M.filterWithKey (\n _ -> S.member n bodyFreeVars && M.member n env.params) paramMap
-      let capturedBindings = M.filterWithKey (\n _ -> S.member n bsFreeVars && M.member n env.bindings) bindingMap
+      let capturedParams = M.filterWithKey (\n _ -> S.member n bodyEnv.freeVars && M.member n paramMap) paramMap
+      let capturedBindings = M.filterWithKey (\n _ -> S.member n bsEnv.freeVars && M.member n bindingMap) bindingMap
       
       -- Create new bindings for captured parameters
       newBindings <- sequence
         [ do
-            newName <- lift $ lift fresh
+            newName <- lift fresh
             pure (paramName, newName)
         | paramName <- M.keys capturedParams
         ]
@@ -351,11 +356,11 @@ markCapturedBindings choice = runUnique (R.runReaderT (W.runWriterT (transformBi
       --   | (n, r, expr) <- updatedBindings
       --   ]
       
-      pure (SAbs t updatedBindings body)
+      pure (SAbs t updatedBindings body')
     
     processSAbs e = do
       -- Report any free variables in this expression
-      W.tell (collectSExprFreeVars e)
+      W.tell $ mempty { freeVars = collectSExprFreeVars e }
       pure e
 
 --------------------------------------------------------------------------------
