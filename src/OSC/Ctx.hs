@@ -2,6 +2,7 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE TupleSections #-}
 
@@ -128,7 +129,7 @@ data SExpr
 
 data Choice
   = CChoice Type [Choice] (Index Choice)
-  | CExpr [(Type, Index (Choice))] SExpr -- selection indices that flow into the inner expression
+  | CExpr [(Type, Index Choice)] SExpr -- selection indices that flow into the inner expression
 
   | CFuncRefTable Type [FuncRef] (Index Choice)
   deriving (Data)
@@ -139,10 +140,10 @@ instance Show SExpr where
   show (SOp op a b) = "(" ++ show a ++ " " ++ showOp op ++ " " ++ show b ++ ")"
   show (SVar (Ident n)) = n
   show (SAbs t bs body) = 
-    "λ" ++ showType t ++ " " ++ showBindings bs ++ " -> " ++ show body
+    "λ" ++ showType t ++ " " ++ showBindings bs ++ " = " ++ show body
     where
       showBindings [] = ""
-      showBindings bindings = "{ " ++ intercalate "; " (map showBinding bindings) ++ " } "
+      showBindings bindings = "{ " ++ intercalate "; " (map showBinding bindings) ++ " }"
       showBinding (Ident n, region, expr) = 
         n ++ "@" ++ showRegion region ++ " = " ++ show expr
       showRegion ALocal = "local"
@@ -178,39 +179,6 @@ showOp Div = "/"
 showIndex :: Index Choice -> String
 showIndex (IdxConst n) = show n
 showIndex (IdxVar c) = show c
-
-traverseChoice
-  :: Monad f
-  => (Choice -> f Choice)
-  -> (SExpr -> f SExpr)
-  -> Choice
-  -> f Choice
-traverseChoice fChoice fSExpr = go
-  where
-    go (CChoice t choices idx) = do
-      choices' <- traverse go choices
-      idx' <- sequenceA $ fmap go idx
-      fChoice (CChoice t choices' idx')
-
-    go (CExpr idxs sexpr) = do
-      idxs' <- traverse (\(t, idx) -> (t,) <$> traverse go idx) idxs
-      sexpr' <- goSExpr sexpr
-      sexpr'' <- fSExpr sexpr'
-      fChoice (CExpr idxs' sexpr'')
-
-    go (CFuncRefTable t frs idx) = do
-      idx' <- sequenceA $ fmap go idx
-      fChoice (CFuncRefTable t frs idx')
-
-    goSExpr (SConst n) = pure (SConst n)
-    goSExpr (SArr t cs) = SArr t <$> traverse go cs
-    goSExpr (SOp op a b) = SOp op <$> go a <*> go b
-    goSExpr (SVar n) = pure (SVar n)
-    goSExpr (SAbs t bs c) = SAbs t <$> traverse (sequenceA2 . fmap go) bs <*> go c
-      where
-        sequenceA2 (a, b, f) = (,,) <$> pure a <*> pure b <*> f
-    goSExpr (SApp t f a) = SApp t <$> go f <*> go a
-    goSExpr (SFuncRef fr) = pure (SFuncRef fr)
 
 --------------------------------------------------------------------------------
 
@@ -383,6 +351,108 @@ markCapturedBindings choice = (substituteVars env.capturedParamMap choice', env)
       -- Report any free variables in this expression
       W.tell $ mempty { freeVars = collectSExprFreeVars e }
       pure e
+
+markCapturedBindings2 :: Choice -> (Choice, MarkEnv)
+markCapturedBindings2 choice = (substituteVars env.capturedParamMap choice', env)
+  where
+    (choice', env) = runUnique (W.runWriterT $ go choice)
+
+    -- Substitute variable references using uniplate
+    substituteVars :: Map Ident Ident -> Choice -> Choice
+    substituteVars subst = transformBi substVar
+      where
+        substVar (SVar n) = SVar (M.findWithDefault n n subst)
+        substVar e = e
+    
+    indexes :: [(Type, Index Choice)] -> W.WriterT MarkEnv Unique [(Type, Index Choice)]
+    indexes idxs = sequence
+      [ (t,) <$> sequenceA (fmap go idx)
+      | (t, idx) <- idxs
+      ]
+    
+    cexpr :: Choice -> (SExpr -> W.WriterT MarkEnv Unique SExpr) -> W.WriterT MarkEnv Unique Choice
+    cexpr (CExpr idxs sexpr) f = CExpr <$> indexes idxs <*> f sexpr
+    cexpr (CChoice t chs idx) _ = CChoice <$> pure t <*> traverse go chs <*> sequenceA (fmap go idx)
+    cexpr (CFuncRefTable t fs idx) _ = CFuncRefTable <$> pure t <*> pure fs <*> sequenceA (fmap go idx)
+
+    go :: Choice -> W.WriterT MarkEnv Unique Choice
+    go (CExpr idxs (SAbs t bindings body)) = do
+      -- Extract parameter names and types from the function type
+      let paramMap = M.fromList (namedParamTypes t)
+      
+      -- Collect all bindings (name, region)
+      let bindingMap = M.fromList [(n, r) | (n, r, _) <- bindings]
+      
+      -- Process binding expressions and collect their free variables
+      (processedBs, bsEnv) <- lift $ W.runWriterT $ sequence
+        [ do
+            expr' <- go expr
+            pure (n, r, expr')
+        | (n, r, expr) <- bindings
+        ]
+      
+      -- Process body and collect its free variables
+      (body', bodyEnv) <- lift $ W.runWriterT $ go body
+      
+      -- All bound names (parameters and bindings)
+      let bound = S.fromList [n | (n, _, _) <- bindings] <> M.keysSet paramMap
+      
+      -- Captured = free in body AND bound in outer scope
+      let capturedParams = M.filterWithKey (\n _ -> S.member n bodyEnv.freeVars && M.member n paramMap) paramMap
+      let capturedBindings = M.filterWithKey (\n _ -> S.member n bsEnv.freeVars && M.member n bindingMap) bindingMap
+      
+      -- Create new bindings for captured parameters
+      capturedParams <- sequence
+        [ do
+            newName <- lift fresh
+            pure (paramName, newName)
+        | paramName <- M.keys capturedParams
+        ]
+      
+      W.tell $ mempty
+        -- Filter out bound variables - only report truly free variables up
+        { freeVars = (bodyEnv.freeVars <> bsEnv.freeVars) \\ bound
+        , capturedParamMap = M.fromList capturedParams
+        }
+      
+      -- Update bindings: mark captured bindings as AGlobal and add new bindings for captured params
+      let updatedBindings = mconcat
+            [ [ case M.lookup n capturedBindings of
+                  Just _ -> (n, AGlobal, expr')  -- Mark as global if captured
+                  Nothing -> (n, r, expr')       -- Keep original region
+              | (n, r, expr') <- processedBs
+              ]
+            , [ (newName, AGlobal, CExpr [] (SVar paramName))  -- New binding for captured param
+              | (paramName, newName) <- capturedParams
+              ]
+            ]
+      
+      pure (CExpr idxs (SAbs t updatedBindings body'))
+
+    go e = cexpr e $ \case
+      e@(SConst _) -> pure e
+
+      SArr t as -> do
+        as' <- traverse go as
+        pure $ SArr t as'
+
+      SOp op a b -> do
+        a' <- go a
+        b' <- go b
+        pure $ SOp op a' b'
+
+      e@(SVar n) -> do
+        W.tell $ mempty { freeVars = S.singleton n }
+        pure e
+    
+      SApp t a b -> do
+        a' <- go a
+        b' <- go b
+        pure $ SApp t a' b'
+
+      SAbs _ _ _ -> error "SAbs: should be pattern matched in go (this is a bug)"
+
+      e@(SFuncRef _) -> pure e
 
 --------------------------------------------------------------------------------
 
