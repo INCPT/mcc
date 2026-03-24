@@ -256,8 +256,8 @@ instance Semigroup MarkEnv where
 instance Monoid MarkEnv where
   mempty = MarkEnv mempty mempty
 
-markCapturedBindings :: Choice -> Choice
-markCapturedBindings choice = substituteVars env.capturedParamMap choice'
+markCapturedBindings :: Choice -> (Choice, MarkEnv)
+markCapturedBindings choice = (substituteVars env.capturedParamMap choice', env)
   where
     (choice', env) = runUnique (W.runWriterT (descendBiM processSAbs choice))
 
