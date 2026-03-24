@@ -263,11 +263,21 @@ substituteVars subst = transformBi substVar
     substVar (SVar n) = SVar (M.findWithDefault n n subst)
     substVar e = e
 
+-- Collect free variables from SExpr
+collectSExprFreeVars :: SExpr -> FreeVars
+collectSExprFreeVars (SVar n) = S.singleton n
+collectSExprFreeVars _ = S.empty
+
 -- Single-pass implementation using uniplate for traversal
 markCapturedBindings :: Choice -> (Choice, FreeVars)
 markCapturedBindings choice = runUnique (R.runReaderT (W.runWriterT (transformBiM processSAbs choice)) emptyMarkEnv)
   where
     processSAbs :: SExpr -> W.WriterT FreeVars (R.ReaderT MarkEnv Unique) SExpr
+    processSAbs e@(SVar n) = do
+      -- Report this variable as free
+      W.tell (S.singleton n)
+      pure e
+    
     processSAbs (SAbs t bs body) = do
       env <- R.ask
       
@@ -283,7 +293,7 @@ markCapturedBindings choice = runUnique (R.runReaderT (W.runWriterT (transformBi
             , params = paramMap <> env.params
             }
       
-      -- Process binding expressions
+      -- Process binding expressions and collect their free variables
       (processedBs, bsFreeVars) <- W.listen $ sequence
         [ do
             expr' <- R.local (const newEnv) (transformBiM processSAbs expr)
@@ -291,11 +301,15 @@ markCapturedBindings choice = runUnique (R.runReaderT (W.runWriterT (transformBi
         | (n, r, expr) <- bs
         ]
       
-      -- Process body
+      -- Process body and collect its free variables
       (body', bodyFreeVars) <- W.listen $ R.local (const newEnv) (transformBiM processSAbs body)
       
       -- All bound names (parameters and bindings)
       let bound = S.fromList [n | (n, _, _) <- bs] <> M.keysSet paramMap
+      
+      -- Filter out bound variables - only report truly free variables up
+      let trulyFree = (bsFreeVars <> bodyFreeVars) S.\\ bound
+      W.tell trulyFree
       
       -- Captured = free in body AND bound in outer scope
       let capturedParams = M.filterWithKey (\n _ -> S.member n bodyFreeVars && M.member n env.params) paramMap
@@ -340,7 +354,10 @@ markCapturedBindings choice = runUnique (R.runReaderT (W.runWriterT (transformBi
       
       pure (SAbs t finalBindings finalBody)
     
-    processSAbs e = pure e
+    processSAbs e = do
+      -- Report any free variables in this expression
+      W.tell (collectSExprFreeVars e)
+      pure e
 
 --------------------------------------------------------------------------------
 
