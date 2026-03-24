@@ -528,9 +528,11 @@ gatherFreeVars funcRefMap = freeVarMap
           , [ fvs | b <- bindings, SFuncRef fr <- universeBi b, Just fvs <- [ M.lookup fr freeVarMap ] ]
           ]
 
-markCapturedBindings2 :: Map FuncRef (Set Ident) -> Map FuncRef Abs -> Map FuncRef Abs
+markCapturedBindings2 :: Map FuncRef (Set Ident) -> Map FuncRef Abs -> (Map FuncRef Abs, Map Ident Ident)
 markCapturedBindings2 freeVarMap funcRefMap
-  = fmap (transformBi (substituteVars substMap)) funcRefMapWithGlobalBindings
+  = ( fmap (transformBi (substituteVars substMap)) funcRefMapWithGlobalBindings
+    , substMap
+    )
 
   where
     (funcRefMapWithGlobalBindings, substMap) = runUnique $ W.runWriterT (traverse go funcRefMap)
@@ -569,6 +571,12 @@ markCapturedBindings2 freeVarMap funcRefMap
       where
         substVar (SVar n) = SVar (M.findWithDefault n n subst)
         substVar e = e
+
+testMark :: Choice -> (Map FuncRef Abs, Map Ident Ident)
+testMark ch = markCapturedBindings2 freeVarMap env.funcRefMap
+  where
+    (ch', env) = gatherAbstractions (const True) ch
+    freeVarMap = gatherFreeVars env.funcRefMap
 
 -- NEXT
 -- * mark captured bindings for storing in global
@@ -835,11 +843,11 @@ testChoice3 = CExpr [] $ SAbs
 testChoice4 :: Choice
 testChoice4 = CExpr [] $ SAbs
   (TAbs (Just (Ident "a")) TNumber (TAbs (Just (Ident "b")) TNumber TNumber))
-  [(Ident "a", ALocal, CExpr [] (SConst (I 1)))]
+  [(Ident "bnd_a", ALocal, CExpr [] (SConst (I 1)))]
   (CExpr [] $ SAbs
-    (TAbs (Just (Ident "b")) TNumber TNumber)
-    [ (Ident "b", ALocal, CExpr [] (SConst (I 2)))
-    , (Ident "c", ALocal, CExpr [] (SVar (Ident "a")))
+    (TAbs (Just (Ident "c")) TNumber TNumber)
+    [ (Ident "bnd_b", ALocal, CExpr [] (SVar (Ident "bnd_a")))
+    , (Ident "bnd_c", ALocal, CExpr [] (SVar (Ident "a")))
     ]
     (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b")))))
 
