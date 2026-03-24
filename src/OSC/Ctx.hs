@@ -10,6 +10,7 @@ module OSC.Ctx where
 import Data.Bifunctor (second)
 import Data.Data (Typeable, Data)
 import Data.Functor.Identity
+import Data.List (intercalate)
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Set (Set, (\\))
@@ -123,14 +124,60 @@ data SExpr
   | SApp Type Choice Choice
 
   | SFuncRef FuncRef
-  deriving (Show, Data)
+  deriving (Data)
 
 data Choice
   = CChoice Type [Choice] (Index Choice)
   | CExpr [(Type, Index (Choice))] SExpr -- selection indices that flow into the inner expression
 
   | CFuncRefTable Type [FuncRef] (Index Choice)
-  deriving (Show, Data)
+  deriving (Data)
+
+instance Show SExpr where
+  show (SConst n) = show n
+  show (SArr t cs) = "[" ++ showType t ++ ": " ++ intercalate ", " (map show cs) ++ "]"
+  show (SOp op a b) = "(" ++ show a ++ " " ++ showOp op ++ " " ++ show b ++ ")"
+  show (SVar (Ident n)) = n
+  show (SAbs t bs body) = 
+    "λ" ++ showType t ++ " " ++ showBindings bs ++ " -> " ++ show body
+    where
+      showBindings [] = ""
+      showBindings bindings = "{ " ++ intercalate "; " (map showBinding bindings) ++ " } "
+      showBinding (Ident n, region, expr) = 
+        n ++ "@" ++ showRegion region ++ " = " ++ show expr
+      showRegion ALocal = "local"
+      showRegion AGlobal = "global"
+  show (SApp t f a) = show f ++ "(" ++ show a ++ ")"
+  show (SFuncRef (FuncRef n)) = "funcref#" ++ show n
+
+instance Show Choice where
+  show (CChoice t cs idx) = 
+    "choice[" ++ showType t ++ "](" ++ intercalate " | " (map show cs) ++ ")[" ++ showIndex idx ++ "]"
+  show (CExpr [] expr) = show expr
+  show (CExpr idxs expr) = 
+    show expr ++ " @ [" ++ intercalate ", " (map showIdxPair idxs) ++ "]"
+    where
+      showIdxPair (t, idx) = showType t ++ "[" ++ showIndex idx ++ "]"
+  show (CFuncRefTable t frs idx) = 
+    "table[" ++ showType t ++ "](" ++ intercalate ", " (map showFR frs) ++ ")[" ++ showIndex idx ++ "]"
+    where
+      showFR (FuncRef n) = "#" ++ show n
+
+showType :: Type -> String
+showType TNumber = "num"
+showType (TArr t dim) = showType t ++ "[" ++ show dim ++ "]"
+showType (TAbs Nothing t1 t2) = showType t1 ++ " -> " ++ showType t2
+showType (TAbs (Just (Ident n)) t1 t2) = n ++ ":" ++ showType t1 ++ " -> " ++ showType t2
+
+showOp :: Op -> String
+showOp Plus = "+"
+showOp Minus = "-"
+showOp Mul = "*"
+showOp Div = "/"
+
+showIndex :: Index Choice -> String
+showIndex (IdxConst n) = show n
+showIndex (IdxVar c) = show c
 
 traverseChoice
   :: Monad f
