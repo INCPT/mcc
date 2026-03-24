@@ -248,7 +248,7 @@ fresh = Unique $ do
 data MarkEnv = MarkEnv
   { freeVars :: Set Ident
   , capturedParamMap :: Map Ident Ident
-  }
+  } deriving Show
 
 instance Semigroup MarkEnv where
   MarkEnv a b <> MarkEnv c d = MarkEnv (a <> c) (b <> d)
@@ -628,11 +628,11 @@ testChoice1 = CExpr [] $ SAbs
 testChoice2 :: Choice
 testChoice2 = CExpr [] $ SAbs
   (TAbs (Just (Ident "x")) TNumber (TAbs (Just (Ident "y")) TNumber TNumber))
-  [(Ident "x", ALocal, CExpr [] (SConst (I 0)))]
+  [(Ident "z", ALocal, CExpr [] (SConst (I 0)))]
   (CExpr [] $ SAbs
-    (TAbs (Just (Ident "y")) TNumber TNumber)
-    [(Ident "y", ALocal, CExpr [] (SConst (I 1)))]
-    (CExpr [] $ SOp Plus (CExpr [] (SVar (Ident "x"))) (CExpr [] (SVar (Ident "y")))))
+    (TAbs (Just (Ident "a")) TNumber TNumber)
+    [(Ident "b", ALocal, CExpr [] (SConst (I 1)))]
+    (CExpr [] $ SOp Plus (CExpr [] (SVar (Ident "x"))) (CExpr [] (SVar (Ident "z")))))
 
 -- Test 3: Abstraction with a binding that references a parameter
 testChoice3 :: Choice
