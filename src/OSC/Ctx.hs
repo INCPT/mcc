@@ -164,7 +164,7 @@ choiceType (CExpr idxs expr) = peelOffIndices (length idxs) (sexprType expr)
     peelOffIndices :: Int -> Type -> Type
     peelOffIndices 0 t = t
     peelOffIndices n (TArr t _) = peelOffIndices (n - 1) t
-    peelOffIndices _ t = error $ "choiceType: cannot peel " ++ show (length idxs) ++ " indices from type " ++ show t
+    peelOffIndices _ t = error $ "choiceType: cannot peel " <> show (length idxs) <> " indices from type " <> show t <> " (this is a bug)"
 
 sexprType :: SExpr -> Type
 sexprType (SConst n) = numberType n
