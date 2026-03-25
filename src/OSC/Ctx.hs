@@ -23,7 +23,7 @@ import qualified Control.Monad.Trans.Writer.CPS as W
 import Data.Generics.Uniplate.Data
 import Data.Generics.Str
 
-data Type = TI32 | TF32 | TI64 | TF64 | TArr Type {- length -} Int | TAbs (Maybe Ident) Type Type
+data Type = TI32 | TF32 | TI64 | TF64 | TArr Type {- length -} Int | TAbs [(Maybe Ident, Type)] Type Type
   deriving (Data)
 
 sizeOfType :: Type -> Int
@@ -51,8 +51,10 @@ paramTypes _ = []
 
 namedParamTypes :: Type -> [(Ident, Type)]
 namedParamTypes (TArr _ _) = []
-namedParamTypes (TAbs (Just i) t ts) = (i, t):namedParamTypes ts
-namedParamTypes (TAbs Nothing _ _) = error "namedParamTypes: unnamed param (this is a bug)"
+namedParamTypes (TAbs params _ _) = fmap p params
+  where
+    p (Just n, t) = (n, t)
+    p (Nothing, _) = error "namedParamTypes: unnamed param (this is a bug)"
 namedParamTypes _ = []
 
 data Number = I32 Int | I64 Int | F32 Float | F64 Double
@@ -78,7 +80,7 @@ data Expr
   | EVar Type Ident
 
   | EAbs Type {- bindings -} [(Ident, Expr)] {- body -} Expr
-  | EApp Type Expr Expr
+  | EApp Type Expr [Expr]
 
   | ESelect Type Expr {- selector -} Expr
   | ERec Type {- delay -} Int Ident {- init value -} Expr {- body -} Expr
@@ -394,6 +396,7 @@ markCapturedBindings freeVarMap funcRefMap
         substVar (SVar t n) = SVar t (M.findWithDefault n n subst)
         substVar e = e
 
+-- TODO: if bindings between two SAbs float collapse them into one
 floatExpressions :: Map FuncRef Abs -> Map FuncRef Abs
 floatExpressions = fmap go
   where
