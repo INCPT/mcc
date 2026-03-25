@@ -23,7 +23,7 @@ import qualified Control.Monad.Trans.Writer.CPS as W
 import Data.Generics.Uniplate.Data
 import Data.Generics.Str
 
-data Type = TI32 | TF32 | TI64 | TF64 | TArr Type {- length -} Int | TAbs [(Maybe Ident, Type)] Type Type
+data Type = TI32 | TF32 | TI64 | TF64 | TArr Type {- length -} Int | TAbs [(Maybe Ident, Type)] Type
   deriving (Data)
 
 sizeOfType :: Type -> Int
@@ -32,26 +32,26 @@ sizeOfType TF32 = 4
 sizeOfType TI64 = 8
 sizeOfType TF64 = 8
 sizeOfType (TArr t dim) = sizeOfType t * dim
-sizeOfType (TAbs _ _ _) = 4 -- funcref is an integer
+sizeOfType (TAbs _ _) = 4 -- funcref is an integer
 
 returnType :: Type -> Type
 returnType t@(TArr _ _) = t
-returnType (TAbs _ _ t) = t
+returnType (TAbs _ t) = t
 returnType t = t
 
 peelType :: Type -> Type
 peelType (TArr t _) = t
-peelType (TAbs _ _ _) = error "peelType: abstraction"
+peelType (TAbs _ _) = error "peelType: abstraction"
 peelType t = error $ "peelType: " <> show t
 
 paramTypes :: Type -> [(Maybe Ident, Type)]
 paramTypes (TArr _ _) = []
-paramTypes (TAbs params _ _) = params
+paramTypes (TAbs params _) = params
 paramTypes _ = []
 
 namedParamTypes :: Type -> [(Ident, Type)]
 namedParamTypes (TArr _ _) = []
-namedParamTypes (TAbs params _ _) = fmap p params
+namedParamTypes (TAbs params _) = fmap p params
   where
     p (Just n, t) = (n, t)
     p (Nothing, _) = error "namedParamTypes: unnamed param (this is a bug)"
@@ -222,8 +222,8 @@ showType TF32 = "f32"
 showType TI64 = "i64"
 showType TF64 = "f64"
 showType (TArr t dim) = showType t <> "[" <> show dim <> "]"
-showType (TAbs [] _ retType) = "() -> " <> showType retType
-showType (TAbs params _ retType) = 
+showType (TAbs [] retType) = "() -> " <> showType retType
+showType (TAbs params retType) = 
   "(" <> intercalate ", " (map showParam params) <> ") -> " <> showType retType
   where
     showParam (Nothing, t) = showType t
@@ -257,7 +257,7 @@ choiceTree :: Monad m => Expr -> StackM (Type, Expr) m Choice
 choiceTree (EConst n) = toC (SConst n)
 choiceTree (EOp t op a b) = toC (SOp t op (toChoice a) (toChoice b))
 choiceTree (EVar t n) = toC (SVar t n)
--- choiceTree (EApp t a b) = toC (SApp t (toChoice a) (toChoice b))
+choiceTree (EApp t f as) = toC (SApp t (toChoice f) (fmap toChoice as))
 choiceTree (EAbs t bs e) = toC (SAbs t (map (second toChoice) [ (n, ALocal, b) | (n, b) <- bs ]) (toChoice e))
 choiceTree (EArr t es) = do
   s <- pop
@@ -323,8 +323,16 @@ data AbsEnv = AbsEnv
   } deriving Show
 
 gatherAbstractions :: Choice -> (Choice, AbsEnv)
-gatherAbstractions = flip ST.runState (AbsEnv mempty 0) . transformBiM processSAbs
+gatherAbstractions = flip ST.runState (AbsEnv mempty 0) . transformBiM processSAbs . transformBi abstractUnsaturatedApps
   where
+    abstractUnsaturatedApps :: SExpr -> SExpr
+    abstractUnsaturatedApps e@(SApp t f as) = case drop (length as) (paramTypes $ choiceType f) of
+      -- Saturated, keep as is
+      [] -> e
+      -- Unsaturated, create closure
+      _ -> undefined
+    abstractUnsaturatedApps e = e
+
     processSAbs :: SExpr -> ST.State AbsEnv SExpr
     processSAbs (SAbs t bs body) = do
       fr <- FuncRef <$> ST.gets (.nextFuncRef)
@@ -434,24 +442,24 @@ markPureExpressions = fmap go
 -- Test 1: Simple abstraction with no captures
 testChoice1 :: Choice
 testChoice1 = CExpr [] $ SAbs
-  (TAbs [(Just (Ident "x"), TI32)] [] TI32)
+  (TAbs [(Just (Ident "x"), TI32)] TI32)
   [(Ident "x", ALocal, CExpr [] (SConst (I32 0)))]
   (CExpr [] (SVar TI32 (Ident "x")))
 
 -- Test 2: Abstraction that captures a parameter in a nested abstraction
 testChoice2 :: Choice
 testChoice2 = CExpr [] $ SAbs
-  (TAbs [(Just (Ident "x"), TI32), (Just (Ident "y"), TI32)] [] TI32)
+  (TAbs [(Just (Ident "x"), TI32), (Just (Ident "y"), TI32)] TI32)
   [(Ident "z", ALocal, CExpr [] (SConst (I32 0)))]
   (CExpr [] $ SAbs
-    (TAbs [(Just (Ident "a"), TI32)] [] TI32)
+    (TAbs [(Just (Ident "a"), TI32)] TI32)
     [(Ident "b", ALocal, CExpr [] (SConst (I32 1)))]
     (CExpr [] $ SOp TI32 Add (CExpr [] (SVar TI32 (Ident "x"))) (CExpr [] (SVar TI32 (Ident "z")))))
 
 -- Test 3: Abstraction with a binding that references a parameter
 testChoice3 :: Choice
 testChoice3 = CExpr [] $ SAbs
-  (TAbs [(Just (Ident "x"), TI32)] [] TI32)
+  (TAbs [(Just (Ident "x"), TI32)] TI32)
   [ (Ident "x", ALocal, CExpr [] (SConst (I32 5)))
   , (Ident "y", ALocal, CExpr [] (SVar TI32 (Ident "x")))
   ]
@@ -460,10 +468,10 @@ testChoice3 = CExpr [] $ SAbs
 -- Test 4: Nested abstractions with multiple captures
 testChoice4 :: Choice
 testChoice4 = CExpr [] $ SAbs
-  (TAbs [(Just (Ident "a"), TI32), (Just (Ident "b"), TI32)] [] TI32)
+  (TAbs [(Just (Ident "a"), TI32), (Just (Ident "b"), TI32)] TI32)
   [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
   (CExpr [] $ SAbs
-    (TAbs [(Just (Ident "c"), TI32)] [] TI32)
+    (TAbs [(Just (Ident "c"), TI32)] TI32)
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar TI32 (Ident "bnd_a")))
     , (Ident "bnd_c", ALocal, CExpr [] (SVar TI32 (Ident "a")))
     ]
@@ -472,10 +480,10 @@ testChoice4 = CExpr [] $ SAbs
 -- Test 4: Nested abstractions with multiple captures
 testChoice4_2 :: Choice
 testChoice4_2 = CExpr [] $ SAbs
-  (TAbs [(Just (Ident "a"), TI32), (Just (Ident "b"), TI32), (Just (Ident "z"), TI32)] [] TI32)
+  (TAbs [(Just (Ident "a"), TI32), (Just (Ident "b"), TI32), (Just (Ident "z"), TI32)] TI32)
   [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
   (CExpr [] $ SAbs
-    (TAbs [(Just (Ident "c"), TI32)] [] TI32)
+    (TAbs [(Just (Ident "c"), TI32)] TI32)
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar TI32 (Ident "a")))
     , (Ident "bnd_c", ALocal, CExpr [] (SVar TI32 (Ident "z")))
     ]
@@ -486,10 +494,10 @@ testChoice4_2 = CExpr [] $ SAbs
 
 testChoice4_3 :: Choice
 testChoice4_3 = CExpr [] $ SAbs
-  (TAbs [(Just (Ident "a"), TI32), (Just (Ident "b"), TI32), (Just (Ident "z"), TI32)] [] TI32)
+  (TAbs [(Just (Ident "a"), TI32), (Just (Ident "b"), TI32), (Just (Ident "z"), TI32)] TI32)
   [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
   (CExpr [] $ SAbs
-    (TAbs [(Just (Ident "c"), TI32)] [] TI32)
+    (TAbs [(Just (Ident "c"), TI32)] TI32)
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar TI32 (Ident "a")))
     , (Ident "bnd_c", ALocal, CExpr [] (SVar TI32 (Ident "z")))
     ]
@@ -508,22 +516,22 @@ testChoice4_3 = CExpr [] $ SAbs
 -- Test 5: Abstraction with free variable (not captured, just free)
 testChoice5 :: Choice
 testChoice5 = CExpr [] $ SAbs
-  (TAbs [(Just (Ident "x"), TI32)] [] TI32)
+  (TAbs [(Just (Ident "x"), TI32)] TI32)
   [(Ident "x", ALocal, CExpr [] (SConst (I32 0)))]
   (CExpr [] $ SOp TI32 Add (CExpr [] (SVar TI32 (Ident "x"))) (CExpr [] (SVar TI32 (Ident "freeVar"))))
 
 -- Test 6: Complex case with binding that captures and is itself captured
 testChoice6 :: Choice
 testChoice6 = CExpr [] $ SAbs
-  (TAbs [(Just (Ident "x"), TI32), (Just (Ident "y"), TI32)] [] TI32)
+  (TAbs [(Just (Ident "x"), TI32), (Just (Ident "y"), TI32)] TI32)
   [ (Ident "x", ALocal, CExpr [] (SConst (I32 10)))
   , (Ident "helper", ALocal, CExpr [] $ SAbs
-      (TAbs [(Just (Ident "z"), TI32)] [] TI32)
+      (TAbs [(Just (Ident "z"), TI32)] TI32)
       [(Ident "z", ALocal, CExpr [] (SConst (I32 0)))]
       (CExpr [] $ SOp TI32 Add (CExpr [] (SVar TI32 (Ident "x"))) (CExpr [] (SVar TI32 (Ident "z")))))
   ]
   (CExpr [] $ SAbs
-    (TAbs [(Just (Ident "y"), TI32)] [] TI32)
+    (TAbs [(Just (Ident "y"), TI32)] TI32)
     [(Ident "y", ALocal, CExpr [] (SConst (I32 20)))]
     (CExpr [] $ SApp TI32 (CExpr [] (SVar TI32 (Ident "helper"))) [CExpr [] (SVar TI32 (Ident "y"))]))
 
