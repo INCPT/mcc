@@ -29,7 +29,9 @@ newtype ArrayBaseAddr = ArrayBaseAddr Idx deriving (Eq, Ord, Show)
 newtype ArgPos = ArgPos Int deriving (Eq, Ord, Show)
 
 data Ref 
-  = RVar Idx -- either a function local var index (e.g. in function f() { int a; float b; } would be locals with index 0 and 1) or an index into a global var table
+  = RArg Int
+
+  | RVar Idx -- either a function local var index (e.g. in function f() { int a; float b; } would be locals with index 0 and 1) or an index into a global var table
   | RArray Type Int ArrayBaseAddr -- global base address of array in a linear memory layout
   | RFuncRef FuncRef -- index into a global function table
 
@@ -60,18 +62,23 @@ data Ref
 
 newtype Lens = Lens { to :: [Int] }
 
-focusLens :: Int -> Lens -> Lens
-focusLens i l = l { to = i:l.to }
-
 data Env = Env {
   typ :: Type,
   ret :: Ref,
   lens :: Lens
 }
 
+newEnv :: Type -> Ref -> Env
+newEnv t ref = Env t ref (Lens [])
+
+focusLens :: Int -> Lens -> Lens
+focusLens i l = l { to = i:l.to }
+
+focusEnv :: Int -> Env -> Env
+focusEnv i env = env { lens = focusLens i env.lens }
+
 data IRF n
   = Ref Ref
-  | Arg Int
 
   | Alloc Type AllocRegion (Ref -> n)
 
@@ -85,8 +92,6 @@ data IRF n
   | BinOp Op Ref Ref Ref
 
   | Call Ref [Ref] Ref -- first Ref must be an RFuncRef or an RRFuncRef; then arguments; then destination
-
-  | Done
   deriving Functor
 
 type IR = Free IRF
@@ -107,22 +112,31 @@ alloc :: Type -> AllocRegion -> IR Ref
 alloc t region = liftF $ Alloc t region id
 
 ref :: Ref -> IR Ref
-ref r = pure $ Free (Ref r)
-
-arg :: Int -> IR Ref
-arg i = pure $ Free (Arg i)
-
-done :: IR ()
-done = liftF Done
+ref r = pure r
 
 --------------------------------------------------------------------------------
 
--- choiceToIR :: Choice -> R.Reader Env IR
--- choiceToIR (CExpr _ (SConst n)) = do
---   env <- R.ask
---   pure $ CopyConst TNumber n env.ret env.lens Done
--- choiceToIR (CExpr [] (SArr t elems)) = do
---   undefined
--- choiceToIR (CExpr _ (SArr _ _)) = error "choiceToIR: SArr: non empty selection indices (this is a bug)"
--- 
--- choiceToIR _ = undefined
+choiceToIR :: Choice -> R.ReaderT Env IR ()
+choiceToIR (CExpr _ (SConst n)) = do
+  env <- R.ask
+  lift $ copyConst (numberType n) n env.ret env.lens
+choiceToIR (CExpr _ (SFuncRef (FuncRef idx))) = do
+  env <- R.ask
+  lift $ copyConst TI32 (I32 idx) env.ret env.lens
+choiceToIR (CExpr [] (SArr _ elems)) = sequence_
+  [ R.local (focusEnv i) $ choiceToIR elem
+  | (i, elem) <- zip [0..] elems
+  ]
+choiceToIR (CExpr _ (SArr _ _)) = error "choiceToIR: SArr: non empty selection indices (this is a bug)"
+choiceToIR (CExpr _ (SOp t op a b)) = do
+  env <- R.ask
+
+  aref <- lift $ alloc TNumber ALocal
+  bref <- lift $ alloc TNumber ALocal
+
+  R.local (const $ newEnv TNumber aref) (choiceToIR a)
+  R.local (const $ newEnv TNumber bref) (choiceToIR b)
+  
+  lift $ binOp op aref bref env.ret
+
+choiceToIR _ = undefined

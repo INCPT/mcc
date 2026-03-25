@@ -23,37 +23,46 @@ import qualified Control.Monad.Trans.Writer.CPS as W
 import Data.Generics.Uniplate.Data
 import Data.Generics.Str
 
-data Type = TNumber | TArr Type {- length -} Int | TAbs (Maybe Ident) Type Type
+data Type = TI32 | TF32 | TI64 | TF64 | TArr Type {- length -} Int | TAbs (Maybe Ident) Type Type
   deriving (Data)
 
 sizeOfType :: Type -> Int
-sizeOfType TNumber = 4
+sizeOfType TI32 = 4
+sizeOfType TF32 = 4
+sizeOfType TI64 = 8
+sizeOfType TF64 = 8
 sizeOfType (TArr t dim) = sizeOfType t * dim
 sizeOfType (TAbs _ _ _) = 4 -- funcref is an integer
 
 returnType :: Type -> Type
-returnType TNumber = TNumber
 returnType t@(TArr _ _) = t
 returnType (TAbs _ _ t) = t
+returnType t = t
 
 peelType :: Type -> Type
 peelType (TArr t _) = t
-peelType TNumber = error "peelType: number"
 peelType (TAbs _ _ _) = error "peelType: abstraction"
+peelType t = error $ "peelType: " <> show t
 
 paramTypes :: Type -> [(Maybe Ident, Type)]
-paramTypes TNumber = []
 paramTypes (TArr _ _) = []
 paramTypes (TAbs i t ts) = (i, t):paramTypes ts
+paramTypes _ = []
 
 namedParamTypes :: Type -> [(Ident, Type)]
-namedParamTypes TNumber = []
 namedParamTypes (TArr _ _) = []
 namedParamTypes (TAbs (Just i) t ts) = (i, t):namedParamTypes ts
 namedParamTypes (TAbs Nothing _ _) = error "namedParamTypes: unnamed param (this is a bug)"
+namedParamTypes _ = []
 
 data Number = I32 Int | I64 Int | F32 Float | F64 Double
   deriving (Show, Data)
+
+numberType :: Number -> Type
+numberType (I32 _) = TI32
+numberType (F32 _) = TF32
+numberType (I64 _) = TI64
+numberType (F64 _) = TF64
 
 data Ident = Ident String
   deriving (Eq, Ord, Data, Show)
@@ -63,7 +72,7 @@ data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Eq | Gt | L
 
 data Expr
   = EConst Number
-  | EOp Op Expr Expr -- both args and the result are simple types
+  | EOp Type Op Expr Expr -- both args and the result are simple types
   | EArr Type [Expr]
 
   | EVar Ident
@@ -116,7 +125,7 @@ data AllocRegion = ALocal | AGlobal
 data SExpr
   = SConst Number
   | SArr Type [Choice]
-  | SOp Op Choice Choice
+  | SOp Type Op Choice Choice
 
   | SVar Ident
   | SVarNS Ident -- shouldn't be substituted
@@ -142,7 +151,7 @@ data Choice
 instance Show SExpr where
   show (SConst n) = show n
   show (SArr t cs) = "[" <> showType t <> ": " <> intercalate ", " (map show cs) <> "]"
-  show (SOp op a b) = "(" <> show a <> " " <> showOp op <> " " <> show b <> ")"
+  show (SOp _ op a b) = "(" <> show a <> " " <> showOp op <> " " <> show b <> ")"
   show (SVar (Ident n)) = n
   show (SVarNS (Ident n)) = n
   show (SAbs t bs body) = 
@@ -172,7 +181,10 @@ instance Show Type where
   show = showType
 
 showType :: Type -> String
-showType TNumber = "num"
+showType TI32 = "i32"
+showType TF32 = "f32"
+showType TI64 = "i64"
+showType TF64 = "f64"
 showType (TArr t dim) = showType t <> "[" <> show dim <> "]"
 showType (TAbs Nothing t1 t2) = showType t1 <> " -> " <> showType t2
 showType (TAbs (Just (Ident n)) t1 t2) = n <> ":" <> showType t1 <> " -> " <> showType t2
@@ -203,7 +215,7 @@ toC e = do
 
 choiceTree :: Monad m => Expr -> StackM (Type, Expr) m Choice
 choiceTree (EConst n) = toC (SConst n)
-choiceTree (EOp op a b) = toC (SOp op (toChoice a) (toChoice b))
+choiceTree (EOp t op a b) = toC (SOp t op (toChoice a) (toChoice b))
 choiceTree (EVar n) = toC (SVar n)
 choiceTree (EApp t a b) = toC (SApp t (toChoice a) (toChoice b))
 choiceTree (EAbs t bs e) = toC (SAbs t (map (second toChoice) [ (n, ALocal, b) | (n, b) <- bs ]) (toChoice e))
@@ -605,24 +617,24 @@ e2 = ESelect (t [3, 2]) (
 -- Test 1: Simple abstraction with no captures
 testChoice1 :: Choice
 testChoice1 = CExpr [] $ SAbs
-  (TAbs (Just (Ident "x")) TNumber TNumber)
+  (TAbs (Just (Ident "x")) TI32 TI32)
   [(Ident "x", ALocal, CExpr [] (SConst (I32 0)))]
   (CExpr [] (SVar (Ident "x")))
 
 -- Test 2: Abstraction that captures a parameter in a nested abstraction
 testChoice2 :: Choice
 testChoice2 = CExpr [] $ SAbs
-  (TAbs (Just (Ident "x")) TNumber (TAbs (Just (Ident "y")) TNumber TNumber))
+  (TAbs (Just (Ident "x")) TI32 (TAbs (Just (Ident "y")) TI32 TI32))
   [(Ident "z", ALocal, CExpr [] (SConst (I32 0)))]
   (CExpr [] $ SAbs
-    (TAbs (Just (Ident "a")) TNumber TNumber)
+    (TAbs (Just (Ident "a")) TI32 TI32)
     [(Ident "b", ALocal, CExpr [] (SConst (I32 1)))]
-    (CExpr [] $ SOp Add (CExpr [] (SVar (Ident "x"))) (CExpr [] (SVar (Ident "z")))))
+    (CExpr [] $ SOp TI32 Add (CExpr [] (SVar (Ident "x"))) (CExpr [] (SVar (Ident "z")))))
 
 -- Test 3: Abstraction with a binding that references a parameter
 testChoice3 :: Choice
 testChoice3 = CExpr [] $ SAbs
-  (TAbs (Just (Ident "x")) TNumber TNumber)
+  (TAbs (Just (Ident "x")) TI32 TI32)
   [ (Ident "x", ALocal, CExpr [] (SConst (I32 5)))
   , (Ident "y", ALocal, CExpr [] (SVar (Ident "x")))
   ]
@@ -631,72 +643,72 @@ testChoice3 = CExpr [] $ SAbs
 -- Test 4: Nested abstractions with multiple captures
 testChoice4 :: Choice
 testChoice4 = CExpr [] $ SAbs
-  (TAbs (Just (Ident "a")) TNumber (TAbs (Just (Ident "b")) TNumber TNumber))
+  (TAbs (Just (Ident "a")) TI32 (TAbs (Just (Ident "b")) TI32 TI32))
   [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
   (CExpr [] $ SAbs
-    (TAbs (Just (Ident "c")) TNumber TNumber)
+    (TAbs (Just (Ident "c")) TI32 TI32)
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar (Ident "bnd_a")))
     , (Ident "bnd_c", ALocal, CExpr [] (SVar (Ident "a")))
     ]
-    (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b")))))
+    (CExpr [] $ SOp TI32 Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b")))))
 
 -- Test 4: Nested abstractions with multiple captures
 testChoice4_2 :: Choice
 testChoice4_2 = CExpr [] $ SAbs
-  (TAbs (Just (Ident "a")) TNumber (TAbs (Just (Ident "b")) TNumber (TAbs (Just (Ident "z")) TNumber TNumber)))
+  (TAbs (Just (Ident "a")) TI32 (TAbs (Just (Ident "b")) TI32 (TAbs (Just (Ident "z")) TI32 TI32)))
   [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
   (CExpr [] $ SAbs
-    (TAbs (Just (Ident "c")) TNumber TNumber)
+    (TAbs (Just (Ident "c")) TI32 TI32)
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar (Ident "a")))
     , (Ident "bnd_c", ALocal, CExpr [] (SVar (Ident "z")))
     ]
-    (CChoice TNumber
-      [ (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
-      , (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
-      ] (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "bnd_a"))) (CExpr [] (SVar (Ident "z"))))))
+    (CChoice TI32
+      [ (CExpr [] $ SOp TI32 Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
+      , (CExpr [] $ SOp TI32 Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
+      ] (CExpr [] $ SOp TI32 Mul (CExpr [] (SVar (Ident "bnd_a"))) (CExpr [] (SVar (Ident "z"))))))
 
 testChoice4_3 :: Choice
 testChoice4_3 = CExpr [] $ SAbs
-  (TAbs (Just (Ident "a")) TNumber (TAbs (Just (Ident "b")) TNumber (TAbs (Just (Ident "z")) TNumber TNumber)))
+  (TAbs (Just (Ident "a")) TI32 (TAbs (Just (Ident "b")) TI32 (TAbs (Just (Ident "z")) TI32 TI32)))
   [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
   (CExpr [] $ SAbs
-    (TAbs (Just (Ident "c")) TNumber TNumber)
+    (TAbs (Just (Ident "c")) TI32 TI32)
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar (Ident "a")))
     , (Ident "bnd_c", ALocal, CExpr [] (SVar (Ident "z")))
     ]
-    (CChoice (TArr TNumber 3)
-      [ (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
-      , (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
-      , (CChoice (TArr TNumber 3)
-          [ (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
-          , (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
-          ] (CChoice (TArr TNumber 3)
+    (CChoice (TArr TI32 3)
+      [ (CExpr [] $ SOp TI32 Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
+      , (CExpr [] $ SOp TI32 Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
+      , (CChoice (TArr TI32 3)
+          [ (CExpr [] $ SOp TI32 Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
+          , (CExpr [] $ SOp TI32 Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
+          ] (CChoice (TArr TI32 3)
                  [ (CExpr [] $ SConst $ I32 1)
-                 , (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
+                 , (CExpr [] $ SOp TI32 Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
                  ] (CExpr [] $ SConst $ I32 0))) 
       ] (CExpr [] $ SConst $ I32 2)))
 
 -- Test 5: Abstraction with free variable (not captured, just free)
 testChoice5 :: Choice
 testChoice5 = CExpr [] $ SAbs
-  (TAbs (Just (Ident "x")) TNumber TNumber)
+  (TAbs (Just (Ident "x")) TI32 TI32)
   [(Ident "x", ALocal, CExpr [] (SConst (I32 0)))]
-  (CExpr [] $ SOp Add (CExpr [] (SVar (Ident "x"))) (CExpr [] (SVar (Ident "freeVar"))))
+  (CExpr [] $ SOp TI32 Add (CExpr [] (SVar (Ident "x"))) (CExpr [] (SVar (Ident "freeVar"))))
 
 -- Test 6: Complex case with binding that captures and is itself captured
 testChoice6 :: Choice
 testChoice6 = CExpr [] $ SAbs
-  (TAbs (Just (Ident "x")) TNumber (TAbs (Just (Ident "y")) TNumber TNumber))
+  (TAbs (Just (Ident "x")) TI32 (TAbs (Just (Ident "y")) TI32 TI32))
   [ (Ident "x", ALocal, CExpr [] (SConst (I32 10)))
   , (Ident "helper", ALocal, CExpr [] $ SAbs
-      (TAbs (Just (Ident "z")) TNumber TNumber)
+      (TAbs (Just (Ident "z")) TI32 TI32)
       [(Ident "z", ALocal, CExpr [] (SConst (I32 0)))]
-      (CExpr [] $ SOp Add (CExpr [] (SVar (Ident "x"))) (CExpr [] (SVar (Ident "z")))))
+      (CExpr [] $ SOp TI32 Add (CExpr [] (SVar (Ident "x"))) (CExpr [] (SVar (Ident "z")))))
   ]
   (CExpr [] $ SAbs
-    (TAbs (Just (Ident "y")) TNumber TNumber)
+    (TAbs (Just (Ident "y")) TI32 TI32)
     [(Ident "y", ALocal, CExpr [] (SConst (I32 20)))]
-    (CExpr [] $ SApp TNumber (CExpr [] (SVar (Ident "helper"))) (CExpr [] (SVar (Ident "y")))))
+    (CExpr [] $ SApp TI32 (CExpr [] (SVar (Ident "helper"))) (CExpr [] (SVar (Ident "y")))))
 
 testMark :: Choice -> (Map FuncRef Abs, Map Ident Ident)
 testMark ch = markCapturedBindings freeVarMap env.funcRefMap
