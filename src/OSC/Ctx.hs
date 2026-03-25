@@ -85,7 +85,14 @@ data Expr
   deriving Show
 
 exprType :: Expr -> Type
-exprType = undefined
+exprType (EConst n) = numberType n
+exprType (EOp t _ _ _) = t
+exprType (EArr t _) = t
+exprType (EVar t _) = t
+exprType (EAbs t _ _) = t
+exprType (EApp t _ _) = t
+exprType (ESelect t _ _) = t
+exprType (ERec t _ _ _ _) = t
 
 --------------------------------------------------------------------------------
 
