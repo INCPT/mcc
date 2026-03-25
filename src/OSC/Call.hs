@@ -69,6 +69,8 @@ refToValue e = error $ "refToValue: " <> show e <> " (this is a bug)"
 
 --------------------------------------------------------------------------------
 
+-- INFORMAL SPECS
+
 -- the calling convention is: simple values and references on the stack + a reference to where the result must be placed; the caller allocates the destination
 
 -- for example when the function(x: i32, y: i32): i32[2][2] { return [[x, y], f(x + y)] } is called:
