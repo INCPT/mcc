@@ -94,6 +94,27 @@ type IR = Free IRF
 copyConst :: Type -> Number -> Ref -> Lens -> IR ()
 copyConst t n ref lens = liftF $ CopyConst t n ref lens
 
+copyRef :: Type -> Ref -> Ref -> Lens -> IR ()
+copyRef t src dst lens = liftF $ CopyRef t src dst lens
+
+binOp :: Op -> Ref -> Ref -> Ref -> IR ()
+binOp op r1 r2 r3 = liftF $ BinOp op r1 r2 r3
+
+call :: Ref -> [Ref] -> Ref -> IR ()
+call funcRef args dst = liftF $ Call funcRef args dst
+
+alloc :: Type -> AllocRegion -> IR Ref
+alloc t region = liftF $ Alloc t region id
+
+ref :: Ref -> IR Ref
+ref r = pure $ Free (Ref r)
+
+arg :: Int -> IR Ref
+arg i = pure $ Free (Arg i)
+
+done :: IR ()
+done = liftF Done
+
 --------------------------------------------------------------------------------
 
 -- choiceToIR :: Choice -> R.Reader Env IR
