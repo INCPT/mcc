@@ -384,7 +384,7 @@ markPureExpressions = undefined
 -- * alloc funcref tables for choices
 -- * codegen while maintaining focus/select lens
 -- * alloc when calling
--- * delay lines (they must have configurable delay); must also be initialized with 0
+-- * delay lines (they must have configurable delay); must also be initialized with the initial value
 -- * when choice, call funcref table index or do if/elses
 -- ** impure abstractions (e.g. the ones directly or transitively containing a Rec node) must always be computed
 -- ** compute the pureness per CChoice entry; at codegen compute the impure ones that were not selected
