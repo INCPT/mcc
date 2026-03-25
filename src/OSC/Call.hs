@@ -46,18 +46,17 @@ data Number = I32 Int | I64 Int | F32 Float | F64 Double deriving (Eq, Ord, Show
 newtype FuncRef = FuncRef Int deriving (Eq, Ord, Show)
 newtype GlobalIdx = GlobalIdx Int deriving (Eq, Ord, Show)
 data Idx = Local Int | Global Int deriving (Eq, Ord, Show)
-newtype ArrayIdx = ArrayIdx Idx deriving (Eq, Ord, Show)
+newtype ArrayBaseAddr = ArrayBaseAddr Idx deriving (Eq, Ord, Show)
 newtype ArgPos = ArgPos Int deriving (Eq, Ord, Show)
 
 data Ref 
-  = RVar Idx
-  | RArray Type Int ArrayIdx
-  | RFuncRef FuncRef
+  = RVar Idx -- either a function local var index (e.g. in function f() { int a; float b; } would be locals with index 0 and 1) or an index into a global var table
+  | RArray Type Int ArrayBaseAddr -- global base address of array in a linear memory layout
+  | RFuncRef FuncRef -- index into a global function table
 
   -- double references
-  | RRVar Idx -- var pointing to var (?)
-  | RRArray Type Int Idx -- var containing base address
-  | RRFuncRef Idx -- var containing func idx
+  | RRArray Type Idx -- contains the local/global var index containing the base address of an array
+  | RRFuncRef Idx -- contains the local/global var index containing the index into the function table
   deriving Show
 
 data Value = VConst Int | VVar Idx | VVVar Idx
@@ -66,10 +65,25 @@ data Value = VConst Int | VVar Idx | VVVar Idx
 refToValue :: Either Int Ref -> Value
 refToValue (Left idx) = VConst idx
 refToValue (Right (RVar idx)) = VVar idx
-refToValue (Right (RRVar idx)) = VVVar idx
 refToValue e = error $ "refToValue: " <> show e <> " (this is a bug)"
 
 --------------------------------------------------------------------------------
+
+-- the calling convention is: simple values and references on the stack + a reference to where the result must be placed; the caller allocates the destination
+
+-- for example when the function(x: i32, y: i32): i32[2][2] { return [[x, y], f(x + y)] } is called:
+--   the caller allocates a flat i32 array with 2 * 2 elements
+--   puts x and y on stack, calls function
+--   when an array is returned we traverse each element and add its index into lens.to
+--     the nested array traverses in turn ints elements and adds each one to lens.to
+--       for example when coming to 'y' we'd be in the first element of the outer array and the second element of the inner (i.e. lens.to = [0, 1])
+--       since 'y' is a value and can't be evaluated further we copy it using CopyConst or CopyRef to the destination slice (lens.to)
+--     when calling f(x + y) its return value reference is computed as current_ret_reference + offset of element [0][1] into flat return array
+--       this means essentially zero copying of data
+--  on the other hand if we return a selection (e.g. f()[x][y]) (so f() is higher dimensional than the return type of the current function)
+--    then space for the return value ret_val of f() is allocated, f called and a CopyRef operation (reference to ret_val, lens.from = [x][y]) => (current_ret_reference, lens.to = [...]) performed
+
+-- NOTE: a literal array paired with a selection is a choice
 
 data Lens = Lens { from :: [Value], to :: [Int] }
 
@@ -95,38 +109,26 @@ data IRF n
 
   | Alloc Type AllocRegion (Ref -> n)
 
-  | CopyVal Type Number Ref Lens n
+  -- copies a constant into the Ref that must be an RVar or an RArray/RRArray with lens.to focused on a single element
+  | CopyConst Type Number Ref Lens n
+
+  -- copies the value referenced by the first Ref into the second Ref respecting both lens.from and lens.to
+  -- the N-D (N dimensional) lens describes two N-D subslices of an M-D source tensor to a a K-D destination tensor (N >= 1, M >= N, K >= N)
   | CopyRef Type Ref Ref Lens n
 
   | BinOp Op Ref Ref Ref n
-  | Call Ref [Ref] Ref
 
-  | Abs Type n
+  | Call Ref [Ref] Ref -- first Ref must be an RFuncRef or an RRFuncRef; then arguments; then destination
   deriving (Functor)
 
 type IR = Free IRF
 type IRT = FreeT IRF
-
-data LIR n
-  = IFuncRef FuncRef
-  | IAlloc Type Bool (Ref -> n)
-  | IArg Int Type (Ref -> n)
-
-  | ICopyVal Number Ref Lens n
-  | ICopyRef Ref Ref Lens n
-
-  | IBinOp Op n n Ref n
-  | ICall n [n] Ref n
-  deriving (Functor)
 
 alloc :: Type -> AllocRegion -> IR Ref
 alloc t b = liftF (Alloc t b id)
 
 arg :: Int -> IR ()
 arg i = liftF (Arg i)
-
-abs :: Type -> IR () -> IR ()
-abs t n = Free (Abs t n)
 
 call :: Ref -> [Ref] -> Ref -> IR ()
 call fr args ret = Free (Call fr args ret)
@@ -153,6 +155,7 @@ data Expr
 
 -- TODO: interpret allocates given an allocation strategy (Type Bool -> ST.State st Ref)
 
+{-
 interpret :: IR () -> ST.State Mut (IR ())
 interpret (Pure a) = pure $ Pure a
 interpret (Free (Abs t body)) = do
@@ -249,3 +252,4 @@ newtype CallM m a = CallM { callM :: R.ReaderT Env (ST.StateT Mut m) a }
 -- 
 -- external :: Ident -> [Ref] -> CallM m ()
 -- external = undefined
+-}

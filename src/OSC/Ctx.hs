@@ -217,7 +217,10 @@ elimConstIndices = transform go
     go ch = ch
 
 toChoice :: Expr -> Choice
-toChoice = elimConstIndices . flip ST.evalState [] . choiceTree
+toChoice = optimize . flip ST.evalState [] . choiceTree
+  where
+    -- TODO: optimization pipeline
+    optimize = elimConstIndices
 
 --------------------------------------------------------------------------------
 
