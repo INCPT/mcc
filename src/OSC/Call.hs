@@ -120,23 +120,24 @@ choiceToIR :: Choice -> R.ReaderT Env IR ()
 choiceToIR (CExpr _ (SConst n)) = do
   env <- R.ask
   lift $ copyConst (numberType n) n env.ret env.lens
-choiceToIR (CExpr _ (SFuncRef (FuncRef idx))) = do
+choiceToIR (CExpr _ (SFuncRef t fr)) = do
   env <- R.ask
-  lift $ copyConst TI32 (I32 idx) env.ret env.lens
+  lift $ copyConst t (funcRefConst fr) env.ret env.lens
 choiceToIR (CExpr [] (SArr _ elems)) = sequence_
   [ R.local (focusEnv i) $ choiceToIR elem
   | (i, elem) <- zip [0..] elems
   ]
 choiceToIR (CExpr _ (SArr _ _)) = error "choiceToIR: SArr: non empty selection indices (this is a bug)"
-choiceToIR (CExpr _ (SOp t op a b)) = do
+choiceToIR (CExpr _ (SOp _ op a b)) = do
   env <- R.ask
 
-  aref <- lift $ alloc TNumber ALocal
-  bref <- lift $ alloc TNumber ALocal
+  aref <- lift $ alloc (choiceType a) ALocal
+  bref <- lift $ alloc (choiceType b) ALocal
 
-  R.local (const $ newEnv TNumber aref) (choiceToIR a)
-  R.local (const $ newEnv TNumber bref) (choiceToIR b)
+  R.local (const $ newEnv (choiceType a) aref) (choiceToIR a)
+  R.local (const $ newEnv (choiceType b) bref) (choiceToIR b)
   
   lift $ binOp op aref bref env.ret
 
+choiceToIR (CExpr _ (SAbs _ _ _)) = error "choiceToIR: SAbs: (this is a bug)"
 choiceToIR _ = undefined
