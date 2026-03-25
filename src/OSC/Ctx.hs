@@ -157,7 +157,7 @@ newtype CanFloat = CanFloat Bool
   deriving (Data, Show)
 
 data Choice
-  = CChoice Type [Choice] {- selector -} Choice
+  = CChoice Type [Choice] {- selectors -} Choice
   | CExpr [(Type, Choice)] SExpr -- selection indices that flow into the inner expression
   | CRec Type {- delay -} Int Ident {- init value -} Choice Choice
   deriving Data
