@@ -130,6 +130,7 @@ data SExpr
 data Choice
   = CChoice Type [Choice] {- selector -} Choice
   | CExpr [(Type, Choice)] SExpr -- selection indices that flow into the inner expression
+  | CRec Type Int Ident Choice
 
   | CFuncRefTable Type [FuncRef] {- selector -} Choice
   deriving (Data)
@@ -206,7 +207,7 @@ choiceTree (ESelect t e idx) = do
   c <- choiceTree e
   _ <- pop
   pure c
-choiceTree (ERec _ _ _ e) = choiceTree e -- TODO: need to inline ident with delay boxes
+choiceTree (ERec t n d e) = CRec t n d <$> choiceTree e
 
 elimConstIndices :: Choice -> Choice
 elimConstIndices = transform go
@@ -367,8 +368,10 @@ markCapturedBindings freeVarMap funcRefMap
 -- * alloc funcref tables for choices
 -- * codegen while maintaining focus/select lens
 -- * alloc when calling
--- * when choice, call funcref table index or do if/elses
 -- * delay lines (they must have configurable delay); must also be initialized with 0
+-- * when choice, call funcref table index or do if/elses
+-- ** impure abstractions (e.g. the ones directly or transitively containing a Rec node) must always be computed
+-- ** compute the pureness per CChoice entry; at codegen compute the impure ones that were not selected
 
 {-
 
