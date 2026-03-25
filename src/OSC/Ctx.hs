@@ -143,7 +143,7 @@ data SExpr
   | SVarNS Type Ident -- shouldn't be substituted
 
   | SAbs Type {- bindings -} [(Ident, AllocRegion, Choice)] Choice
-  | SApp Type Choice Choice
+  | SApp Type Choice [Choice]
 
   | SFuncRef Type FuncRef
   deriving Data
@@ -251,7 +251,7 @@ choiceTree :: Monad m => Expr -> StackM (Type, Expr) m Choice
 choiceTree (EConst n) = toC (SConst n)
 choiceTree (EOp t op a b) = toC (SOp t op (toChoice a) (toChoice b))
 choiceTree (EVar t n) = toC (SVar t n)
-choiceTree (EApp t a b) = toC (SApp t (toChoice a) (toChoice b))
+-- choiceTree (EApp t a b) = toC (SApp t (toChoice a) (toChoice b))
 choiceTree (EAbs t bs e) = toC (SAbs t (map (second toChoice) [ (n, ALocal, b) | (n, b) <- bs ]) (toChoice e))
 choiceTree (EArr t es) = do
   s <- pop
@@ -518,7 +518,7 @@ testChoice6 = CExpr [] $ SAbs
   (CExpr [] $ SAbs
     (TAbs (Just (Ident "y")) TI32 TI32)
     [(Ident "y", ALocal, CExpr [] (SConst (I32 20)))]
-    (CExpr [] $ SApp TI32 (CExpr [] (SVar TI32 (Ident "helper"))) (CExpr [] (SVar TI32 (Ident "y")))))
+    (CExpr [] $ SApp TI32 (CExpr [] (SVar TI32 (Ident "helper"))) [CExpr [] (SVar TI32 (Ident "y"))]))
 
 testMark :: Choice -> (Map FuncRef Abs, Map Ident Ident)
 testMark ch = markCapturedBindings freeVarMap env.funcRefMap
