@@ -87,9 +87,6 @@ data Expr
 exprType :: Expr -> Type
 exprType = undefined
 
-inlineExpr :: Ident -> Expr -> Expr -> Expr
-inlineExpr = undefined
-
 --------------------------------------------------------------------------------
 
 type StackM s m a = ST.StateT [s] m a
@@ -175,6 +172,8 @@ sexprType (SVarNS t _) = t
 sexprType (SAbs t _ _) = t
 sexprType (SApp t _ _) = t
 sexprType (SFuncRef t _) = t
+
+--------------------------------------------------------------------------------
 
 instance Show SExpr where
   show (SConst n) = show n
