@@ -8,7 +8,7 @@
 
 module OSC.Ctx where
 
-import Data.Bifunctor (second)
+import Data.Bifunctor (first, second)
 import Data.Data (Typeable, Data)
 import Data.Functor.Identity
 import Data.List (intercalate)
@@ -323,9 +323,10 @@ data AbsEnv = AbsEnv
   } deriving Show
 
 gatherAbstractions :: Choice -> Unique (Choice, AbsEnv)
-gatherAbstractions ch = do
-  ch' <- transformBiM abstractUnsaturatedApps ch
-  ST.lift $ flip ST.runStateT (AbsEnv mempty 0) $ transformBiM processSAbs ch'
+gatherAbstractions e = do
+  e' <- transformBiM abstractUnsaturatedApps e
+  flip ST.runStateT (AbsEnv mempty 0) $ transformBiM processAbstraction e'
+
   where
     abstractUnsaturatedApps :: SExpr -> Unique SExpr
     abstractUnsaturatedApps e@(SApp t f as) = case drop (length as) (paramTypes $ choiceType f) of
@@ -334,22 +335,19 @@ gatherAbstractions ch = do
       -- Unsaturated, create closure
       remainingParams -> do
         argNames <- sequence [ fresh | _ <- as ]
-        pure $ SAbs (TAbs remainingParams t) argBindings closureBody
-        where
-          argBindings = [ (n, ALocal, arg) | (n, arg) <- zip argNames as ]
-          argIdents = [ n | (n, _, _) <- argBindings ]
-          
-          closureBody = CExpr [] $ SApp t f 
-            ([ CExpr [] (SVar (getArgType n argBindings) n) | n <- argIdents ]
-             <> [ CExpr [] (SVar pt (maybe (Ident "_") id mn)) | (mn, pt) <- remainingParams ])
-          
-          getArgType n bindings = case lookup n [ (i, choiceType c) | (i, _, c) <- bindings ] of
-            Just t' -> t'
-            Nothing -> error "abstractUnsaturatedApps: argument not found in bindings"
+        remainingParamNames <- sequence [ (,t) <$> fresh | (_, t) <- remainingParams ]
+
+        let argBindings = [ (n, ALocal, arg) | (n, arg) <- zip argNames as ]
+        let closureBody = CExpr [] $ SApp t f $ mconcat
+              [ [ CExpr [] (SVar (choiceType a) n) | (n, a) <- zip argNames as ]
+              , [ CExpr [] (SVar pt mn) | (mn, pt) <- remainingParamNames ]
+              ]
+
+        pure $ SAbs (TAbs (fmap (first Just) remainingParamNames) t) argBindings closureBody
     abstractUnsaturatedApps e = pure e
 
-    processSAbs :: SExpr -> ST.StateT AbsEnv Unique SExpr
-    processSAbs (SAbs t bs body) = do
+    processAbstraction :: SExpr -> ST.StateT AbsEnv Unique SExpr
+    processAbstraction (SAbs t bs body) = do
       fr <- FuncRef <$> ST.gets (.nextFuncRef)
 
       ST.modify $ \st -> st
@@ -358,7 +356,7 @@ gatherAbstractions ch = do
         }
 
       pure $ SFuncRef t fr
-    processSAbs e = pure e
+    processAbstraction e = pure e
 
 gatherFreeVars :: Map FuncRef Abs -> Map FuncRef (Set Ident)
 gatherFreeVars funcRefMap = freeVarMap
@@ -391,7 +389,7 @@ markCapturedBindings freeVarMap funcRefMap = do
     go :: Abs -> W.WriterT (Map Ident Ident) Unique Abs
     go abs@(Abs t bindings body) = do
       capturedParams <- sequence
-        [ (t, n,) <$> fresh
+        [ (t, n,) <$> lift fresh
         | (n, _) <- namedParamTypes t
         , S.member n fvs
         ]

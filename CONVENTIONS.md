@@ -18,3 +18,19 @@
     ```
 
 - Prefer `where` over `let`
+
+- Prefer `mconcat` over a multiline bracketed `<>` expression:
+  ```
+  mconcat
+    [ longline1
+    , lineline2
+    ]
+  ```
+
+  over
+  ```
+  (longline1 <>
+  longline2)
+  ```
+
+  Single line `(a <> b)` expressions are fine.
