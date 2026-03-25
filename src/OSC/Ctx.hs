@@ -138,8 +138,6 @@ data Choice
   = CChoice Type [(Pureness, Choice)] {- selector -} Choice
   | CExpr [(Type, Choice)] SExpr -- selection indices that flow into the inner expression
   | CRec Type Int Ident Choice Choice
-
-  | CFuncRefTable Type [FuncRef] {- selector -} Choice
   deriving Data
 
 instance Show SExpr where
@@ -170,10 +168,6 @@ instance Show Choice where
       showIdxPair (t, idx) = showType t ++ "[" ++ show idx ++ "]"
   show (CRec t n (Ident d) ini body) = 
     "rec[" ++ showType t ++ ", " ++ show n ++ "] |" ++ d ++ " = " ++ show ini ++ "| -> " ++ show body
-  show (CFuncRefTable t frs idx) = 
-    "table[" ++ showType t ++ "](" ++ intercalate ", " (map showFR frs) ++ ")[" ++ show idx ++ "]"
-    where
-      showFR (FuncRef n) = "#" ++ show n
 
 instance Show Type where
   show = showType
@@ -265,14 +259,8 @@ data AbsEnv = AbsEnv
   , nextFuncRef :: Int
   } deriving Show
 
-gatherAbstractions :: (Type -> Bool) -> Choice -> (Choice, AbsEnv)
-gatherAbstractions allocTablePred choice = flip ST.runState (AbsEnv mempty 0) $ do
-  -- Transform all CChoice to CFuncRefTable where predicate holds
-  choice' <- transformBiM processCChoice choice
-
-  -- Transform all SAbs to SFuncRef
-  transformBiM processSAbs choice'
-
+gatherAbstractions :: Choice -> (Choice, AbsEnv)
+gatherAbstractions = flip ST.runState (AbsEnv mempty 0) . transformBiM processSAbs
   where
     processSAbs :: SExpr -> ST.State AbsEnv SExpr
     processSAbs (SAbs t bs body) = do
@@ -285,23 +273,6 @@ gatherAbstractions allocTablePred choice = flip ST.runState (AbsEnv mempty 0) $ 
 
       pure $ SFuncRef fr
     processSAbs e = pure e
-
-    processCChoice :: Choice -> ST.State AbsEnv Choice
-    processCChoice ch@(CChoice t chs idx)
-      | allocTablePred t = do
-          frIdx <- ST.gets (.nextFuncRef)
-
-          let cht = peelType t
-          let frs = [ (FuncRef (frIdx + i), (Abs cht [] ch)) | (i, (_, ch)) <- zip [0..] chs ]
-
-          ST.modify $ \st -> st
-            { nextFuncRef = st.nextFuncRef + length chs
-            , funcRefMap = M.fromList frs <> st.funcRefMap
-            }
-
-          pure $ CFuncRefTable t (map fst frs) idx
-      | otherwise = pure ch
-    processCChoice ch = pure ch
 
 gatherFreeVars :: Map FuncRef Abs -> Map FuncRef (Set Ident)
 gatherFreeVars funcRefMap = freeVarMap
@@ -320,9 +291,6 @@ gatherFreeVars funcRefMap = freeVarMap
           -- Gather transient free vars (by lazily referencing freeVarMap; this works because no mutual recursion between bindings is allowed)
           , [ fvs | SFuncRef fr <- universeBi body, Just fvs <- [ M.lookup fr freeVarMap ] ]
           , [ fvs | (_, _, b) <- bindings, SFuncRef fr <- universeBi b, Just fvs <- [ M.lookup fr freeVarMap ] ]
-
-          , [ fvs | CFuncRefTable _ frs _ <- universeBi body, fr <- frs, Just fvs <- [ M.lookup fr freeVarMap ] ]
-          , [ fvs | (_, _, b) <- bindings, CFuncRefTable _ frs _ <- universeBi b, fr <- frs, Just fvs <- [ M.lookup fr freeVarMap ] ]
           ]
 
 markCapturedBindings :: Map FuncRef (Set Ident) -> Map FuncRef Abs -> (Map FuncRef Abs, Map Ident Ident)
@@ -356,16 +324,10 @@ markCapturedBindings freeVarMap funcRefMap
           ]
 
     freeVars :: Abs -> Set Ident
-    freeVars abs = mconcat $ fmap mconcat
-      [ [ fvs
-        | SFuncRef fr <- universeBi abs
-        , Just fvs <- [ M.lookup fr freeVarMap ]
-        ]
-      , [ fvs
-        | CFuncRefTable _ frs _ <- universeBi abs
-        , fr <- frs
-        , Just fvs <- [ M.lookup fr freeVarMap ]
-        ]
+    freeVars abs = mconcat
+      [ fvs
+      | SFuncRef fr <- universeBi abs
+      , Just fvs <- [ M.lookup fr freeVarMap ]
       ]
 
     -- Substitute variable references using uniplate
@@ -376,7 +338,13 @@ markCapturedBindings freeVarMap funcRefMap
         substVar e = e
 
 markPureExpressions :: Map FuncRef Abs -> Map FuncRef Abs
-markPureExpressions = undefined
+markPureExpressions = fmap go
+  where
+    go :: Abs -> Abs
+    go (Abs t bindings body) = undefined
+
+    isPure :: Choice -> Choice
+    isPure = undefined
 
 -- NEXT
 -- * mark captured bindings for storing in global
@@ -716,5 +684,5 @@ testChoice6 = CExpr [] $ SAbs
 testMark :: Choice -> (Map FuncRef Abs, Map Ident Ident)
 testMark ch = markCapturedBindings freeVarMap env.funcRefMap
   where
-    (ch', env) = gatherAbstractions (const True) ch
+    (ch', env) = gatherAbstractions ch
     freeVarMap = gatherFreeVars env.funcRefMap
