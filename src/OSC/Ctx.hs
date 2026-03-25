@@ -182,6 +182,17 @@ showOp Add = "+"
 showOp Sub = "-"
 showOp Mul = "*"
 showOp Div = "/"
+showOp Mod = "%"
+showOp And = "&"
+showOp Or = "|"
+showOp Xor = "^"
+showOp Shl = "<<"
+showOp Shr = ">>"
+showOp Eq = "=="
+showOp Gt = ">"
+showOp Lt = "<"
+showOp GEt = ">="
+showOp LEt = "<="
 
 --------------------------------------------------------------------------------
 
