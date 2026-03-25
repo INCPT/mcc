@@ -30,6 +30,7 @@ newtype ArgPos = ArgPos Int deriving (Eq, Ord, Show)
 
 data Ref 
   = RArg Int
+  | RConst Number
 
   | RVar Idx -- either a function local var index (e.g. in function f() { int a; float b; } would be locals with index 0 and 1) or an index into a global var table
   | RArray Type Int ArrayBaseAddr -- global base address of array in a linear memory layout
@@ -82,9 +83,6 @@ data IRF n
 
   | Alloc Type AllocRegion (Ref -> n)
 
-  -- copies a constant into the Ref that must be an RVar or an RArray/RRArray with lens.to focused on a single element
-  | CopyConst Type Number Ref Lens
-
   -- copies the value referenced by the first Ref into the second Ref respecting both lens.from and lens.to
   -- the N-D (N dimensional) lens describes two N-D subslices of an M-D source tensor to a a K-D destination tensor (N >= 1, M >= N, K >= N)
   | CopyRef Type Ref Ref Lens
@@ -96,9 +94,6 @@ data IRF n
 
 type IR = Free IRF
 
-copyConst :: Type -> Number -> Ref -> Lens -> IR ()
-copyConst t n ref lens = liftF $ CopyConst t n ref lens
-
 copyRef :: Type -> Ref -> Ref -> Lens -> IR ()
 copyRef t src dst lens = liftF $ CopyRef t src dst lens
 
@@ -106,7 +101,7 @@ binOp :: Op -> Ref -> Ref -> Ref -> IR ()
 binOp op r1 r2 r3 = liftF $ BinOp op r1 r2 r3
 
 call :: Ref -> [Ref] -> Ref -> IR ()
-call funcRef args dst = liftF $ Call funcRef args dst
+call funcRef args ret = liftF $ Call funcRef args ret
 
 alloc :: Type -> AllocRegion -> IR Ref
 alloc t region = liftF $ Alloc t region id
@@ -116,28 +111,55 @@ ref r = pure r
 
 --------------------------------------------------------------------------------
 
-choiceToIR :: Map Ident Type -> Choice -> R.ReaderT Env IR ()
-choiceToIR _ (CExpr _ (SConst n)) = do
+allocGlobals :: Map Ident Type -> IR (Map Ident Ref)
+allocGlobals = traverse $ \t -> alloc t AGlobal
+
+rvalue :: Map Ident Ref -> Choice -> R.ReaderT Env IR (Type, Ref)
+rvalue _ (CExpr _ (SConst n)) = pure (numberType n, RConst n)
+rvalue _ (CExpr _ (SFuncRef t fr)) = pure (t, RFuncRef fr)
+rvalue globals (CExpr _ (SVar t n))
+  | Just ref <- M.lookup n globals = pure (t, ref)
+  | otherwise = error "rvalue: unknown global (this is a bug)"
+rvalue globals (CExpr _ (SVarNS t n))
+  | Just ref <- M.lookup n globals = pure (t, ref)
+  | otherwise = error "rvalue: unknown global (this is a bug)"
+rvalue globals e@(CExpr _ (SArr t _)) = (t,) <$> allocAndStore globals t e
+
+rvalue _ _ = undefined
+
+allocAndStore :: Map Ident Ref -> Type -> Choice -> R.ReaderT Env IR Ref
+allocAndStore globals t e = do
+  ref <- lift (alloc t ALocal)
+  R.local (const $ newEnv t ref) (ctx globals e)
+  pure ref
+
+ret :: Type -> Ref -> R.ReaderT Env IR ()
+ret t ref = do
   env <- R.ask
-  lift $ copyConst (numberType n) n env.ret env.lens
-choiceToIR _ (CExpr _ (SFuncRef t fr)) = do
-  env <- R.ask
-  lift $ copyConst t (funcRefConst fr) env.ret env.lens
-choiceToIR globals (CExpr [] (SArr _ elems)) = sequence_
-  [ R.local (focusEnv i) $ choiceToIR globals elem
+  lift $ copyRef t ref env.ret env.lens
+
+ctx :: Map Ident Ref -> Choice -> R.ReaderT Env IR ()
+ctx globals e@(CExpr _ (SConst _)) = rvalue globals e >>= uncurry ret
+ctx globals e@(CExpr _ (SFuncRef _ _)) = rvalue globals e >>= uncurry ret
+ctx globals e@(CExpr _ (SVar _ _)) = rvalue globals e >>= uncurry ret
+ctx globals e@(CExpr _ (SVarNS _ _)) = rvalue globals e >>= uncurry ret
+ctx globals (CExpr [] (SArr _ elems)) = sequence_
+  [ R.local (focusEnv i) $ ctx globals elem
   | (i, elem) <- zip [0..] elems
   ]
-choiceToIR _ (CExpr _ (SArr _ _)) = error "choiceToIR: SArr: non empty selection indices (this is a bug)"
-choiceToIR globals (CExpr _ (SOp _ op a b)) = do
-  env <- R.ask
-
-  aref <- lift $ alloc (choiceType a) ALocal
-  bref <- lift $ alloc (choiceType b) ALocal
-
-  R.local (const $ newEnv (choiceType a) aref) (choiceToIR globals a)
-  R.local (const $ newEnv (choiceType b) bref) (choiceToIR globals b)
+ctx _ (CExpr _ (SArr _ _)) = error "ctx: SArr: non empty selection indices (this is a bug)"
+ctx globals (CExpr _ (SOp _ op a b)) = do
+  (_, aref) <- rvalue globals a
+  (_, bref) <- rvalue globals b
   
-  lift $ binOp op aref bref env.ret
+  R.ask >>= \env -> lift $ binOp op aref bref env.ret
 
-choiceToIR _ (CExpr _ (SAbs _ _ _)) = error "choiceToIR: SAbs: (this is a bug)"
-choiceToIR _ _ = undefined
+ctx _ (CExpr _ (SAbs _ _ _)) = error "ctx: SAbs: (this is a bug)"
+
+ctx globals (CExpr _ (SApp _ f as)) = do
+  (_, fref) <- rvalue globals f
+  arefs <- traverse (rvalue globals) as
+    
+  R.ask >>= \env -> lift $ call fref (map snd arefs) env.ret
+
+ctx _ _ = undefined
