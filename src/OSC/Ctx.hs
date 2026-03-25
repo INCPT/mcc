@@ -347,16 +347,13 @@ markPureExpressions = fmap go
     isPure = undefined
 
 -- NEXT
--- * mark captured bindings for storing in global
--- * introduce global bindings for captured arguments, assign argument to them, replace reference to argument with ref to binding in closure
--- * alloc funcref tables for choices
+-- * DONE mark captured bindings for storing in global
+-- * DONE introduce global bindings for captured arguments, assign argument to them, replace reference to argument with ref to binding in closure
 -- * codegen while maintaining focus/select lens
 -- * alloc when calling
 -- * delay lines (they must have configurable delay); must also be initialized with the initial value
--- * when choice, call funcref table index or do if/elses
--- ** impure abstractions (e.g. the ones directly or transitively containing a Rec node) must always be computed
--- ** compute the pureness per CChoice entry; at codegen compute the impure ones that were not selected
--- *** elimNestedIndices must happen after the pureness computation
+-- * when choice do binary if/elses
+-- ** fold the pure part of a computation into the if/else leaves, leaving the impure computations of all parts outside the if/else tree
 
 {-
 
