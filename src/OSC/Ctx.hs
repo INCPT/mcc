@@ -52,14 +52,14 @@ namedParamTypes (TArr _ _) = []
 namedParamTypes (TAbs (Just i) t ts) = (i, t):namedParamTypes ts
 namedParamTypes (TAbs Nothing _ _) = error "namedParamTypes: unnamed param (this is a bug)"
 
-data Number = I Int | F Double
+data Number = I32 Int | I64 Int | F32 Float | F64 Double
   deriving (Show, Data)
 
 data Ident = Ident String
   deriving (Eq, Ord, Data, Show)
 
-data Op = Plus | Minus | Mul | Div
-  deriving (Show, Data)
+data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Eq | Gt | Lt | GEt | LEt
+  deriving (Data, Show)
 
 data Expr
   = EConst Number
@@ -178,8 +178,8 @@ showType (TAbs Nothing t1 t2) = showType t1 <> " -> " <> showType t2
 showType (TAbs (Just (Ident n)) t1 t2) = n <> ":" <> showType t1 <> " -> " <> showType t2
 
 showOp :: Op -> String
-showOp Plus = "+"
-showOp Minus = "-"
+showOp Add = "+"
+showOp Sub = "-"
 showOp Mul = "*"
 showOp Div = "/"
 
@@ -220,7 +220,8 @@ elimConstIndices = transform go
 
     -- Eliminate constant index selections by directly selecting the choice
     -- It's ok to prune impure expressions here (since the index is constant those expressions will never be accessible)
-    go (CChoice _ chs (CExpr _ (SConst (I idx)))) = chs !! idx
+    go (CChoice _ chs (CExpr _ (SConst (I32 idx)))) = chs !! idx
+    go (CChoice _ chs (CExpr _ (SConst (I64 idx)))) = chs !! idx
 
     -- Keep everything else as-is
     go ch = ch
@@ -336,8 +337,8 @@ markCapturedBindings freeVarMap funcRefMap
         substVar (SVar n) = SVar (M.findWithDefault n n subst)
         substVar e = e
 
-markRecInitValuesFloatness :: Map FuncRef Abs -> Map FuncRef Abs
-markRecInitValuesFloatness = fmap go
+floatExpressions :: Map FuncRef Abs -> Map FuncRef Abs
+floatExpressions = fmap go
   where
     go :: Abs -> Abs
     go (Abs t bindings body) = undefined
@@ -594,24 +595,24 @@ e2 = ESelect (t [3, 2]) (
 testChoice1 :: Choice
 testChoice1 = CExpr [] $ SAbs
   (TAbs (Just (Ident "x")) TNumber TNumber)
-  [(Ident "x", ALocal, CExpr [] (SConst (I 0)))]
+  [(Ident "x", ALocal, CExpr [] (SConst (I32 0)))]
   (CExpr [] (SVar (Ident "x")))
 
 -- Test 2: Abstraction that captures a parameter in a nested abstraction
 testChoice2 :: Choice
 testChoice2 = CExpr [] $ SAbs
   (TAbs (Just (Ident "x")) TNumber (TAbs (Just (Ident "y")) TNumber TNumber))
-  [(Ident "z", ALocal, CExpr [] (SConst (I 0)))]
+  [(Ident "z", ALocal, CExpr [] (SConst (I32 0)))]
   (CExpr [] $ SAbs
     (TAbs (Just (Ident "a")) TNumber TNumber)
-    [(Ident "b", ALocal, CExpr [] (SConst (I 1)))]
-    (CExpr [] $ SOp Plus (CExpr [] (SVar (Ident "x"))) (CExpr [] (SVar (Ident "z")))))
+    [(Ident "b", ALocal, CExpr [] (SConst (I32 1)))]
+    (CExpr [] $ SOp Add (CExpr [] (SVar (Ident "x"))) (CExpr [] (SVar (Ident "z")))))
 
 -- Test 3: Abstraction with a binding that references a parameter
 testChoice3 :: Choice
 testChoice3 = CExpr [] $ SAbs
   (TAbs (Just (Ident "x")) TNumber TNumber)
-  [ (Ident "x", ALocal, CExpr [] (SConst (I 5)))
+  [ (Ident "x", ALocal, CExpr [] (SConst (I32 5)))
   , (Ident "y", ALocal, CExpr [] (SVar (Ident "x")))
   ]
   (CExpr [] (SVar (Ident "y")))
@@ -620,7 +621,7 @@ testChoice3 = CExpr [] $ SAbs
 testChoice4 :: Choice
 testChoice4 = CExpr [] $ SAbs
   (TAbs (Just (Ident "a")) TNumber (TAbs (Just (Ident "b")) TNumber TNumber))
-  [(Ident "bnd_a", ALocal, CExpr [] (SConst (I 1)))]
+  [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
   (CExpr [] $ SAbs
     (TAbs (Just (Ident "c")) TNumber TNumber)
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar (Ident "bnd_a")))
@@ -632,7 +633,7 @@ testChoice4 = CExpr [] $ SAbs
 testChoice4_2 :: Choice
 testChoice4_2 = CExpr [] $ SAbs
   (TAbs (Just (Ident "a")) TNumber (TAbs (Just (Ident "b")) TNumber (TAbs (Just (Ident "z")) TNumber TNumber)))
-  [(Ident "bnd_a", ALocal, CExpr [] (SConst (I 1)))]
+  [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
   (CExpr [] $ SAbs
     (TAbs (Just (Ident "c")) TNumber TNumber)
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar (Ident "a")))
@@ -646,7 +647,7 @@ testChoice4_2 = CExpr [] $ SAbs
 testChoice4_3 :: Choice
 testChoice4_3 = CExpr [] $ SAbs
   (TAbs (Just (Ident "a")) TNumber (TAbs (Just (Ident "b")) TNumber (TAbs (Just (Ident "z")) TNumber TNumber)))
-  [(Ident "bnd_a", ALocal, CExpr [] (SConst (I 1)))]
+  [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
   (CExpr [] $ SAbs
     (TAbs (Just (Ident "c")) TNumber TNumber)
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar (Ident "a")))
@@ -659,31 +660,31 @@ testChoice4_3 = CExpr [] $ SAbs
           [ (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
           , (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
           ] (CChoice (TArr TNumber 3)
-                 [ (CExpr [] $ SConst $ I 1)
+                 [ (CExpr [] $ SConst $ I32 1)
                  , (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
-                 ] (CExpr [] $ SConst $ I 0))) 
-      ] (CExpr [] $ SConst $ I 2)))
+                 ] (CExpr [] $ SConst $ I32 0))) 
+      ] (CExpr [] $ SConst $ I32 2)))
 
 -- Test 5: Abstraction with free variable (not captured, just free)
 testChoice5 :: Choice
 testChoice5 = CExpr [] $ SAbs
   (TAbs (Just (Ident "x")) TNumber TNumber)
-  [(Ident "x", ALocal, CExpr [] (SConst (I 0)))]
-  (CExpr [] $ SOp Plus (CExpr [] (SVar (Ident "x"))) (CExpr [] (SVar (Ident "freeVar"))))
+  [(Ident "x", ALocal, CExpr [] (SConst (I32 0)))]
+  (CExpr [] $ SOp Add (CExpr [] (SVar (Ident "x"))) (CExpr [] (SVar (Ident "freeVar"))))
 
 -- Test 6: Complex case with binding that captures and is itself captured
 testChoice6 :: Choice
 testChoice6 = CExpr [] $ SAbs
   (TAbs (Just (Ident "x")) TNumber (TAbs (Just (Ident "y")) TNumber TNumber))
-  [ (Ident "x", ALocal, CExpr [] (SConst (I 10)))
+  [ (Ident "x", ALocal, CExpr [] (SConst (I32 10)))
   , (Ident "helper", ALocal, CExpr [] $ SAbs
       (TAbs (Just (Ident "z")) TNumber TNumber)
-      [(Ident "z", ALocal, CExpr [] (SConst (I 0)))]
-      (CExpr [] $ SOp Plus (CExpr [] (SVar (Ident "x"))) (CExpr [] (SVar (Ident "z")))))
+      [(Ident "z", ALocal, CExpr [] (SConst (I32 0)))]
+      (CExpr [] $ SOp Add (CExpr [] (SVar (Ident "x"))) (CExpr [] (SVar (Ident "z")))))
   ]
   (CExpr [] $ SAbs
     (TAbs (Just (Ident "y")) TNumber TNumber)
-    [(Ident "y", ALocal, CExpr [] (SConst (I 20)))]
+    [(Ident "y", ALocal, CExpr [] (SConst (I32 20)))]
     (CExpr [] $ SApp TNumber (CExpr [] (SVar (Ident "helper"))) (CExpr [] (SVar (Ident "y")))))
 
 testMark :: Choice -> (Map FuncRef Abs, Map Ident Ident)
