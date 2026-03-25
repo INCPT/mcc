@@ -141,32 +141,32 @@ data Choice
 
 instance Show SExpr where
   show (SConst n) = show n
-  show (SArr t cs) = "[" ++ showType t ++ ": " ++ intercalate ", " (map show cs) ++ "]"
-  show (SOp op a b) = "(" ++ show a ++ " " ++ showOp op ++ " " ++ show b ++ ")"
+  show (SArr t cs) = "[" <> showType t <> ": " <> intercalate ", " (map show cs) <> "]"
+  show (SOp op a b) = "(" <> show a <> " " <> showOp op <> " " <> show b <> ")"
   show (SVar (Ident n)) = n
   show (SVarNS (Ident n)) = n
   show (SAbs t bs body) = 
-    "λ" ++ showType t ++ " " ++ showBindings bs ++ " = " ++ show body
+    "λ" <> showType t <> " " <> showBindings bs <> " = " <> show body
     where
       showBindings [] = ""
-      showBindings bindings = "{ " ++ intercalate "; " (map showBinding bindings) ++ " }"
+      showBindings bindings = "{ " <> intercalate "; " (map showBinding bindings) <> " }"
       showBinding (Ident n, region, expr) = 
-        n ++ "@" ++ showRegion region ++ " = " ++ show expr
+        n <> "@" <> showRegion region <> " = " <> show expr
       showRegion ALocal = "local"
       showRegion AGlobal = "global"
-  show (SApp _ f a) = show f ++ "(" ++ show a ++ ")"
-  show (SFuncRef (FuncRef n)) = "funcref#" ++ show n
+  show (SApp _ f a) = show f <> "(" <> show a <> ")"
+  show (SFuncRef (FuncRef n)) = "funcref#" <> show n
 
 instance Show Choice where
   show (CChoice t cs idx) = 
-    "choice[" ++ showType t ++ "](" ++ intercalate " | " (map show cs) ++ ")[" ++ show idx ++ "]"
+    "choice[" <> showType t <> "](" <> intercalate " | " (map show cs) <> ")[" <> show idx <> "]"
   show (CExpr [] expr) = show expr
   show (CExpr idxs expr) = 
-    show expr ++ " @ [" ++ intercalate ", " (map showIdxPair idxs) ++ "]"
+    show expr <> " @ [" <> intercalate ", " (map showIdxPair idxs) <> "]"
     where
-      showIdxPair (t, idx) = showType t ++ "[" ++ show idx ++ "]"
+      showIdxPair (t, idx) = showType t <> "[" <> show idx <> "]"
   show (CRec t n (Ident d) cf ini body) = 
-    "rec[" ++ showType t ++ ", " ++ show n ++ "] |" ++ d ++ " = " ++ show ini ++ "(" ++ canFloat cf ++ ")| -> " ++ show body
+    "rec[" <> showType t <> ", " <> show n <> "] |" <> d <> " = " <> show ini <> "(" <> canFloat cf <> ")| -> " <> show body
     where
       canFloat (CanFloat True) = "float"
       canFloat (CanFloat False) = "nofloat"
@@ -176,9 +176,9 @@ instance Show Type where
 
 showType :: Type -> String
 showType TNumber = "num"
-showType (TArr t dim) = showType t ++ "[" ++ show dim ++ "]"
-showType (TAbs Nothing t1 t2) = showType t1 ++ " -> " ++ showType t2
-showType (TAbs (Just (Ident n)) t1 t2) = n ++ ":" ++ showType t1 ++ " -> " ++ showType t2
+showType (TArr t dim) = showType t <> "[" <> show dim <> "]"
+showType (TAbs Nothing t1 t2) = showType t1 <> " -> " <> showType t2
+showType (TAbs (Just (Ident n)) t1 t2) = n <> ":" <> showType t1 <> " -> " <> showType t2
 
 showOp :: Op -> String
 showOp Plus = "+"
@@ -246,7 +246,7 @@ fresh :: Unique Ident
 fresh = Unique $ do
   n <- ST.get
   ST.put (n + 1)
-  pure $ Ident ("_captured_" ++ show n)
+  pure $ Ident ("_captured_" <> show n)
 
 --------------------------------------------------------------------------------
 
