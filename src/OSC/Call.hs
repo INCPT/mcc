@@ -116,28 +116,28 @@ ref r = pure r
 
 --------------------------------------------------------------------------------
 
-choiceToIR :: Choice -> R.ReaderT Env IR ()
-choiceToIR (CExpr _ (SConst n)) = do
+choiceToIR :: Map Ident Type -> Choice -> R.ReaderT Env IR ()
+choiceToIR _ (CExpr _ (SConst n)) = do
   env <- R.ask
   lift $ copyConst (numberType n) n env.ret env.lens
-choiceToIR (CExpr _ (SFuncRef t fr)) = do
+choiceToIR _ (CExpr _ (SFuncRef t fr)) = do
   env <- R.ask
   lift $ copyConst t (funcRefConst fr) env.ret env.lens
-choiceToIR (CExpr [] (SArr _ elems)) = sequence_
-  [ R.local (focusEnv i) $ choiceToIR elem
+choiceToIR globals (CExpr [] (SArr _ elems)) = sequence_
+  [ R.local (focusEnv i) $ choiceToIR globals elem
   | (i, elem) <- zip [0..] elems
   ]
-choiceToIR (CExpr _ (SArr _ _)) = error "choiceToIR: SArr: non empty selection indices (this is a bug)"
-choiceToIR (CExpr _ (SOp _ op a b)) = do
+choiceToIR _ (CExpr _ (SArr _ _)) = error "choiceToIR: SArr: non empty selection indices (this is a bug)"
+choiceToIR globals (CExpr _ (SOp _ op a b)) = do
   env <- R.ask
 
   aref <- lift $ alloc (choiceType a) ALocal
   bref <- lift $ alloc (choiceType b) ALocal
 
-  R.local (const $ newEnv (choiceType a) aref) (choiceToIR a)
-  R.local (const $ newEnv (choiceType b) bref) (choiceToIR b)
+  R.local (const $ newEnv (choiceType a) aref) (choiceToIR globals a)
+  R.local (const $ newEnv (choiceType b) bref) (choiceToIR globals b)
   
   lift $ binOp op aref bref env.ret
 
-choiceToIR (CExpr _ (SAbs _ _ _)) = error "choiceToIR: SAbs: (this is a bug)"
-choiceToIR _ = undefined
+choiceToIR _ (CExpr _ (SAbs _ _ _)) = error "choiceToIR: SAbs: (this is a bug)"
+choiceToIR _ _ = undefined

@@ -381,16 +381,26 @@ gatherFreeVars funcRefMap = freeVarMap
           , [ fvs | (_, _, b) <- bindings, SFuncRef _ fr <- universeBi b, Just fvs <- [ M.lookup fr freeVarMap ] ]
           ]
 
-markCapturedBindings :: Map FuncRef (Set Ident) -> Map FuncRef Abs -> Unique (Map FuncRef Abs, Map Ident Ident)
+--------------------------------------------------------------------------------
+
+data GlobalsEnv = GlobalsEnv
+  { substMap :: Map Ident Ident
+  , globals :: Map Ident Type
+  }
+
+instance Semigroup GlobalsEnv where GlobalsEnv a b <> GlobalsEnv a' b' = GlobalsEnv (a <> a') (b <> b')
+instance Monoid GlobalsEnv where mempty = GlobalsEnv mempty mempty
+
+markCapturedBindings :: Map FuncRef (Set Ident) -> Map FuncRef Abs -> Unique (Map FuncRef Abs, GlobalsEnv)
 markCapturedBindings freeVarMap funcRefMap = do
-  (funcRefMapWithGlobalBindings, substMap) <- W.runWriterT (traverse go funcRefMap)
-  pure ( fmap (transformBi (substituteVars substMap)) funcRefMapWithGlobalBindings
-       , substMap
+  (funcRefMapWithGlobalBindings, genv) <- W.runWriterT (traverse go funcRefMap)
+  pure ( fmap (transformBi (substituteVars genv.substMap)) funcRefMapWithGlobalBindings
+       , genv
        )
 
   where
 
-    go :: Abs -> W.WriterT (Map Ident Ident) Unique Abs
+    go :: Abs -> W.WriterT GlobalsEnv Unique Abs
     go abs@(Abs t bindings body) = do
       capturedParams <- sequence
         [ (t, n,) <$> lift fresh
@@ -398,7 +408,13 @@ markCapturedBindings freeVarMap funcRefMap = do
         , S.member n fvs
         ]
       
-      W.tell $ M.fromList [ (o, n) | (_, o, n) <- capturedParams ]
+      W.tell $ GlobalsEnv
+        { substMap = M.fromList [ (o, n) | (_, o, n) <- capturedParams ]
+        , globals = mconcat
+            [ M.fromList [ (n, t) | (t, _, n) <- capturedParams ]
+            , M.fromList [ (n, choiceType e) | (n, AGlobal, e) <- bindings ]
+            ] 
+        }
 
       pure $ Abs t (bindings' capturedParams) body
       where
@@ -424,6 +440,8 @@ markCapturedBindings freeVarMap funcRefMap = do
       where
         substVar (SVar t n) = SVar t (M.findWithDefault n n subst)
         substVar e = e
+
+--------------------------------------------------------------------------------
 
 -- NOTE: if bindings between two SAbs float collapse them into one
 floatExpressions :: Map FuncRef Abs -> Map FuncRef Abs
@@ -552,7 +570,7 @@ testChoice6 = CExpr [] $ SAbs
     [(Ident "y", ALocal, CExpr [] (SConst (I32 20)))]
     (CExpr [] $ SApp TI32 (CExpr [] (SVar TI32 (Ident "helper"))) [CExpr [] (SVar TI32 (Ident "y"))]))
 
-testMark :: Choice -> (Map FuncRef Abs, Map Ident Ident)
+testMark :: Choice -> (Map FuncRef Abs, GlobalsEnv)
 testMark e = runUnique $ do
   e' <- abstractUnsaturatedApps e
   let (e'', env) = gatherAbstractions e'
