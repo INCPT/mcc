@@ -40,7 +40,7 @@ returnType TNumber = VTNumber
 returnType (TArr t dim) = VTArr t dim
 returnType (TAbs _ r) = returnType r
 
-data Ident = Ident Int deriving (Eq, Ord, Show)
+data Ident = Ident String deriving (Eq, Ord, Show)
 data Number = I32 Int | I64 Int | F32 Float | F64 Double deriving (Eq, Ord, Show)
 
 newtype FuncRef = FuncRef Int deriving (Eq, Ord, Show)

@@ -37,7 +37,9 @@ returnType t@(TArr _ _) = t
 returnType (TAbs _ _ t) = t
 
 peelType :: Type -> Type
-peelType = undefined
+peelType (TArr t _) = t
+peelType TNumber = error "peelType: number"
+peelType (TAbs _ _ _) = error "peelType: abstraction"
 
 paramTypes :: Type -> [(Maybe Ident, Type)]
 paramTypes TNumber = []
@@ -251,11 +253,11 @@ data AbsEnv = AbsEnv
 
 gatherAbstractions :: (Type -> Bool) -> Choice -> (Choice, AbsEnv)
 gatherAbstractions allocTablePred choice = flip ST.runState (AbsEnv mempty 0) $ do
-  -- First pass: transform all SAbs to SFuncRef
-  choice' <- transformBiM processSAbs choice
+  -- Transform all CChoice to CFuncRefTable where predicate holds
+  choice' <- transformBiM processCChoice choice
 
-  -- Second pass: transform all CChoice to CFuncRefTable where predicate holds
-  transformBiM processCChoice choice'
+  -- Transform all SAbs to SFuncRef
+  transformBiM processSAbs choice'
 
   where
     processSAbs :: SExpr -> ST.State AbsEnv SExpr
@@ -291,17 +293,22 @@ gatherFreeVars :: Map FuncRef Abs -> Map FuncRef (Set Ident)
 gatherFreeVars funcRefMap = freeVarMap
   where
     freeVarMap :: Map FuncRef (Set Ident)
-    freeVarMap = M.fromList
-      [ (fr, allVars bindings body \\ (S.fromList [ n | (n, _, _) <- bindings ] <> S.fromList (fmap fst $ namedParamTypes t)))
-      | (fr, (Abs t bindings body)) <- M.toList funcRefMap
-      ]
+    freeVarMap = fmap go funcRefMap
       where
-        allVars bindings ch = mconcat $ fmap mconcat
-          [ [ S.fromList [ n | SVar n <- universeBi ch ] ]
-          , [ S.fromList [ n | b <- bindings, SVar n <- universeBi b ] ]
+        go :: Abs -> Set Ident
+        go (Abs t bindings body) = allVars bindings body \\ (S.fromList [ n | (n, _, _) <- bindings ] <> S.fromList (fmap fst $ namedParamTypes t))
 
-          , [ fvs | SFuncRef fr <- universeBi ch, Just fvs <- [ M.lookup fr freeVarMap ] ]
-          , [ fvs | b <- bindings, SFuncRef fr <- universeBi b, Just fvs <- [ M.lookup fr freeVarMap ] ]
+        allVars :: [(Ident, AllocRegion, Choice)] -> Choice -> Set Ident
+        allVars bindings body = mconcat $ fmap mconcat
+          [ [ S.fromList [ n | SVar n <- universeBi body ] ]
+          , [ S.fromList [ n | (_, _, b) <- bindings, SVar n <- universeBi b ] ]
+
+          -- Gather transient free vars (by lazily referencing freeVarMap; this works because no mutual recursion between bindings is allowed)
+          , [ fvs | SFuncRef fr <- universeBi body, Just fvs <- [ M.lookup fr freeVarMap ] ]
+          , [ fvs | (_, _, b) <- bindings, SFuncRef fr <- universeBi b, Just fvs <- [ M.lookup fr freeVarMap ] ]
+
+          , [ fvs | CFuncRefTable _ frs _ <- universeBi body, fr <- frs, Just fvs <- [ M.lookup fr freeVarMap ] ]
+          , [ fvs | (_, _, b) <- bindings, CFuncRefTable _ frs _ <- universeBi b, fr <- frs, Just fvs <- [ M.lookup fr freeVarMap ] ]
           ]
 
 markCapturedBindings :: Map FuncRef (Set Ident) -> Map FuncRef Abs -> (Map FuncRef Abs, Map Ident Ident)
@@ -331,14 +338,20 @@ markCapturedBindings freeVarMap funcRefMap
           [ [ if S.member n fvs then (n, AGlobal, body) else b
             | b@(n, _, body) <- bindings
             ]
-          , [ (n, AGlobal, CExpr [] (SVarNS o)) | ( o, n) <- capturedParams ] 
+          , [ (n, AGlobal, CExpr [] (SVarNS o)) | (o, n) <- capturedParams ] 
           ]
 
     freeVars :: Abs -> Set Ident
-    freeVars abs = mconcat
-      [ fvs
-      | SFuncRef fr <- universeBi abs
-      , Just fvs <- [ M.lookup fr freeVarMap ]
+    freeVars abs = mconcat $ fmap mconcat
+      [ [ fvs
+        | SFuncRef fr <- universeBi abs
+        , Just fvs <- [ M.lookup fr freeVarMap ]
+        ]
+      , [ fvs
+        | CFuncRefTable _ frs _ <- universeBi abs
+        , fr <- frs
+        , Just fvs <- [ M.lookup fr freeVarMap ]
+        ]
       ]
 
     -- Substitute variable references using uniplate
@@ -646,13 +659,13 @@ testChoice4_3 = CExpr [] $ SAbs
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar (Ident "a")))
     , (Ident "bnd_c", ALocal, CExpr [] (SVar (Ident "z")))
     ]
-    (CChoice TNumber
+    (CChoice (TArr TNumber 3)
       [ (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
       , (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
-      , (CChoice TNumber
+      , (CChoice (TArr TNumber 3)
           [ (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
           , (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
-          ] (CChoice TNumber
+          ] (CChoice (TArr TNumber 3)
                  [ (CExpr [] $ SConst $ I 1)
                  , (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
                  ] (CExpr [] $ SConst $ I 0))) 
