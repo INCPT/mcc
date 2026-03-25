@@ -322,17 +322,21 @@ data AbsEnv = AbsEnv
   , nextFuncRef :: Int
   } deriving Show
 
-gatherAbstractions :: Choice -> (Choice, AbsEnv)
-gatherAbstractions = flip ST.runState (AbsEnv mempty 0) . transformBiM processSAbs . transformBi abstractUnsaturatedApps
+gatherAbstractions :: Choice -> Unique (Choice, AbsEnv)
+gatherAbstractions ch = do
+  ch' <- transformBiM abstractUnsaturatedApps ch
+  ST.lift $ flip ST.runStateT (AbsEnv mempty 0) $ transformBiM processSAbs ch'
   where
-    abstractUnsaturatedApps :: SExpr -> SExpr
+    abstractUnsaturatedApps :: SExpr -> Unique SExpr
     abstractUnsaturatedApps e@(SApp t f as) = case drop (length as) (paramTypes $ choiceType f) of
       -- Saturated, keep as is
-      [] -> e
+      [] -> pure e
       -- Unsaturated, create closure
-      remainingParams -> SAbs (TAbs remainingParams t) argBindings closureBody
+      remainingParams -> do
+        argNames <- sequence [ fresh | _ <- as ]
+        pure $ SAbs (TAbs remainingParams t) argBindings closureBody
         where
-          argBindings = [ (Ident ("_arg" <> show i), ALocal, arg) | (i, arg) <- zip [0..] as ]
+          argBindings = [ (n, ALocal, arg) | (n, arg) <- zip argNames as ]
           argIdents = [ n | (n, _, _) <- argBindings ]
           
           closureBody = CExpr [] $ SApp t f 
@@ -342,9 +346,9 @@ gatherAbstractions = flip ST.runState (AbsEnv mempty 0) . transformBiM processSA
           getArgType n bindings = case lookup n [ (i, choiceType c) | (i, _, c) <- bindings ] of
             Just t' -> t'
             Nothing -> error "abstractUnsaturatedApps: argument not found in bindings"
-    abstractUnsaturatedApps e = e
+    abstractUnsaturatedApps e = pure e
 
-    processSAbs :: SExpr -> ST.State AbsEnv SExpr
+    processSAbs :: SExpr -> ST.StateT AbsEnv Unique SExpr
     processSAbs (SAbs t bs body) = do
       fr <- FuncRef <$> ST.gets (.nextFuncRef)
 
@@ -375,24 +379,24 @@ gatherFreeVars funcRefMap = freeVarMap
           , [ fvs | (_, _, b) <- bindings, SFuncRef _ fr <- universeBi b, Just fvs <- [ M.lookup fr freeVarMap ] ]
           ]
 
-markCapturedBindings :: Map FuncRef (Set Ident) -> Map FuncRef Abs -> (Map FuncRef Abs, Map Ident Ident)
-markCapturedBindings freeVarMap funcRefMap
-  = ( fmap (transformBi (substituteVars substMap)) funcRefMapWithGlobalBindings
-    , substMap
-    )
+markCapturedBindings :: Map FuncRef (Set Ident) -> Map FuncRef Abs -> Unique (Map FuncRef Abs, Map Ident Ident)
+markCapturedBindings freeVarMap funcRefMap = do
+  (funcRefMapWithGlobalBindings, substMap) <- W.runWriterT (traverse go funcRefMap)
+  pure ( fmap (transformBi (substituteVars substMap)) funcRefMapWithGlobalBindings
+       , substMap
+       )
 
   where
-    (funcRefMapWithGlobalBindings, substMap) = runUnique $ W.runWriterT (traverse go funcRefMap)
 
     go :: Abs -> W.WriterT (Map Ident Ident) Unique Abs
     go abs@(Abs t bindings body) = do
       capturedParams <- sequence
-        [ (t, n,) <$> lift fresh
+        [ (t, n,) <$> fresh
         | (n, _) <- namedParamTypes t
         , S.member n fvs
         ]
       
-      W.tell $ M.fromList $ [ (o, n) | (_, o, n) <- capturedParams ]
+      W.tell $ M.fromList [ (o, n) | (_, o, n) <- capturedParams ]
 
       pure $ Abs t (bindings' capturedParams) body
       where
@@ -547,7 +551,7 @@ testChoice6 = CExpr [] $ SAbs
     (CExpr [] $ SApp TI32 (CExpr [] (SVar TI32 (Ident "helper"))) [CExpr [] (SVar TI32 (Ident "y"))]))
 
 testMark :: Choice -> (Map FuncRef Abs, Map Ident Ident)
-testMark ch = markCapturedBindings freeVarMap env.funcRefMap
-  where
-    (ch', env) = gatherAbstractions ch
-    freeVarMap = gatherFreeVars env.funcRefMap
+testMark ch = runUnique $ do
+  (ch', env) <- gatherAbstractions ch
+  let freeVarMap = gatherFreeVars env.funcRefMap
+  markCapturedBindings freeVarMap env.funcRefMap
