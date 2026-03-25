@@ -68,11 +68,11 @@ data Expr
 
   | EVar Ident
 
-  | EAbs Type {- bindings -} [(Ident, Expr)] Expr
+  | EAbs Type {- bindings -} [(Ident, Expr)] {- body -} Expr
   | EApp Type Expr Expr
 
   | ESelect Type Expr {- selector -} Expr
-  | ERec Type Int Ident Expr -- rec delay |prev| -> expr
+  | ERec Type {- delay -} Int Ident {- starting value -} Expr {- body -} Expr
   deriving Show
 
 exprType :: Expr -> Type
@@ -137,7 +137,7 @@ isPure Impure = False
 data Choice
   = CChoice Type [(Pureness, Choice)] {- selector -} Choice
   | CExpr [(Type, Choice)] SExpr -- selection indices that flow into the inner expression
-  | CRec Type Int Ident Choice
+  | CRec Type Int Ident Choice Choice
 
   | CFuncRefTable Type [FuncRef] {- selector -} Choice
   deriving Data
@@ -168,8 +168,8 @@ instance Show Choice where
     show expr ++ " @ [" ++ intercalate ", " (map showIdxPair idxs) ++ "]"
     where
       showIdxPair (t, idx) = showType t ++ "[" ++ show idx ++ "]"
-  show (CRec t n (Ident d) body) = 
-    "rec[" ++ showType t ++ ", " ++ show n ++ "] |" ++ d ++ "| -> " ++ show body
+  show (CRec t n (Ident d) ini body) = 
+    "rec[" ++ showType t ++ ", " ++ show n ++ "] |" ++ d ++ " = " ++ show ini ++ "| -> " ++ show body
   show (CFuncRefTable t frs idx) = 
     "table[" ++ showType t ++ "](" ++ intercalate ", " (map showFR frs) ++ ")[" ++ show idx ++ "]"
     where
@@ -216,7 +216,7 @@ choiceTree (ESelect t e idx) = do
   c <- choiceTree e
   _ <- pop
   pure c
-choiceTree (ERec t n d e) = CRec t n d <$> choiceTree e
+choiceTree (ERec t n d i e) = CRec t n d <$> choiceTree i <*> choiceTree e
 
 --------------------------------------------------------------------------------
 
