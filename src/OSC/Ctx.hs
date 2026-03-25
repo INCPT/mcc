@@ -32,7 +32,11 @@ sizeOfType TF32 = 4
 sizeOfType TI64 = 8
 sizeOfType TF64 = 8
 sizeOfType (TArr t dim) = sizeOfType t * dim
-sizeOfType (TAbs _ _) = 4 -- funcref is an integer
+sizeOfType (TAbs _ _) = sizeOfType TI32 -- TODO PLATFORM: funcref is I32
+
+-- TODO PLATFORM: funcref is I32
+funcRefConst :: FuncRef -> Number
+funcRefConst (FuncRef idx) = I32 idx
 
 returnType :: Type -> Type
 returnType t@(TArr _ _) = t
