@@ -183,6 +183,9 @@ ctx globals (CChoice t chs sel) = do -- TODO: binary tree if else
   undefined
 ctx globals (CRec t delay n ini body) = ctx globals body -- TODO
 
+-- TODO: handle sel indices more generically
+-- NOTE: selection only happens after "opaque" transitions, e.g. function call or global ref; an array paired with a selection is a choice
 -- TODO: generate SAbs code; pretty straightforward
+-- TODO: replace refs to params with RArg 0, 1, 2 etc
 abs :: Map Ident Ref -> Abs -> R.ReaderT Env IR Ref
 abs = undefined
