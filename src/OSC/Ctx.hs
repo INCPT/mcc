@@ -161,6 +161,8 @@ instance Show Choice where
     show expr ++ " @ [" ++ intercalate ", " (map showIdxPair idxs) ++ "]"
     where
       showIdxPair (t, idx) = showType t ++ "[" ++ show idx ++ "]"
+  show (CRec t n (Ident d) body) = 
+    "rec[" ++ showType t ++ ", " ++ show n ++ "] |" ++ d ++ "| -> " ++ show body
   show (CFuncRefTable t frs idx) = 
     "table[" ++ showType t ++ "](" ++ intercalate ", " (map showFR frs) ++ ")[" ++ show idx ++ "]"
     where
