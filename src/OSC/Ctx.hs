@@ -134,9 +134,9 @@ newtype CanFloat = CanFloat Bool
   deriving (Data, Show)
 
 data Choice
-  = CChoice Type [(Pureness, Choice)] {- selector -} Choice
+  = CChoice Type [Choice] {- selector -} Choice
   | CExpr [(Type, Choice)] SExpr -- selection indices that flow into the inner expression
-  | CRec Type {- delay -} Int Ident {- can init value float -} CanFloat {- init value -} Choice Choice
+  | CRec Type {- delay -} Int Ident {- init value -} Choice Choice
   deriving Data
 
 instance Show SExpr where
@@ -165,11 +165,8 @@ instance Show Choice where
     show expr <> " @ [" <> intercalate ", " (map showIdxPair idxs) <> "]"
     where
       showIdxPair (t, idx) = showType t <> "[" <> show idx <> "]"
-  show (CRec t n (Ident d) cf ini body) = 
-    "rec[" <> showType t <> ", " <> show n <> "] |" <> d <> " = " <> show ini <> "(" <> canFloat cf <> ")| -> " <> show body
-    where
-      canFloat (CanFloat True) = "float"
-      canFloat (CanFloat False) = "nofloat"
+  show (CRec t n (Ident d) ini body) = 
+    "rec[" <> showType t <> ", " <> show n <> "] |" <> d <> " = " <> show ini <> "| -> " <> show body
 
 instance Show Type where
   show = showType
@@ -205,14 +202,14 @@ choiceTree (EArr t es) = do
     Just (t, idx) -> do
       es' <- traverse choiceTree es
       push (t, idx)
-      pure $ CChoice t (fmap (Pureness False,) es') (toChoice idx)
+      pure $ CChoice t es' (toChoice idx)
     Nothing -> pure $ CExpr [] (SArr t $ map toChoice es)
 choiceTree (ESelect t e idx) = do
   push (t, idx)
   c <- choiceTree e
   _ <- pop
   pure c
-choiceTree (ERec t n d i e) = CRec t n d (CanFloat False) <$> choiceTree i <*> choiceTree e
+choiceTree (ERec t n d i e) = CRec t n d <$> choiceTree i <*> choiceTree e
 
 --------------------------------------------------------------------------------
 
@@ -223,7 +220,7 @@ elimConstIndices = transform go
 
     -- Eliminate constant index selections by directly selecting the choice
     -- It's ok to prune impure expressions here (since the index is constant those expressions will never be accessible)
-    go (CChoice _ chs (CExpr _ (SConst (I idx)))) = snd (chs !! idx)
+    go (CChoice _ chs (CExpr _ (SConst (I idx)))) = chs !! idx
 
     -- Keep everything else as-is
     go ch = ch
@@ -316,7 +313,7 @@ markCapturedBindings freeVarMap funcRefMap
 
       pure $ Abs t (bindings' capturedParams) body
       where
-        fvs = freeVars abs
+        fvs = transientFreeVars abs
 
         bindings' capturedParams = mconcat
           [ [ if S.member n fvs then (n, AGlobal, body) else b
@@ -325,8 +322,8 @@ markCapturedBindings freeVarMap funcRefMap
           , [ (n, AGlobal, CExpr [] (SVarNS o)) | (o, n) <- capturedParams ] 
           ]
 
-    freeVars :: Abs -> Set Ident
-    freeVars abs = mconcat
+    transientFreeVars :: Abs -> Set Ident
+    transientFreeVars abs = mconcat
       [ fvs
       | SFuncRef fr <- universeBi abs
       , Just fvs <- [ M.lookup fr freeVarMap ]
@@ -338,6 +335,15 @@ markCapturedBindings freeVarMap funcRefMap
       where
         substVar (SVar n) = SVar (M.findWithDefault n n subst)
         substVar e = e
+
+markRecInitValuesFloatness :: Map FuncRef Abs -> Map FuncRef Abs
+markRecInitValuesFloatness = fmap go
+  where
+    go :: Abs -> Abs
+    go (Abs t bindings body) = undefined
+
+    isPure :: Choice -> Choice
+    isPure = undefined
 
 markPureExpressions :: Map FuncRef Abs -> Map FuncRef Abs
 markPureExpressions = fmap go
@@ -633,8 +639,8 @@ testChoice4_2 = CExpr [] $ SAbs
     , (Ident "bnd_c", ALocal, CExpr [] (SVar (Ident "z")))
     ]
     (CChoice TNumber
-      [ (Pureness False, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
-      , (Pureness False, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
+      [ (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
+      , (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
       ] (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "bnd_a"))) (CExpr [] (SVar (Ident "z"))))))
 
 testChoice4_3 :: Choice
@@ -647,14 +653,14 @@ testChoice4_3 = CExpr [] $ SAbs
     , (Ident "bnd_c", ALocal, CExpr [] (SVar (Ident "z")))
     ]
     (CChoice (TArr TNumber 3)
-      [ (Pureness False, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
-      , (Pureness True, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
-      , (Pureness False, CChoice (TArr TNumber 3)
-          [ (Pureness True, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
-          , (Pureness False, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
+      [ (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
+      , (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
+      , (CChoice (TArr TNumber 3)
+          [ (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
+          , (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
           ] (CChoice (TArr TNumber 3)
-                 [ (Pureness False, CExpr [] $ SConst $ I 1)
-                 , (Pureness False, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
+                 [ (CExpr [] $ SConst $ I 1)
+                 , (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
                  ] (CExpr [] $ SConst $ I 0))) 
       ] (CExpr [] $ SConst $ I 2)))
 
