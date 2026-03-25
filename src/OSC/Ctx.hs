@@ -322,14 +322,11 @@ data AbsEnv = AbsEnv
   , nextFuncRef :: Int
   } deriving Show
 
-gatherAbstractions :: Choice -> Unique (Choice, AbsEnv)
-gatherAbstractions e = do
-  e' <- transformBiM abstractUnsaturatedApps e
-  flip ST.runStateT (AbsEnv mempty 0) $ transformBiM processAbstraction e'
-
+abstractUnsaturatedApps :: Choice -> Unique Choice
+abstractUnsaturatedApps = transformBiM go
   where
-    abstractUnsaturatedApps :: SExpr -> Unique SExpr
-    abstractUnsaturatedApps e@(SApp t f as) = case drop (length as) (paramTypes $ choiceType f) of
+    go :: SExpr -> Unique SExpr
+    go e@(SApp t f as) = case drop (length as) (paramTypes $ choiceType f) of
       -- Saturated, keep as is
       [] -> pure e
       -- Unsaturated, create closure
@@ -344,9 +341,12 @@ gatherAbstractions e = do
               ]
 
         pure $ SAbs (TAbs (fmap (first Just) remainingParamNames) t) argBindings closureBody
-    abstractUnsaturatedApps e = pure e
+    go e = pure e
 
-    processAbstraction :: SExpr -> ST.StateT AbsEnv Unique SExpr
+gatherAbstractions :: Choice -> (Choice, AbsEnv)
+gatherAbstractions = flip ST.runState (AbsEnv mempty 0) . transformBiM processAbstraction
+  where
+    processAbstraction :: SExpr -> ST.State AbsEnv SExpr
     processAbstraction (SAbs t bs body) = do
       fr <- FuncRef <$> ST.gets (.nextFuncRef)
 
@@ -421,7 +421,7 @@ markCapturedBindings freeVarMap funcRefMap = do
         substVar (SVar t n) = SVar t (M.findWithDefault n n subst)
         substVar e = e
 
--- TODO: if bindings between two SAbs float collapse them into one
+-- NOTE: if bindings between two SAbs float collapse them into one
 floatExpressions :: Map FuncRef Abs -> Map FuncRef Abs
 floatExpressions = fmap go
   where
@@ -549,7 +549,8 @@ testChoice6 = CExpr [] $ SAbs
     (CExpr [] $ SApp TI32 (CExpr [] (SVar TI32 (Ident "helper"))) [CExpr [] (SVar TI32 (Ident "y"))]))
 
 testMark :: Choice -> (Map FuncRef Abs, Map Ident Ident)
-testMark ch = runUnique $ do
-  (ch', env) <- gatherAbstractions ch
+testMark e = runUnique $ do
+  e' <- abstractUnsaturatedApps e
+  let (e'', env) = gatherAbstractions e'
   let freeVarMap = gatherFreeVars env.funcRefMap
   markCapturedBindings freeVarMap env.funcRefMap
