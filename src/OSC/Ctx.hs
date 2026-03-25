@@ -157,7 +157,24 @@ data Choice
   deriving Data
 
 choiceType :: Choice -> Type
-choiceType = undefined
+choiceType (CChoice t _ _) = t
+choiceType (CRec t _ _ _ _) = t
+choiceType (CExpr idxs expr) = peelOffIndices (length idxs) (sexprType expr)
+  where
+    peelOffIndices :: Int -> Type -> Type
+    peelOffIndices 0 t = t
+    peelOffIndices n (TArr t _) = peelOffIndices (n - 1) t
+    peelOffIndices _ t = error $ "choiceType: cannot peel " ++ show (length idxs) ++ " indices from type " ++ show t
+
+sexprType :: SExpr -> Type
+sexprType (SConst n) = numberType n
+sexprType (SArr t _) = t
+sexprType (SOp t _ _ _) = t
+sexprType (SVar t _) = t
+sexprType (SVarNS t _) = t
+sexprType (SAbs t _ _) = t
+sexprType (SApp t _ _) = t
+sexprType (SFuncRef t _) = t
 
 instance Show SExpr where
   show (SConst n) = show n
