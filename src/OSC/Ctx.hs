@@ -72,7 +72,7 @@ data Expr
   | EApp Type Expr Expr
 
   | ESelect Type Expr {- selector -} Expr
-  | ERec Type {- delay -} Int Ident {- starting value -} Expr {- body -} Expr
+  | ERec Type {- delay -} Int Ident {- init value -} Expr {- body -} Expr
   deriving Show
 
 exprType :: Expr -> Type
@@ -127,17 +127,16 @@ data SExpr
   | SFuncRef FuncRef
   deriving Data
 
-data Pureness = Pure | Impure
+newtype Pureness = Pureness Bool
   deriving (Data, Show)
 
-isPure :: Pureness -> Bool
-isPure Pure = True
-isPure Impure = False
+newtype CanFloat = CanFloat Bool
+  deriving (Data, Show)
 
 data Choice
   = CChoice Type [(Pureness, Choice)] {- selector -} Choice
   | CExpr [(Type, Choice)] SExpr -- selection indices that flow into the inner expression
-  | CRec Type Int Ident Choice Choice
+  | CRec Type {- delay -} Int Ident {- can init value float -} CanFloat {- init value -} Choice Choice
   deriving Data
 
 instance Show SExpr where
@@ -166,8 +165,11 @@ instance Show Choice where
     show expr ++ " @ [" ++ intercalate ", " (map showIdxPair idxs) ++ "]"
     where
       showIdxPair (t, idx) = showType t ++ "[" ++ show idx ++ "]"
-  show (CRec t n (Ident d) ini body) = 
-    "rec[" ++ showType t ++ ", " ++ show n ++ "] |" ++ d ++ " = " ++ show ini ++ "| -> " ++ show body
+  show (CRec t n (Ident d) cf ini body) = 
+    "rec[" ++ showType t ++ ", " ++ show n ++ "] |" ++ d ++ " = " ++ show ini ++ "(" ++ canFloat cf ++ ")| -> " ++ show body
+    where
+      canFloat (CanFloat True) = "float"
+      canFloat (CanFloat False) = "nofloat"
 
 instance Show Type where
   show = showType
@@ -203,14 +205,14 @@ choiceTree (EArr t es) = do
     Just (t, idx) -> do
       es' <- traverse choiceTree es
       push (t, idx)
-      pure $ CChoice t (fmap (Impure,) es') (toChoice idx)
+      pure $ CChoice t (fmap (Pureness False,) es') (toChoice idx)
     Nothing -> pure $ CExpr [] (SArr t $ map toChoice es)
 choiceTree (ESelect t e idx) = do
   push (t, idx)
   c <- choiceTree e
   _ <- pop
   pure c
-choiceTree (ERec t n d i e) = CRec t n d <$> choiceTree i <*> choiceTree e
+choiceTree (ERec t n d i e) = CRec t n d (CanFloat False) <$> choiceTree i <*> choiceTree e
 
 --------------------------------------------------------------------------------
 
@@ -631,8 +633,8 @@ testChoice4_2 = CExpr [] $ SAbs
     , (Ident "bnd_c", ALocal, CExpr [] (SVar (Ident "z")))
     ]
     (CChoice TNumber
-      [ (Pure, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
-      , (Pure, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
+      [ (Pureness False, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
+      , (Pureness False, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
       ] (CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "bnd_a"))) (CExpr [] (SVar (Ident "z"))))))
 
 testChoice4_3 :: Choice
@@ -645,14 +647,14 @@ testChoice4_3 = CExpr [] $ SAbs
     , (Ident "bnd_c", ALocal, CExpr [] (SVar (Ident "z")))
     ]
     (CChoice (TArr TNumber 3)
-      [ (Pure, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
-      , (Pure, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
-      , (Pure, CChoice (TArr TNumber 3)
-          [ (Pure, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
-          , (Pure, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
+      [ (Pureness False, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
+      , (Pureness True, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
+      , (Pureness False, CChoice (TArr TNumber 3)
+          [ (Pureness True, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "b"))))
+          , (Pureness False, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
           ] (CChoice (TArr TNumber 3)
-                 [ (Pure, CExpr [] $ SConst $ I 1)
-                 , (Pure, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
+                 [ (Pureness False, CExpr [] $ SConst $ I 1)
+                 , (Pureness False, CExpr [] $ SOp Mul (CExpr [] (SVar (Ident "c"))) (CExpr [] (SVar (Ident "z"))))
                  ] (CExpr [] $ SConst $ I 0))) 
       ] (CExpr [] $ SConst $ I 2)))
 
