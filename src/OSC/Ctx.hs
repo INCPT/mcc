@@ -330,28 +330,18 @@ gatherAbstractions = flip ST.runState (AbsEnv mempty 0) . transformBiM processSA
       -- Saturated, keep as is
       [] -> e
       -- Unsaturated, create closure
-      remainingParams -> 
-        let -- Create bindings for the provided arguments
-            argBindings = zipWith (\i arg -> (Ident ("_arg" <> show i), ALocal, arg)) [0..] as
-            argIdents = map (\(n, _, _) -> n) argBindings
-            
-            -- Create the closure type: remaining params -> return type
-            closureType = TAbs remainingParams t
-            
-            -- Create the closure body: apply f to captured args + new params
-            closureBody = CExpr [] $ SApp t f 
-              (map (\n -> CExpr [] (SVar (getArgType n argBindings) n)) argIdents
-               ++ map (\(mn, pt) -> CExpr [] (SVar pt (fromMaybe (Ident "_") mn))) remainingParams)
-        in SAbs closureType argBindings closureBody
-      where
-        getArgType :: Ident -> [(Ident, AllocRegion, Choice)] -> Type
-        getArgType n bindings = case lookup n [(i, choiceType c) | (i, _, c) <- bindings] of
-          Just t' -> t'
-          Nothing -> error "abstractUnsaturatedApps: argument not found in bindings"
-        
-        fromMaybe :: a -> Maybe a -> a
-        fromMaybe def Nothing = def
-        fromMaybe _ (Just x) = x
+      remainingParams -> SAbs (TAbs remainingParams t) argBindings closureBody
+        where
+          argBindings = [ (Ident ("_arg" <> show i), ALocal, arg) | (i, arg) <- zip [0..] as ]
+          argIdents = [ n | (n, _, _) <- argBindings ]
+          
+          closureBody = CExpr [] $ SApp t f 
+            ([ CExpr [] (SVar (getArgType n argBindings) n) | n <- argIdents ]
+             <> [ CExpr [] (SVar pt (maybe (Ident "_") id mn)) | (mn, pt) <- remainingParams ])
+          
+          getArgType n bindings = case lookup n [ (i, choiceType c) | (i, _, c) <- bindings ] of
+            Just t' -> t'
+            Nothing -> error "abstractUnsaturatedApps: argument not found in bindings"
     abstractUnsaturatedApps e = e
 
     processSAbs :: SExpr -> ST.State AbsEnv SExpr
