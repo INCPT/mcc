@@ -73,10 +73,10 @@ newEnv :: Type -> Ref -> Env
 newEnv t ref = Env t ref (Lens [] [])
 
 focusTo :: Int -> Env -> Env
-focusTo i env = env { lens = env.lens { to = i:env.lens.to } }
+focusTo idx env = env { lens = env.lens { to = env.lens.to <> [idx] } }
 
-focusFrom :: Ref -> Env -> Env
-focusFrom i env = env { lens = env.lens { from = i:env.lens.from } }
+focusFrom :: [Ref] -> Env -> Env
+focusFrom idxs env = env { lens = env.lens { from = env.lens.from <> idxs } }
 
 data IRF n
   = Ref Ref
@@ -122,7 +122,7 @@ allocGlobals = traverse $ \t -> alloc t AGlobal
 allocAndStore :: Map Ident Ref -> Type -> Choice -> R.ReaderT Env IR Ref
 allocAndStore globals t e = do
   ref <- lift (alloc t ALocal)
-  R.local (const $ newEnv t ref) (ctx globals e)
+  R.local (const $ newEnv t ref) (sexpr globals e)
   pure ref
 
 ret :: Type -> Ref -> R.ReaderT Env IR ()
@@ -145,32 +145,37 @@ rvalue globals e@(CExpr _ (SApp t _ _)) = (t,) <$> allocAndStore globals t e
 
 rvalue _ _ = undefined
 
-ctx :: Map Ident Ref -> Choice -> R.ReaderT Env IR ()
-ctx globals e@(CExpr _ (SConst _)) = rvalue globals e >>= uncurry ret
-ctx globals e@(CExpr _ (SFuncRef _ _)) = rvalue globals e >>= uncurry ret
-ctx globals e@(CExpr _ (SVar _ _)) = rvalue globals e >>= uncurry ret -- TODO: sel indices
-ctx globals e@(CExpr _ (SVarNS _ _)) = rvalue globals e >>= uncurry ret -- TODO: sel indices
-ctx globals (CExpr [] (SArr _ elems)) = sequence_
-  [ R.local (focusTo i) $ ctx globals elem
+sexpr :: Map Ident Ref -> Choice -> R.ReaderT Env IR ()
+sexpr globals e@(CExpr [] (SConst _)) = rvalue globals e >>= uncurry ret
+sexpr globals e@(CExpr [] (SFuncRef _ _)) = rvalue globals e >>= uncurry ret
+sexpr globals e@(CExpr [] (SVar _ _)) = rvalue globals e >>= uncurry ret
+sexpr globals e@(CExpr [] (SVarNS _ _)) = rvalue globals e >>= uncurry ret
+sexpr globals (CExpr [] (SArr _ elems)) = sequence_
+  [ R.local (focusTo i) $ sexpr globals elem
   | (i, elem) <- zip [0..] elems
   ]
-ctx _ (CExpr _ (SArr _ _)) = error "ctx: SArr: non empty selection indices (this is a bug)"
-ctx globals (CExpr [] (SOp _ op a b)) = do
+sexpr _ (CExpr _ (SArr _ _)) = error "sexpr: SArr: non empty selection indices (this is a bug)"
+sexpr globals (CExpr [] (SOp _ op a b)) = do
   (_, aref) <- rvalue globals a
   (_, bref) <- rvalue globals b
   
   R.ask >>= \env -> lift $ binOp op aref bref env.ret
 
-ctx globals (CExpr _ (SOp _ _ _ _)) = error "ctx: SOp: non empty selection indices (this is a bug)"
-ctx _ (CExpr _ (SAbs _ _ _)) = error "ctx: SAbs: (this is a bug)"
+sexpr _ (CExpr _ (SOp _ _ _ _)) = error "sexpr: SOp: non empty selection indices (this is a bug)"
+sexpr _ (CExpr _ (SAbs _ _ _)) = error "sexpr: SAbs: (this is a bug)"
 
-ctx globals (CExpr _ (SApp _ f as)) = do -- TODO: sel indices
+sexpr globals (CExpr _ (SApp _ f as)) = do -- TODO: sel indices
   (_, fref) <- rvalue globals f
   arefs <- traverse (rvalue globals) as
     
   R.ask >>= \env -> lift $ call fref (map snd arefs) env.ret
 
-ctx globals (CChoice t chs sel) = do -- TODO: binary tree if else
+-- General selection expression
+sexpr globals (CExpr idxs cexpr) = do
+  refs <- sequence [ rvalue globals idx | (_, idx) <- idxs ]
+  R.local (focusFrom $ fmap snd refs) (sexpr globals (CExpr [] cexpr))
+
+sexpr globals (CChoice t chs sel) = do -- TODO: binary tree if else
   (_, sref) <- rvalue globals sel
 
   c <- lift $ alloc TI32 ALocal >>= \ref -> binOp Eq sref (RConst (I32 0)) ref >> pure ref
@@ -178,10 +183,14 @@ ctx globals (CChoice t chs sel) = do -- TODO: binary tree if else
   env <- R.ask
 
   -- TODO: POC
-  lift $ _if c (R.runReaderT (ctx globals (chs !! 0)) env) (R.runReaderT (ctx globals (chs !! 1)) env)
+  lift $ _if c (R.runReaderT (sexpr globals (chs !! 0)) env) (R.runReaderT (sexpr globals (chs !! 1)) env)
 
   undefined
-ctx globals (CRec t delay n ini body) = ctx globals body -- TODO
+  where
+    recif = undefined
+
+sexpr globals (CRec t delay n ini body) = sexpr globals body -- TODO
+
 
 -- TODO: handle sel indices more generically
 -- NOTE: selection only happens after "opaque" transitions, e.g. function call or global ref; an array paired with a selection is a choice

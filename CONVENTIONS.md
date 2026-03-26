@@ -3,6 +3,7 @@
 - Use list comprehensions where possible
 
 -- Prefer `[ (f a, b) | (a, b) <- zip as bs ]` over `zipWith (\(a, b) -> (f a, b)) as bs`
+-- However, use a function when currying is possible: prefer `f = fmap g` over `f as = [ g a | a <- as ]`
 
 - Use let bindings only if they make the code much clearer:
     Prefer
