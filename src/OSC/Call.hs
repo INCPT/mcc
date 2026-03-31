@@ -175,24 +175,24 @@ sexpr globals (CExpr idxs cexpr) = do
   refs <- sequence [ rvalue globals idx | (_, idx) <- idxs ]
   R.local (focusFrom $ fmap snd refs) (sexpr globals (CExpr [] cexpr))
 
-sexpr globals (CChoice t chs sel) = do -- TODO: binary tree if else
-  (_, sref) <- rvalue globals sel
-
-  c <- lift $ alloc TI32 ALocal >>= \ref -> binOp Eq sref (RConst (I32 0)) ref >> pure ref
-
+sexpr globals (CChoice _ chs sel) = do
   env <- R.ask
 
-  -- TODO: POC
-  lift $ _if c (R.runReaderT (sexpr globals (chs !! 0)) env) (R.runReaderT (sexpr globals (chs !! 1)) env)
-
-  undefined
+  (_, sref) <- rvalue globals sel
+  recif env chs sref 0
   where
-    recif = undefined
+    -- TODO: binary tree if
+    recif _ [] _ _ = error "recif: no choice (this is a bug)"
+    recif _ [ch] _ _ = sexpr globals ch
+    recif env (ch:chs) sref idx = do
+      cond <- lift $ alloc TI32 ALocal >>= \ref -> binOp Eq sref (RConst (I32 idx)) ref >> pure ref
 
-sexpr globals (CRec t delay n ini body) = sexpr globals body -- TODO
+      lift $ _if cond (R.runReaderT (sexpr globals ch) env) (R.runReaderT (recif env chs sref (idx + 1)) env)
 
+-- TODO
+sexpr globals (CRec t delay n ini body) = sexpr globals body
 
--- TODO: handle sel indices more generically
+-- TODO: all local allocations upfront
 -- NOTE: selection only happens after "opaque" transitions, e.g. function call or global ref; an array paired with a selection is a choice
 -- TODO: generate SAbs code; pretty straightforward
 -- TODO: replace refs to params with RArg 0, 1, 2 etc
