@@ -219,6 +219,7 @@ sexpr globals (CChoice _ chs sel) = do
 -- TODO
 sexpr globals (CRec t delay n ini body) = sexpr globals body
 
+-- TODO: oversampling just means that we insert some stateful code around the oversampled function (which we should always inline when generating code; this can happen directly in the codegen)
 -- TODO: can't return Abs from Rec
 -- TODO: all local allocations upfront
 -- NOTE: selection only happens after "opaque" transitions, e.g. function call or global ref; an array paired with a selection is a choice
