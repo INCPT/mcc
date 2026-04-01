@@ -137,8 +137,8 @@ cfor initial steps step f = do
 
 --------------------------------------------------------------------------------
 
-allocGlobals :: Map Ident Type -> IR (Map Ident Ref)
-allocGlobals = traverse $ \t -> alloc t AGlobal
+allocGlobals :: Map Ident Type -> CallM (Map Ident Ref)
+allocGlobals = traverse $ \t -> calloc t AGlobal
 
 allocAndStore :: Map Ident Ref -> Type -> Choice -> CallM Ref
 allocAndStore globals t e = do
