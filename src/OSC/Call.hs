@@ -164,7 +164,8 @@ rvalue globals e@(CExpr _ (SArr t _)) = (t,) <$> allocAndStore globals t e
 rvalue _ (CExpr _ (SAbs _ _ _)) = error "rvalue: SAbs: (this is a bug)"
 rvalue globals e@(CExpr _ (SApp t _ _)) = (t,) <$> allocAndStore globals t e
 
-rvalue _ _ = undefined
+rvalue _ (CChoice _ _ _) = undefined
+rvalue _ (CRec _ _ _ _ _) = undefined
 
 sexpr :: Map Ident Ref -> Choice -> CallM ()
 sexpr globals e@(CExpr [] (SConst _)) = rvalue globals e >>= uncurry ret
@@ -217,7 +218,6 @@ sexpr globals (CRec t delay n ini body) = sexpr globals body
 -- TODO: oversampling just means that we insert some stateful code around the oversampled function (which we should always inline when generating code; this can happen directly in the codegen)
 --- https://github.com/juce-framework/JUCE/blob/master/modules/juce_dsp/processors/juce_Oversampling.cpp
 -- TODO: can't return Abs from Rec
--- TODO: all local allocations upfront
 -- NOTE: selection only happens after "opaque" transitions, e.g. function call or global ref; an array paired with a selection is a choice
 -- TODO: generate SAbs code; pretty straightforward
 -- TODO: replace refs to params with RArg 0, 1, 2 etc

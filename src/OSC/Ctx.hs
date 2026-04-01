@@ -374,7 +374,7 @@ gatherFreeVars funcRefMap = freeVarMap
     freeVarMap = fmap go funcRefMap
       where
         go :: Abs -> Set Ident
-        go (Abs t params bindings body) = allVars bindings body \\ (S.fromList [ n | (n, _, _) <- bindings ] <> S.fromList params)
+        go (Abs _ params bindings body) = allVars bindings body \\ (S.fromList [ n | (n, _, _) <- bindings ] <> S.fromList params)
 
         allVars :: [(Ident, AllocRegion, Choice)] -> Choice -> Set Ident
         allVars bindings body = mconcat $ fmap mconcat
