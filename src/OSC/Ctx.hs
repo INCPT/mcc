@@ -194,8 +194,10 @@ instance Show SExpr where
   show (SVar _ (Ident n)) = n
   show (SVarNS _ (Ident n)) = n
   show (SAbs t params bs body) = 
-    "λ" <> showType t <> " " <> showBindings bs <> " = " <> show body
+    "λ" <> showParams params <> " : " <> showType t <> " " <> showBindings bs <> " = " <> show body
     where
+      showParams [] = "()"
+      showParams ps = "(" <> intercalate ", " (map (\(Ident n) -> n) ps) <> ")"
       showBindings [] = ""
       showBindings bindings = "{ " <> intercalate "; " (map showBinding bindings) <> " }"
       showBinding (Ident n, region, expr) = 
