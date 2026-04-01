@@ -16,6 +16,7 @@ import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
+import qualified Control.Monad.Trans.Writer.CPS as W
 import Data.Functor.Product (Product (Pair))
 import Data.Map (Map)
 import qualified Data.Map as M
@@ -114,35 +115,6 @@ _if r t e = liftF $ If r t e
 
 --------------------------------------------------------------------------------
 
-data Statement
-  = SCopy Type Ref Ref Lens
-  | SIf Ref [Statement] [Statement]
-  | SCall Ref [Ref] Ref
-  | SBinOp Op Ref Ref Ref
-
-data Allocation = Allocation Type Idx
-
-data AllocState = AllocState
-  { localIdx :: Int
-  , globalIdx :: Int
-  , allocations :: [Allocation]
-  }
-
-type CallM = R.ReaderT Env (ST.State AllocState)
-
-alloc_ :: Type -> AllocRegion -> CallM Ref
-alloc_ t region = case t of
-  TArr _ _-> RArray t <$> lift (allocInRegion region)
-  TI32 -> RVar <$> lift (allocInRegion region)
-  TF32 -> RVar <$> lift (allocInRegion region)
-  TI64 -> RVar <$> lift (allocInRegion region)
-  TF64 -> RVar <$> lift (allocInRegion region)
-  TAbs _ _ -> error "alloc: SAbs (this is a bug)"
-  where
-    allocInRegion :: AllocRegion -> ST.State AllocState Idx
-    allocInRegion AGlobal = ST.state $ \st -> (Global st.globalIdx, st { globalIdx = st.globalIdx + sizeOfType t, allocations = Allocation t (Global st.globalIdx):st.allocations})
-    allocInRegion ALocal = ST.state $ \st -> (Local st.localIdx, st { localIdx = st.localIdx + sizeOfType t, allocations = Allocation t (Local st.localIdx):st.allocations})
-
 allocGlobals :: Map Ident Type -> IR (Map Ident Ref)
 allocGlobals = traverse $ \t -> alloc t AGlobal
 
@@ -228,3 +200,61 @@ sexpr globals (CRec t delay n ini body) = sexpr globals body
 -- TODO: rec and oversample take a lambda abstraction (or a Var pointing to a lambda abstraction)
 abs :: Map Ident Ref -> Abs -> R.ReaderT Env IR Ref
 abs = undefined
+
+--------------------------------------------------------------------------------
+
+data Statement
+  = SCopy Type Ref Ref Lens
+  | SIf Ref [Statement] [Statement]
+  | SCall Ref [Ref] Ref
+  | SBinOp Op Ref Ref Ref
+  | SFor {- counter -} Ref {- initial -} Int {- steps -} Int {- step -} Int [Statement]
+
+data Allocation = Allocation Type Idx
+
+data AllocState = AllocState
+  { localIdx :: Int
+  , globalIdx :: Int
+  , allocations :: [Allocation]
+  }
+
+type CallM = R.ReaderT Env (W.WriterT [Statement] (ST.State AllocState))
+
+cextract :: CallM () -> CallM [Statement]
+cextract m = do
+  env <- R.ask
+  fmap snd $ lift $ lift $ W.runWriterT (R.runReaderT m env)
+
+calloc :: Type -> AllocRegion -> CallM Ref
+calloc t region = case t of
+  TArr _ _-> fmap (RArray t) $ lift $ lift (allocInRegion region)
+  TI32 -> fmap RVar $ lift $ lift (allocInRegion region)
+  TF32 -> fmap RVar $ lift $ lift (allocInRegion region)
+  TI64 -> fmap RVar $ lift $ lift (allocInRegion region)
+  TF64 -> fmap RVar $ lift $ lift (allocInRegion region)
+  TAbs _ _ -> error "alloc: SAbs (this is a bug)"
+  where
+    allocInRegion :: AllocRegion -> ST.State AllocState Idx
+    allocInRegion AGlobal = ST.state $ \st -> (Global st.globalIdx, st { globalIdx = st.globalIdx + 1, allocations = Allocation t (Global st.globalIdx):st.allocations})
+    allocInRegion ALocal = ST.state $ \st -> (Local st.localIdx, st { localIdx = st.localIdx + 1, allocations = Allocation t (Local st.localIdx):st.allocations})
+
+ccopyRef :: Type -> Ref -> Ref -> Lens -> CallM ()
+ccopyRef t src dst lens = lift $ W.tell [SCopy t src dst lens]
+
+cbinOp :: Op -> Ref -> Ref -> Ref -> CallM ()
+cbinOp op r1 r2 r3 = lift $ W.tell [SBinOp op r1 r2 r3]
+
+ccall :: Ref -> [Ref] -> Ref -> CallM ()
+ccall funcRef args ret = lift $ W.tell $ [SCall funcRef args ret]
+
+cif :: Ref -> CallM () -> CallM () -> CallM ()
+cif r t e = do
+  t' <- cextract t
+  e' <- cextract e
+  lift $ W.tell [SIf r t' e']
+
+cfor :: Int -> Int -> Int -> (Ref -> CallM ()) -> CallM ()
+cfor initial steps step f = do
+  i <- calloc TI32 ALocal
+  f' <- cextract (f i)
+  lift $ W.tell [SFor i initial steps step f']
