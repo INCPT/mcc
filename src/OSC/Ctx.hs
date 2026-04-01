@@ -83,7 +83,11 @@ data Expr
   | EApp Type Expr [Expr]
 
   | ESelect Type Expr {- selector -} Expr
-  | ERec Type {- delay -} Int Ident {- init value -} Expr {- body -} Expr
+
+  -- NOTE: The (return) type of a recursive expression can not contain abstractions
+  -- in order to simplify the logic and not require an initial value. It wouldn't make
+  -- much sense generally anyway.
+  | ERec Type {- delay -} Int Ident Expr {- body -} Expr
   deriving Show
 
 exprType :: Expr -> Type
