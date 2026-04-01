@@ -61,12 +61,15 @@ In a functional DSP engine, when you call oversample(8, f, g), the compiler calc
 ## 1. Sinc Interpolation (Mathematical Logic)
 This is the "naive" way to think about it: for every new high-rate point, you look at all nearby original samples and weigh them by their distance on a Sinc curve.
 
-// The "Ideal" Sinc functionfloat sinc(float x) {
+// The "Ideal" Sinc function
+float sinc(float x) {
     if (x == 0) return 1.0f;
     float pi_x = 3.14159f * x;
     return sin(pi_x) / pi_x;
 }
-// To get a high-rate sample at fractional position 't' (e.g., 0.125, 0.25...)float get_sinc_interpolated_sample(float t, float* low_rate_buffer) {
+
+// To get a high-rate sample at fractional position 't' (e.g., 0.125, 0.25...)
+float get_sinc_interpolated_sample(float t, float* low_rate_buffer) {
     float result = 0.0f;
     int window_size = 16; // Number of neighboring samples to look at
 

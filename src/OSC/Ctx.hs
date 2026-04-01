@@ -408,19 +408,21 @@ markCapturedBindings freeVarMap funcRefMap = do
         , S.member n fvs
         ]
       
+      let bindings' = mkBindings capturedParams
+      
       W.tell $ GlobalsEnv
         { substMap = M.fromList [ (o, n) | (_, o, n) <- capturedParams ]
         , globals = mconcat
             [ M.fromList [ (n, t) | (t, _, n) <- capturedParams ]
-            , M.fromList [ (n, choiceType e) | (n, AGlobal, e) <- bindings ]
+            , M.fromList [ (n, choiceType e) | (n, AGlobal, e) <- bindings' ]
             ] 
         }
 
-      pure $ Abs t (bindings' capturedParams) body
+      pure $ Abs t bindings' body
       where
         fvs = transientFreeVars abs
 
-        bindings' capturedParams = mconcat
+        mkBindings capturedParams = mconcat
           [ [ if S.member n fvs then (n, AGlobal, body) else b
             | b@(n, _, body) <- bindings
             ]
