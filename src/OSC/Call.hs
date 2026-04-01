@@ -25,15 +25,13 @@ import Control.Monad.Trans.Free (FreeT (FreeT), FreeF)
 import OSC.Ctx
 
 data Idx = Local Int | Global Int deriving (Eq, Ord, Show)
-newtype ArrayBaseAddr = ArrayBaseAddr Idx deriving (Eq, Ord, Show)
-newtype ArgPos = ArgPos Int deriving (Eq, Ord, Show)
 
 data Ref 
   = RArg Int
   | RConst Number
 
   | RVar Idx -- either a function local var index (e.g. in function f() { int a; float b; } would be locals with index 0 and 1) or an index into a global var table
-  | RArray Type Int ArrayBaseAddr -- global base address of array in a linear memory layout
+  | RArray Type Idx -- global base address of array in a linear memory layout
   | RFuncRef FuncRef -- index into a global function table
 
   -- double references
@@ -115,6 +113,35 @@ _if :: Ref -> IR () -> IR () -> IR ()
 _if r t e = liftF $ If r t e
 
 --------------------------------------------------------------------------------
+
+data Statement
+  = SCopy Type Ref Ref Lens
+  | SIf Ref [Statement] [Statement]
+  | SCall Ref [Ref] Ref
+  | SBinOp Op Ref Ref Ref
+
+data Allocation = Allocation Type Idx
+
+data AllocState = AllocState
+  { localIdx :: Int
+  , globalIdx :: Int
+  , allocations :: [Allocation]
+  }
+
+type CallM = R.ReaderT Env (ST.State AllocState)
+
+alloc_ :: Type -> AllocRegion -> CallM Ref
+alloc_ t region = case t of
+  TArr _ _-> RArray t <$> lift (allocInRegion region)
+  TI32 -> RVar <$> lift (allocInRegion region)
+  TF32 -> RVar <$> lift (allocInRegion region)
+  TI64 -> RVar <$> lift (allocInRegion region)
+  TF64 -> RVar <$> lift (allocInRegion region)
+  TAbs _ _ -> error "alloc: SAbs (this is a bug)"
+  where
+    allocInRegion :: AllocRegion -> ST.State AllocState Idx
+    allocInRegion AGlobal = ST.state $ \st -> (Global st.globalIdx, st { globalIdx = st.globalIdx + sizeOfType t, allocations = Allocation t (Global st.globalIdx):st.allocations})
+    allocInRegion ALocal = ST.state $ \st -> (Local st.localIdx, st { localIdx = st.localIdx + sizeOfType t, allocations = Allocation t (Local st.localIdx):st.allocations})
 
 allocGlobals :: Map Ident Type -> IR (Map Ident Ref)
 allocGlobals = traverse $ \t -> alloc t AGlobal
