@@ -176,18 +176,18 @@ cfor initial steps step f = do
 allocGlobals :: Map Ident Type -> IR (Map Ident Ref)
 allocGlobals = traverse $ \t -> alloc t AGlobal
 
-allocAndStore :: Map Ident Ref -> Type -> Choice -> R.ReaderT Env IR Ref
+allocAndStore :: Map Ident Ref -> Type -> Choice -> CallM Ref
 allocAndStore globals t e = do
-  ref <- lift (alloc t ALocal)
+  ref <- calloc t ALocal
   R.local (const $ newEnv t ref) (sexpr globals e)
   pure ref
 
-ret :: Type -> Ref -> R.ReaderT Env IR ()
+ret :: Type -> Ref -> CallM ()
 ret t ref = do
   env <- R.ask
-  lift $ copyRef t ref env.ret env.lens
+  ccopyRef t ref env.ret env.lens
 
-rvalue :: Map Ident Ref -> Choice -> R.ReaderT Env IR (Type, Ref)
+rvalue :: Map Ident Ref -> Choice -> CallM (Type, Ref)
 rvalue _ (CExpr _ (SConst n)) = pure (numberType n, RConst n)
 rvalue _ (CExpr _ (SFuncRef t fr)) = pure (t, RFuncRef fr)
 rvalue globals (CExpr _ (SVar t n))
@@ -202,7 +202,7 @@ rvalue globals e@(CExpr _ (SApp t _ _)) = (t,) <$> allocAndStore globals t e
 
 rvalue _ _ = undefined
 
-sexpr :: Map Ident Ref -> Choice -> R.ReaderT Env IR ()
+sexpr :: Map Ident Ref -> Choice -> CallM ()
 sexpr globals e@(CExpr [] (SConst _)) = rvalue globals e >>= uncurry ret
 sexpr globals e@(CExpr [] (SFuncRef _ _)) = rvalue globals e >>= uncurry ret
 sexpr globals e@(CExpr [] (SVar _ _)) = rvalue globals e >>= uncurry ret
@@ -216,7 +216,7 @@ sexpr globals (CExpr [] (SOp _ op a b)) = do
   (_, aref) <- rvalue globals a
   (_, bref) <- rvalue globals b
   
-  R.ask >>= \env -> lift $ binOp op aref bref env.ret
+  R.ask >>= \env -> cbinOp op aref bref env.ret
 
 sexpr _ (CExpr _ (SOp _ _ _ _)) = error "sexpr: SOp: non empty selection indices (this is a bug)"
 sexpr _ (CExpr _ (SAbs _ _ _)) = error "sexpr: SAbs: (this is a bug)"
@@ -225,7 +225,7 @@ sexpr globals (CExpr _ (SApp _ f as)) = do -- TODO: sel indices
   (_, fref) <- rvalue globals f
   arefs <- traverse (rvalue globals) as
     
-  R.ask >>= \env -> lift $ call fref (map snd arefs) env.ret
+  R.ask >>= \env -> ccall fref (map snd arefs) env.ret
 
 -- General selection expression
 sexpr globals (CExpr idxs cexpr) = do
@@ -242,9 +242,10 @@ sexpr globals (CChoice _ chs sel) = do
     recif _ [] _ _ = error "recif: no choice (this is a bug)"
     recif _ [ch] _ _ = sexpr globals ch
     recif env (ch:chs) sref idx = do
-      cond <- lift $ alloc TI32 ALocal >>= \ref -> binOp Eq sref (RConst (I32 idx)) ref >> pure ref
+      cond <- calloc TI32 ALocal
+      cbinOp Eq sref (RConst (I32 idx)) cond
 
-      lift $ _if cond (R.runReaderT (sexpr globals ch) env) (R.runReaderT (recif env chs sref (idx + 1)) env)
+      cif cond (sexpr globals ch) (recif env chs sref (idx + 1))
 
 -- TODO
 sexpr globals (CRec t delay n ini body) = sexpr globals body
@@ -258,5 +259,5 @@ sexpr globals (CRec t delay n ini body) = sexpr globals body
 -- TODO: replace refs to params with RArg 0, 1, 2 etc
 -- TODO: rec and oversample take a lambda abstraction (or a Var pointing to a lambda abstraction)
 -- TODO: zig std math: https://github.com/ziglang/zig/tree/master/lib/std/math
-abs :: Map Ident Ref -> Abs -> R.ReaderT Env IR Ref
+abs :: Map Ident Ref -> Abs -> CallM Ref
 abs = undefined
