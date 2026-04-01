@@ -77,42 +77,6 @@ focusTo idx env = env { lens = env.lens { to = env.lens.to <> [idx] } }
 focusFrom :: [Ref] -> Env -> Env
 focusFrom idxs env = env { lens = env.lens { from = env.lens.from <> idxs } }
 
-data IRF n
-  = Ref Ref
-
-  | Alloc Type AllocRegion (Ref -> n)
-
-  -- copies the value referenced by the first Ref into the second Ref respecting both lens.from and lens.to
-  -- the N-D (N dimensional) lens describes two N-D subslices of an M-D source tensor to a a K-D destination tensor (N >= 1, M >= N, K >= N)
-  | CopyRef Type Ref Ref Lens
-
-  | BinOp Op Ref Ref Ref
-
-  | If Ref (IR ()) (IR ())
-
-  | Call Ref [Ref] Ref -- first Ref must be an RFuncRef or an RRFuncRef; then arguments; then destination
-  deriving Functor
-
-type IR = Free IRF
-
-copyRef :: Type -> Ref -> Ref -> Lens -> IR ()
-copyRef t src dst lens = liftF $ CopyRef t src dst lens
-
-binOp :: Op -> Ref -> Ref -> Ref -> IR ()
-binOp op r1 r2 r3 = liftF $ BinOp op r1 r2 r3
-
-call :: Ref -> [Ref] -> Ref -> IR ()
-call funcRef args ret = liftF $ Call funcRef args ret
-
-alloc :: Type -> AllocRegion -> IR Ref
-alloc t region = liftF $ Alloc t region id
-
-ref :: Ref -> IR Ref
-ref r = pure r
-
-_if :: Ref -> IR () -> IR () -> IR ()
-_if r t e = liftF $ If r t e
-
 --------------------------------------------------------------------------------
 
 data Statement
@@ -259,5 +223,6 @@ sexpr globals (CRec t delay n ini body) = sexpr globals body
 -- TODO: replace refs to params with RArg 0, 1, 2 etc
 -- TODO: rec and oversample take a lambda abstraction (or a Var pointing to a lambda abstraction)
 -- TODO: zig std math: https://github.com/ziglang/zig/tree/master/lib/std/math
+
 abs :: Map Ident Ref -> Abs -> CallM Ref
 abs = undefined
