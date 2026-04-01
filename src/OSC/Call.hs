@@ -196,5 +196,6 @@ sexpr globals (CRec t delay n ini body) = sexpr globals body
 -- NOTE: selection only happens after "opaque" transitions, e.g. function call or global ref; an array paired with a selection is a choice
 -- TODO: generate SAbs code; pretty straightforward
 -- TODO: replace refs to params with RArg 0, 1, 2 etc
+-- TODO: rec and oversample take a lambda abstraction (or a Var pointing to a lambda abstraction)
 abs :: Map Ident Ref -> Abs -> R.ReaderT Env IR Ref
 abs = undefined
