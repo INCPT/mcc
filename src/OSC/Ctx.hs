@@ -69,10 +69,15 @@ numberType (F64 _) = TF64
 data Ident = Ident String
   deriving (Eq, Ord, Data, Show)
 
-data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Eq | Gt | Lt | GEt | LEt
+data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Rotl | Rotr 
+        | Eq | Ne | Gt | Lt | GEt | LEt 
+        | Min | Max | CopySign | Rem
   deriving (Data, Show)
 
-data UOp = Sqrt
+data UOp = Sqrt | Abs | Neg | Ceil | Floor | Trunc | Nearest 
+         | Clz | Ctz | Popcnt | Eqz
+         | Extend | Wrap | Convert | Demote | Promote | Reinterpret
+  deriving (Data, Show)
 
 data Expr
   = EConst Number
@@ -246,11 +251,18 @@ showOp Or = "|"
 showOp Xor = "^"
 showOp Shl = "<<"
 showOp Shr = ">>"
+showOp Rotl = "rotl"
+showOp Rotr = "rotr"
 showOp Eq = "=="
+showOp Ne = "!="
 showOp Gt = ">"
 showOp Lt = "<"
 showOp GEt = ">="
 showOp LEt = "<="
+showOp Min = "min"
+showOp Max = "max"
+showOp CopySign = "copysign"
+showOp Rem = "rem"
 
 --------------------------------------------------------------------------------
 
