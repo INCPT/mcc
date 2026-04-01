@@ -74,7 +74,7 @@ data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Rotl | Rotr
         | Min | Max | CopySign | Rem
   deriving (Data, Show)
 
-data UOp = Sqrt | Abs | Neg | Ceil | Floor | Trunc | Nearest 
+data UOp = Sqrt | Abs' | Neg | Ceil | Floor | Trunc | Nearest 
          | Clz | Ctz | Popcnt | Eqz
          | Extend | Wrap | Convert | Demote | Promote | Reinterpret
   deriving (Data, Show)

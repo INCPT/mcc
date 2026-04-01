@@ -62,11 +62,11 @@ data Ref
 
 data Lens = Lens { from :: [Ref], to :: [Int] }
 
-data Env = Env {
-  typ :: Type,
-  ret :: Ref,
-  lens :: Lens
-}
+data Env = Env
+  { typ :: Type
+  , ret :: Ref
+  , lens :: Lens
+  }
 
 newEnv :: Type -> Ref -> Env
 newEnv t ref = Env t ref (Lens [] [])
@@ -198,6 +198,7 @@ sexpr globals (CRec t delay n ini body) = sexpr globals body
 -- TODO: generate SAbs code; pretty straightforward
 -- TODO: replace refs to params with RArg 0, 1, 2 etc
 -- TODO: rec and oversample take a lambda abstraction (or a Var pointing to a lambda abstraction)
+-- TODO: zig std math: https://github.com/ziglang/zig/tree/master/lib/std/math
 abs :: Map Ident Ref -> Abs -> R.ReaderT Env IR Ref
 abs = undefined
 
