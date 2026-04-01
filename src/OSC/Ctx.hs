@@ -480,24 +480,28 @@ markPureExpressions = fmap go
 -- Test 1: Simple abstraction with no captures
 testChoice1 :: Choice
 testChoice1 = CExpr [] $ SAbs
-  (TAbs [(Just (Ident "x"), TI32)] TI32)
+  (TAbs [TI32] TI32)
+  [Ident "x"]
   [(Ident "x", ALocal, CExpr [] (SConst (I32 0)))]
   (CExpr [] (SVar TI32 (Ident "x")))
 
 -- Test 2: Abstraction that captures a parameter in a nested abstraction
 testChoice2 :: Choice
 testChoice2 = CExpr [] $ SAbs
-  (TAbs [(Just (Ident "x"), TI32), (Just (Ident "y"), TI32)] TI32)
+  (TAbs [TI32, TI32] TI32)
+  [Ident "x", Ident "y"]
   [(Ident "z", ALocal, CExpr [] (SConst (I32 0)))]
   (CExpr [] $ SAbs
-    (TAbs [(Just (Ident "a"), TI32)] TI32)
+    (TAbs [TI32] TI32)
+    [Ident "a"]
     [(Ident "b", ALocal, CExpr [] (SConst (I32 1)))]
     (CExpr [] $ SOp TI32 Add (CExpr [] (SVar TI32 (Ident "x"))) (CExpr [] (SVar TI32 (Ident "z")))))
 
 -- Test 3: Abstraction with a binding that references a parameter
 testChoice3 :: Choice
 testChoice3 = CExpr [] $ SAbs
-  (TAbs [(Just (Ident "x"), TI32)] TI32)
+  (TAbs [TI32] TI32)
+  [Ident "x"]
   [ (Ident "x", ALocal, CExpr [] (SConst (I32 5)))
   , (Ident "y", ALocal, CExpr [] (SVar TI32 (Ident "x")))
   ]
@@ -506,10 +510,12 @@ testChoice3 = CExpr [] $ SAbs
 -- Test 4: Nested abstractions with multiple captures
 testChoice4 :: Choice
 testChoice4 = CExpr [] $ SAbs
-  (TAbs [(Just (Ident "a"), TI32), (Just (Ident "b"), TI32)] TI32)
+  (TAbs [TI32, TI32] TI32)
+  [Ident "a", Ident "b"]
   [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
   (CExpr [] $ SAbs
-    (TAbs [(Just (Ident "c"), TI32)] TI32)
+    (TAbs [TI32] TI32)
+    [Ident "c"]
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar TI32 (Ident "bnd_a")))
     , (Ident "bnd_c", ALocal, CExpr [] (SVar TI32 (Ident "a")))
     ]
@@ -518,10 +524,12 @@ testChoice4 = CExpr [] $ SAbs
 -- Test 4: Nested abstractions with multiple captures
 testChoice4_2 :: Choice
 testChoice4_2 = CExpr [] $ SAbs
-  (TAbs [(Just (Ident "a"), TI32), (Just (Ident "b"), TI32), (Just (Ident "z"), TI32)] TI32)
+  (TAbs [TI32, TI32, TI32] TI32)
+  [Ident "a", Ident "b", Ident "z"]
   [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
   (CExpr [] $ SAbs
-    (TAbs [(Just (Ident "c"), TI32)] TI32)
+    (TAbs [TI32] TI32)
+    [Ident "c"]
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar TI32 (Ident "a")))
     , (Ident "bnd_c", ALocal, CExpr [] (SVar TI32 (Ident "z")))
     ]
@@ -532,10 +540,12 @@ testChoice4_2 = CExpr [] $ SAbs
 
 testChoice4_3 :: Choice
 testChoice4_3 = CExpr [] $ SAbs
-  (TAbs [(Just (Ident "a"), TI32), (Just (Ident "b"), TI32), (Just (Ident "z"), TI32)] TI32)
+  (TAbs [TI32, TI32, TI32] TI32)
+  [Ident "a", Ident "b", Ident "z"]
   [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
   (CExpr [] $ SAbs
-    (TAbs [(Just (Ident "c"), TI32)] TI32)
+    (TAbs [TI32] TI32)
+    [Ident "c"]
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar TI32 (Ident "a")))
     , (Ident "bnd_c", ALocal, CExpr [] (SVar TI32 (Ident "z")))
     ]
@@ -554,22 +564,26 @@ testChoice4_3 = CExpr [] $ SAbs
 -- Test 5: Abstraction with free variable (not captured, just free)
 testChoice5 :: Choice
 testChoice5 = CExpr [] $ SAbs
-  (TAbs [(Just (Ident "x"), TI32)] TI32)
+  (TAbs [TI32] TI32)
+  [Ident "x"]
   [(Ident "x", ALocal, CExpr [] (SConst (I32 0)))]
   (CExpr [] $ SOp TI32 Add (CExpr [] (SVar TI32 (Ident "x"))) (CExpr [] (SVar TI32 (Ident "freeVar"))))
 
 -- Test 6: Complex case with binding that captures and is itself captured
 testChoice6 :: Choice
 testChoice6 = CExpr [] $ SAbs
-  (TAbs [(Just (Ident "x"), TI32), (Just (Ident "y"), TI32)] TI32)
+  (TAbs [TI32, TI32] TI32)
+  [Ident "x", Ident "y"]
   [ (Ident "x", ALocal, CExpr [] (SConst (I32 10)))
   , (Ident "helper", ALocal, CExpr [] $ SAbs
-      (TAbs [(Just (Ident "z"), TI32)] TI32)
+      (TAbs [TI32] TI32)
+      [Ident "z"]
       [(Ident "z", ALocal, CExpr [] (SConst (I32 0)))]
       (CExpr [] $ SOp TI32 Add (CExpr [] (SVar TI32 (Ident "x"))) (CExpr [] (SVar TI32 (Ident "z")))))
   ]
   (CExpr [] $ SAbs
-    (TAbs [(Just (Ident "y"), TI32)] TI32)
+    (TAbs [TI32] TI32)
+    [Ident "y"]
     [(Ident "y", ALocal, CExpr [] (SConst (I32 20)))]
     (CExpr [] $ SApp TI32 (CExpr [] (SVar TI32 (Ident "helper"))) [CExpr [] (SVar TI32 (Ident "y"))]))
 
