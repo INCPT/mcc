@@ -72,6 +72,8 @@ data Ident = Ident String
 data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Eq | Gt | Lt | GEt | LEt
   deriving (Data, Show)
 
+data UOp = Sqrt
+
 data Expr
   = EConst Number
   | EOp Type Op Expr Expr -- both args and the result are simple types
