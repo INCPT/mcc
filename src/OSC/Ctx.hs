@@ -23,7 +23,7 @@ import qualified Control.Monad.Trans.Writer.CPS as W
 import Data.Generics.Uniplate.Data
 import Data.Generics.Str
 
-data Type = TI32 | TF32 | TI64 | TF64 | TArr Type {- length -} Int | TAbs [(Maybe Ident, Type)] Type
+data Type = TI32 | TF32 | TI64 | TF64 | TArr Type {- length -} Int | TAbs [Type] Type
   deriving (Data)
 
 sizeOfType :: Type -> Int
@@ -44,18 +44,10 @@ peelType (TArr t _) = t
 peelType (TAbs _ _) = error "peelType: abstraction"
 peelType t = error $ "peelType: " <> show t
 
-paramTypes :: Type -> [(Maybe Ident, Type)]
+paramTypes :: Type -> [Type]
 paramTypes (TArr _ _) = []
 paramTypes (TAbs params _) = params
 paramTypes _ = []
-
-namedParamTypes :: Type -> [(Ident, Type)]
-namedParamTypes (TArr _ _) = []
-namedParamTypes (TAbs params _) = fmap p params
-  where
-    p (Just n, t) = (n, t)
-    p (Nothing, _) = error "namedParamTypes: unnamed param (this is a bug)"
-namedParamTypes _ = []
 
 data Number = I32 Int | I64 Int | F32 Float | F64 Double
   deriving (Show, Data)
@@ -86,7 +78,7 @@ data Expr
 
   | EVar Type Ident
 
-  | EAbs Type {- bindings -} [(Ident, Expr)] {- body -} Expr
+  | EAbs Type {- params -} [Ident] {- bindings -} [(Ident, Expr)] {- body -} Expr
   | EApp Type Expr [Expr]
 
   | ESelect Type Expr {- selector -} Expr
@@ -102,7 +94,7 @@ exprType (EConst n) = numberType n
 exprType (EOp t _ _ _) = t
 exprType (EArr t _) = t
 exprType (EVar t _) = t
-exprType (EAbs t _ _) = t
+exprType (EAbs t _ _ _) = t
 exprType (EApp t _ _) = t
 exprType (ESelect t _ _) = t
 exprType (ERec t _ _ _ _) = t
@@ -155,7 +147,7 @@ data SExpr
   | SVar Type Ident
   | SVarNS Type Ident -- shouldn't be substituted
 
-  | SAbs Type {- bindings -} [(Ident, AllocRegion, Choice)] Choice
+  | SAbs Type {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Choice)] Choice
   | SApp Type Choice [Choice]
 
   | SFuncRef Type FuncRef
@@ -189,7 +181,7 @@ sexprType (SArr t _) = t
 sexprType (SOp t _ _ _) = t
 sexprType (SVar t _) = t
 sexprType (SVarNS t _) = t
-sexprType (SAbs t _ _) = t
+sexprType (SAbs t _ _ _) = t
 sexprType (SApp t _ _) = t
 sexprType (SFuncRef t _) = t
 
@@ -201,7 +193,7 @@ instance Show SExpr where
   show (SOp _ op a b) = "(" <> show a <> " " <> showOp op <> " " <> show b <> ")"
   show (SVar _ (Ident n)) = n
   show (SVarNS _ (Ident n)) = n
-  show (SAbs t bs body) = 
+  show (SAbs t params bs body) = 
     "λ" <> showType t <> " " <> showBindings bs <> " = " <> show body
     where
       showBindings [] = ""
@@ -235,10 +227,7 @@ showType TF64 = "f64"
 showType (TArr t dim) = showType t <> "[" <> show dim <> "]"
 showType (TAbs [] retType) = "() -> " <> showType retType
 showType (TAbs params retType) = 
-  "(" <> intercalate ", " (map showParam params) <> ") -> " <> showType retType
-  where
-    showParam (Nothing, t) = showType t
-    showParam (Just (Ident n), t) = n <> ":" <> showType t
+  "(" <> intercalate ", " (map showType params) <> ") -> " <> showType retType
 
 showOp :: Op -> String
 showOp Add = "+"
@@ -276,7 +265,7 @@ choiceTree (EConst n) = toC (SConst n)
 choiceTree (EOp t op a b) = toC (SOp t op (toChoice a) (toChoice b))
 choiceTree (EVar t n) = toC (SVar t n)
 choiceTree (EApp t f as) = toC (SApp t (toChoice f) (fmap toChoice as))
-choiceTree (EAbs t bs e) = toC (SAbs t (map (second toChoice) [ (n, ALocal, b) | (n, b) <- bs ]) (toChoice e))
+choiceTree (EAbs t params bs e) = toC (SAbs t params (map (second toChoice) [ (n, ALocal, b) | (n, b) <- bs ]) (toChoice e))
 choiceTree (EArr t es) = do
   s <- pop
   case s of
@@ -329,11 +318,11 @@ fresh = Unique $ do
 
 --------------------------------------------------------------------------------
 
-data Abs = Abs Type {- bindings -} [(Ident, AllocRegion, Choice)] Choice
+data Abs = Abs Type {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Choice)] Choice
   deriving Data
 
 instance Show Abs where
-  show (Abs t bs e) = show (SAbs t bs e)
+  show (Abs t params bs e) = show (SAbs t params bs e)
 
 data AbsEnv = AbsEnv
   { funcRefMap :: Map FuncRef Abs
@@ -344,33 +333,33 @@ abstractUnsaturatedApps :: Choice -> Unique Choice
 abstractUnsaturatedApps = transformBiM go
   where
     go :: SExpr -> Unique SExpr
-    go e@(SApp t f as) = case drop (length as) (paramTypes $ choiceType f) of
+    go e@(SApp t f args) = case drop (length args) (paramTypes $ choiceType f) of
       -- Saturated, keep as is
       [] -> pure e
       -- Unsaturated, create closure
       remainingParams -> do
-        argNames <- sequence [ fresh | _ <- as ]
-        remainingParamNames <- sequence [ (,t) <$> fresh | (_, t) <- remainingParams ]
+        argNames <- sequence [ fresh | _ <- args ]
+        remainingParamNames <- sequence [ (,t) <$> fresh | t <- remainingParams ]
 
-        let argBindings = [ (n, ALocal, arg) | (n, arg) <- zip argNames as ]
+        let argBindings = [ (n, ALocal, arg) | (n, arg) <- zip argNames args ]
         let closureBody = CExpr [] $ SApp t f $ mconcat
-              [ [ CExpr [] (SVar (choiceType a) n) | (n, a) <- zip argNames as ]
+              [ [ CExpr [] (SVar (choiceType a) n) | (n, a) <- zip argNames args ]
               , [ CExpr [] (SVar pt mn) | (mn, pt) <- remainingParamNames ]
               ]
 
-        pure $ SAbs (TAbs (fmap (first Just) remainingParamNames) t) argBindings closureBody
+        pure $ SAbs (TAbs remainingParams t) (map fst remainingParamNames) argBindings closureBody
     go e = pure e
 
 gatherAbstractions :: Choice -> (Choice, AbsEnv)
 gatherAbstractions = flip ST.runState (AbsEnv mempty 0) . transformBiM processAbstraction
   where
     processAbstraction :: SExpr -> ST.State AbsEnv SExpr
-    processAbstraction (SAbs t bs body) = do
+    processAbstraction (SAbs t params bs body) = do
       fr <- FuncRef <$> ST.gets (.nextFuncRef)
 
       ST.modify $ \st -> st
         { nextFuncRef = st.nextFuncRef + 1
-        , funcRefMap = M.insert fr (Abs t bs body) st.funcRefMap
+        , funcRefMap = M.insert fr (Abs t params bs body) st.funcRefMap
         }
 
       pure $ SFuncRef t fr
@@ -383,7 +372,7 @@ gatherFreeVars funcRefMap = freeVarMap
     freeVarMap = fmap go funcRefMap
       where
         go :: Abs -> Set Ident
-        go (Abs t bindings body) = allVars bindings body \\ (S.fromList [ n | (n, _, _) <- bindings ] <> S.fromList (fmap fst $ namedParamTypes t))
+        go (Abs t params bindings body) = allVars bindings body \\ (S.fromList [ n | (n, _, _) <- bindings ] <> S.fromList params)
 
         allVars :: [(Ident, AllocRegion, Choice)] -> Choice -> Set Ident
         allVars bindings body = mconcat $ fmap mconcat
@@ -411,14 +400,12 @@ markCapturedBindings freeVarMap funcRefMap = do
   pure ( fmap (transformBi (substituteVars genv.substMap)) funcRefMapWithGlobalBindings
        , genv
        )
-
   where
-
     go :: Abs -> W.WriterT GlobalsEnv Unique Abs
-    go abs@(Abs t bindings body) = do
+    go abs@(Abs t params bindings body) = do
       capturedParams <- sequence
-        [ (t, n,) <$> lift fresh
-        | (n, _) <- namedParamTypes t
+        [ (ptype, n,) <$> lift fresh
+        | (ptype, n) <- zip (paramTypes t) params
         , S.member n fvs
         ]
       
@@ -427,12 +414,12 @@ markCapturedBindings freeVarMap funcRefMap = do
       W.tell $ GlobalsEnv
         { substMap = M.fromList [ (o, n) | (_, o, n) <- capturedParams ]
         , globals = mconcat
-            [ M.fromList [ (n, t) | (t, _, n) <- capturedParams ]
+            [ M.fromList [ (n, ptype) | (ptype, _, n) <- capturedParams ]
             , M.fromList [ (n, choiceType e) | (n, AGlobal, e) <- bindings' ]
             ] 
         }
 
-      pure $ Abs t bindings' body
+      pure $ Abs t params bindings' body
       where
         fvs = transientFreeVars abs
 
@@ -464,7 +451,7 @@ floatExpressions :: Map FuncRef Abs -> Map FuncRef Abs
 floatExpressions = fmap go
   where
     go :: Abs -> Abs
-    go (Abs t bindings body) = undefined
+    go (Abs t params bindings body) = undefined
 
     isPure :: Choice -> Choice
     isPure = undefined
@@ -473,7 +460,7 @@ markPureExpressions :: Map FuncRef Abs -> Map FuncRef Abs
 markPureExpressions = fmap go
   where
     go :: Abs -> Abs
-    go (Abs t bindings body) = undefined
+    go (Abs t params bindings body) = undefined
 
     isPure :: Choice -> Choice
     isPure = undefined
