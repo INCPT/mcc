@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
@@ -148,12 +149,10 @@ data SExpr abs
 
   | SVar Type Ident
 
-  | SAbs Type {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Choice abs)] (Choice abs)
+  | SAbs Type abs
   | SApp Type (Choice abs) [Choice abs]
 
   | SRec Type {- delay -} Int {- must be of type abstraction -} (Choice abs)
-
-  | SFuncRef Type FuncRef abs
   deriving Data
 
 newtype Pureness = Pureness Bool
@@ -181,32 +180,33 @@ sexprType (SConst n) = numberType n
 sexprType (SArr t _) = t
 sexprType (SOp t _ _ _) = t
 sexprType (SVar t _) = t
-sexprType (SAbs t _ _ _) = t
+sexprType (SAbs t _) = t
 sexprType (SApp t _ _) = t
 sexprType (SRec t _ _) = t
-sexprType (SFuncRef t _ _) = t
 
 --------------------------------------------------------------------------------
 
-instance Show abs => Show (SExpr abs) where
+showAbs :: Type -> Abs -> String
+showAbs t (Abs params bs body) = 
+  "λ" <> showParams params <> " : " <> showType t <> " " <> showBindings bs <> " = " <> show body
+  where
+    showParams [] = "()"
+    showParams ps = "(" <> intercalate ", " (map (\(Ident n) -> n) ps) <> ")"
+    showBindings [] = ""
+    showBindings bindings = "{ " <> intercalate "; " (map showBinding bindings) <> " }"
+    showBinding (Ident n, region, expr) = 
+      n <> "@" <> showRegion region <> " = " <> show expr
+    showRegion ALocal = "local"
+    showRegion AGlobal = "global"
+
+instance Show (SExpr Abs) where
   show (SConst n) = show n
   show (SArr t cs) = "[" <> showType t <> ": " <> intercalate ", " (map show cs) <> "]"
   show (SOp _ op a b) = "(" <> show a <> " " <> showOp op <> " " <> show b <> ")"
   show (SVar _ (Ident n)) = n
-  show (SAbs t params bs body) = 
-    "λ" <> showParams params <> " : " <> showType t <> " " <> showBindings bs <> " = " <> show body
-    where
-      showParams [] = "()"
-      showParams ps = "(" <> intercalate ", " (map (\(Ident n) -> n) ps) <> ")"
-      showBindings [] = ""
-      showBindings bindings = "{ " <> intercalate "; " (map showBinding bindings) <> " }"
-      showBinding (Ident n, region, expr) = 
-        n <> "@" <> showRegion region <> " = " <> show expr
-      showRegion ALocal = "local"
-      showRegion AGlobal = "global"
+  show (SAbs t abs) = showAbs t abs
   show (SApp _ f a) = show f <> "(" <> show a <> ")"
   show (SRec t delay body) = "rec[" <> showType t <> ", delay=" <> show delay <> "](" <> show body <> ")"
-  show (SFuncRef _ (FuncRef n) _) = "funcref#" <> show n
 
 instance Show abs => Show (Choice abs) where
   show (CChoice t cs idx) = 
@@ -256,7 +256,7 @@ showOp Rem = "rem"
 
 --------------------------------------------------------------------------------
 
-toC :: Monad m => SExpr () -> StackM (Type, Expr) m (Choice ())
+toC :: Monad m => SExpr Abs -> StackM (Type, Expr) m (Choice Abs)
 toC e = do
   idxs <- ST.get
   pure $ CExpr (map (second toChoice) idxs) e
@@ -264,12 +264,12 @@ toC e = do
 -- Pair each index with the appropriate array, so an an expression like
 -- `[[0, 1], [2, 3]][1][0]` turns into `[[0, 1][0], [2, 3][0]][1]`.
 -- This allows for easy constant index elimination and the generation of more efficient code.
-choiceTree :: Monad m => Expr -> StackM (Type, Expr) m (Choice ())
+choiceTree :: Monad m => Expr -> StackM (Type, Expr) m (Choice Abs)
 choiceTree (EConst n) = toC (SConst n)
 choiceTree (EOp t op a b) = toC (SOp t op (toChoice a) (toChoice b))
 choiceTree (EVar t n) = toC (SVar t n)
 choiceTree (EApp t f as) = toC (SApp t (toChoice f) (fmap toChoice as))
-choiceTree (EAbs t params bs e) = toC (SAbs t params (map (second toChoice) [ (n, ALocal, b) | (n, b) <- bs ]) (toChoice e))
+choiceTree (EAbs t params bs e) = toC (SAbs t (Abs params (map (second toChoice) [ (n, ALocal, b) | (n, b) <- bs ]) (toChoice e)))
 choiceTree (ERec t d e) = toC (SRec t d (toChoice e))
 choiceTree (EArr t es) = do
   s <- pop
@@ -287,10 +287,10 @@ choiceTree (ESelect t e idx) = do
 
 --------------------------------------------------------------------------------
 
-elimConstIndices :: Choice () -> Choice ()
+elimConstIndices :: Choice Abs -> Choice Abs
 elimConstIndices = transform go
   where
-    go :: Choice () -> Choice ()
+    go :: Choice Abs -> Choice Abs
 
     -- Eliminate constant index selections by directly selecting the choice
     -- It's ok to prune impure expressions here (since the index is constant those expressions will never be accessible)
@@ -300,10 +300,10 @@ elimConstIndices = transform go
     -- Keep everything else as-is
     go ch = ch
 
-optimize :: Choice () -> Choice ()
+optimize :: Choice Abs -> Choice Abs
 optimize = elimConstIndices
 
-toChoice :: Expr -> Choice ()
+toChoice :: Expr -> Choice Abs
 toChoice = optimize . flip ST.evalState [] . choiceTree
 
 --------------------------------------------------------------------------------
@@ -322,21 +322,21 @@ fresh = Unique $ do
 
 --------------------------------------------------------------------------------
 
-data Abs = Abs Type {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Choice ())] (Choice ())
+data Abs = Abs {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Choice Abs)] (Choice Abs)
   deriving Data
 
-instance Show Abs where
-  show (Abs t params bs e) = show (SAbs t params bs e)
+data Func = Func Type {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Choice FuncRef)] (Choice FuncRef)
+  deriving (Data, Show)
 
 data AbsEnv = AbsEnv
-  { funcRefMap :: Map FuncRef Abs
+  { funcRefMap :: Map FuncRef Func
   , nextFuncRef :: Int
   } deriving Show
 
-abstractUnsaturatedApps :: Choice () -> Unique (Choice ())
+abstractUnsaturatedApps :: Choice Abs -> Unique (Choice Abs)
 abstractUnsaturatedApps = transformBiM go
   where
-    go :: SExpr () -> Unique (SExpr ())
+    go :: SExpr Abs -> Unique (SExpr Abs)
     go e@(SApp t f args) = case drop (length args) (paramTypes $ choiceType f) of
       -- Saturated, keep as is
       [] -> pure e
@@ -351,22 +351,24 @@ abstractUnsaturatedApps = transformBiM go
               , [ CExpr [] (SVar pt mn) | (mn, pt) <- remainingParamNames ]
               ]
 
-        pure $ SAbs (TAbs remainingParams t) (map fst remainingParamNames) argBindings closureBody
+        pure $ SAbs (TAbs remainingParams t) $ Abs (map fst remainingParamNames) argBindings closureBody
     go e = pure e
 
-gatherAbstractions :: Choice () -> (Choice (), AbsEnv)
-gatherAbstractions = flip ST.runState (AbsEnv mempty 0) . transformBiM processAbstraction
+gatherAbstractions :: Choice Abs -> ST.State AbsEnv (Choice FuncRef)
+gatherAbstractions = transformBiM processAbstraction
   where
-    processAbstraction :: SExpr () -> ST.State AbsEnv (SExpr ())
-    processAbstraction (SAbs t params bs body) = do
+    processAbstraction :: SExpr Abs -> ST.State AbsEnv (SExpr FuncRef)
+    processAbstraction (SAbs t (Abs params bindings body)) = do
       fr <- FuncRef <$> ST.gets (.nextFuncRef)
+      bindings' <- sequence [ (n, region,) <$> gatherAbstractions b | (n, region, b) <- bindings ]
+      body' <- gatherAbstractions body
 
       ST.modify $ \st -> st
         { nextFuncRef = st.nextFuncRef + 1
-        , funcRefMap = M.insert fr (Abs t params bs body) st.funcRefMap
+        , funcRefMap = M.insert fr (Func t params bindings' body') st.funcRefMap
         }
 
-      pure $ SFuncRef t fr ()
+      pure $ SAbs t fr
     processAbstraction e = pure e
 
 -- | Compute the free variables for each abstraction in the function map.
@@ -394,23 +396,23 @@ gatherAbstractions = flip ST.runState (AbsEnv mempty 0) . transformBiM processAb
 --   - inner's free vars: {x, y, z}
 --   - middle's free vars: {x, y} (includes inner's free vars minus middle's params/bindings)
 --   - outer's free vars: {} (all variables are bound by outer)
-gatherFreeVars :: Map FuncRef Abs -> Map FuncRef (Set Ident)
+gatherFreeVars :: Map FuncRef Func -> Map FuncRef (Set Ident)
 gatherFreeVars funcRefMap = freeVarMap
   where
     freeVarMap :: Map FuncRef (Set Ident)
     freeVarMap = fmap go funcRefMap
       where
-        go :: Abs -> Set Ident
-        go (Abs _ params bindings body) = allVars bindings body \\ (S.fromList [ n | (n, _, _) <- bindings ] <> S.fromList params)
+        go :: Func -> Set Ident
+        go (Func _ params bindings body) = allVars bindings body \\ (S.fromList [ n | (n, _, _) <- bindings ] <> S.fromList params)
 
-        allVars :: [(Ident, AllocRegion, Choice ())] -> Choice () -> Set Ident
+        allVars :: [(Ident, AllocRegion, Choice FuncRef)] -> Choice FuncRef -> Set Ident
         allVars bindings body = mconcat $ fmap mconcat
           [ [ S.fromList [ n | SVar _ n <- universeBi body ] ]
           , [ S.fromList [ n | (_, _, b) <- bindings, SVar _ n <- universeBi b ] ]
 
           -- Gather transient free vars (by lazily referencing freeVarMap; this works because no mutual recursion between bindings is allowed)
-          , [ fvs | SFuncRef _ fr _ <- universeBi body, Just fvs <- [ M.lookup fr freeVarMap ] ]
-          , [ fvs | (_, _, b) <- bindings, SFuncRef _ fr _ <- universeBi b, Just fvs <- [ M.lookup fr freeVarMap ] ]
+          , [ fvs | SAbs _ fr <- universeBi body, Just fvs <- [ M.lookup fr freeVarMap ] ]
+          , [ fvs | (_, _, b) <- bindings, SAbs _ fr <- universeBi b, Just fvs <- [ M.lookup fr freeVarMap ] ]
           ]
 
 --------------------------------------------------------------------------------
@@ -457,18 +459,18 @@ instance Monoid GlobalsEnv where mempty = GlobalsEnv mempty mempty
 -- Returns:
 --   - Updated function map with global bindings and substitutions applied
 --   - GlobalsEnv containing the substitution map and global variable types
-markCapturedBindings :: Map FuncRef (Set Ident) -> Map FuncRef Abs -> Unique (Map FuncRef Abs, GlobalsEnv)
+markCapturedBindings :: Map FuncRef (Set Ident) -> Map FuncRef Func -> Unique (Map FuncRef Func, GlobalsEnv)
 markCapturedBindings freeVarMap funcRefMap = do
   (funcRefMapWithGlobalBindings, genv) <- W.runWriterT (traverse go funcRefMap)
   pure (M.mapWithKey (substituteVars genv.substMap) funcRefMapWithGlobalBindings, genv)
   where
     -- Process a single function to create global bindings for captured parameters
-    go :: Abs -> W.WriterT GlobalsEnv Unique Abs
-    go abs@(Abs t params bindings body) = do
+    go :: Func -> W.WriterT GlobalsEnv Unique Func
+    go abs@(Func t params bindings body) = do
       -- Find all closures defined in this function and their free variables
       let freeVarsForClosure =
             [ (fr, fvs)
-            | SFuncRef _ fr _ <- universeBi abs
+            | SAbs _ fr <- universeBi abs
             , Just fvs <- [ M.lookup fr freeVarMap ]
             ]
       -- Union of all free variables from nested closures
@@ -509,12 +511,12 @@ markCapturedBindings freeVarMap funcRefMap = do
             ] 
         }
 
-      pure $ Abs t params bindings' body
+      pure $ Func t params bindings' body
 
     -- Apply substitutions to a specific function based on its FuncRef
-    substituteVars :: Map FuncRef (Map Ident Ident) -> FuncRef -> Abs -> Abs
-    substituteVars frSubstMap fr a@(Abs t params bindings body) = case M.lookup fr frSubstMap of
-      Just substMap -> Abs t params
+    substituteVars :: Map FuncRef (Map Ident Ident) -> FuncRef -> Func -> Func
+    substituteVars frSubstMap fr a@(Func t params bindings body) = case M.lookup fr frSubstMap of
+      Just substMap -> Func t params
         (fmap substBinding bindings)
         (transformBi substVar body)
         where
@@ -531,20 +533,20 @@ markCapturedBindings freeVarMap funcRefMap = do
 --------------------------------------------------------------------------------
 
 -- NOTE: if bindings between two SAbs float collapse them into one
-floatExpressions :: Map FuncRef Abs -> Map FuncRef Abs
+floatExpressions :: Map FuncRef Func -> Map FuncRef Func
 floatExpressions = fmap go
   where
-    go :: Abs -> Abs
-    go (Abs t params bindings body) = undefined
+    go :: Func -> Func
+    go (Func t params bindings body) = undefined
 
     isPure :: Choice abs -> Choice abs
     isPure = undefined
 
-markPureExpressions :: Map FuncRef Abs -> Map FuncRef Abs
+markPureExpressions :: Map FuncRef Func -> Map FuncRef Func
 markPureExpressions = fmap go
   where
-    go :: Abs -> Abs
-    go (Abs t params bindings body) = undefined
+    go :: Func -> Func
+    go (Func t params bindings body) = undefined
 
     isPure :: Choice abs -> Choice abs
     isPure = undefined
@@ -562,29 +564,25 @@ markPureExpressions = fmap go
 -- Test expressions for markCapturedBindings
 
 -- Test 1: Simple abstraction with no captures
-testChoice1 :: Choice ()
-testChoice1 = CExpr [] $ SAbs
-  (TAbs [TNumber TI32] (TNumber TI32))
+testChoice1 :: Choice Abs
+testChoice1 = CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
   [Ident "x"]
   [(Ident "x", ALocal, CExpr [] (SConst (I32 0)))]
   (CExpr [] (SVar (TNumber TI32) (Ident "x")))
 
 -- Test 2: Abstraction that captures a parameter in a nested abstraction
-testChoice2 :: Choice ()
-testChoice2 = CExpr [] $ SAbs
-  (TAbs [TNumber TI32, TNumber TI32] (TNumber TI32))
+testChoice2 :: Choice Abs
+testChoice2 = CExpr [] $ SAbs (TAbs [TNumber TI32, TNumber TI32] (TNumber TI32)) $ Abs
   [Ident "x", Ident "y"]
   [(Ident "z", ALocal, CExpr [] (SConst (I32 0)))]
-  (CExpr [] $ SAbs
-    (TAbs [TNumber TI32] (TNumber TI32))
+  (CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
     [Ident "a"]
     [(Ident "b", ALocal, CExpr [] (SConst (I32 1)))]
     (CExpr [] $ SOp (TNumber TI32) Add (CExpr [] (SVar (TNumber TI32) (Ident "x"))) (CExpr [] (SVar (TNumber TI32) (Ident "z")))))
 
 -- Test 3: Abstraction with a binding that references a parameter
-testChoice3 :: Choice ()
-testChoice3 = CExpr [] $ SAbs
-  (TAbs [TNumber TI32] (TNumber TI32))
+testChoice3 :: Choice Abs
+testChoice3 = CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
   [Ident "x"]
   [ (Ident "x", ALocal, CExpr [] (SConst (I32 5)))
   , (Ident "y", ALocal, CExpr [] (SVar (TNumber TI32) (Ident "x")))
@@ -592,13 +590,11 @@ testChoice3 = CExpr [] $ SAbs
   (CExpr [] (SVar (TNumber TI32) (Ident "y")))
 
 -- Test 4: Nested abstractions with multiple captures
-testChoice4 :: Choice ()
-testChoice4 = CExpr [] $ SAbs
-  (TAbs [TNumber TI32, TNumber TI32] (TNumber TI32))
+testChoice4 :: Choice Abs
+testChoice4 = CExpr [] $ SAbs (TAbs [TNumber TI32, TNumber TI32] (TNumber TI32)) $ Abs
   [Ident "a", Ident "b"]
   [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
-  (CExpr [] $ SAbs
-    (TAbs [TNumber TI32] (TNumber TI32))
+  (CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
     [Ident "c"]
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar (TNumber TI32) (Ident "bnd_a")))
     , (Ident "bnd_c", ALocal, CExpr [] (SVar (TNumber TI32) (Ident "a")))
@@ -606,13 +602,11 @@ testChoice4 = CExpr [] $ SAbs
     (CExpr [] $ SOp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "b")))))
 
 -- Test 4: Nested abstractions with multiple captures
-testChoice4_2 :: Choice ()
-testChoice4_2 = CExpr [] $ SAbs
-  (TAbs [TNumber TI32, TNumber TI32, TNumber TI32] (TNumber TI32))
+testChoice4_2 :: Choice Abs
+testChoice4_2 = CExpr [] $ SAbs (TAbs [TNumber TI32, TNumber TI32, TNumber TI32] (TNumber TI32)) $ Abs
   [Ident "a", Ident "b", Ident "z"]
   [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
-  (CExpr [] $ SAbs
-    (TAbs [TNumber TI32] (TNumber TI32))
+  (CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
     [Ident "c"]
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar (TNumber TI32) (Ident "a")))
     , (Ident "bnd_c", ALocal, CExpr [] (SVar (TNumber TI32) (Ident "z")))
@@ -622,13 +616,11 @@ testChoice4_2 = CExpr [] $ SAbs
       , (CExpr [] $ SOp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "z"))))
       ] (CExpr [] $ SOp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "bnd_a"))) (CExpr [] (SVar (TNumber TI32) (Ident "z"))))))
 
-testChoice4_3 :: Choice ()
-testChoice4_3 = CExpr [] $ SAbs
-  (TAbs [TNumber TI32, TNumber TI32, TNumber TI32] (TNumber TI32))
+testChoice4_3 :: Choice Abs
+testChoice4_3 = CExpr [] $ SAbs (TAbs [TNumber TI32, TNumber TI32, TNumber TI32] (TNumber TI32)) $ Abs
   [Ident "a", Ident "b", Ident "z"]
   [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
-  (CExpr [] $ SAbs
-    (TAbs [TNumber TI32] (TNumber TI32))
+  (CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
     [Ident "c"]
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar (TNumber TI32) (Ident "a")))
     , (Ident "bnd_c", ALocal, CExpr [] (SVar (TNumber TI32) (Ident "z")))
@@ -646,34 +638,30 @@ testChoice4_3 = CExpr [] $ SAbs
       ] (CExpr [] $ SConst $ I32 2)))
 
 -- Test 5: Abstraction with free variable (not captured, just free)
-testChoice5 :: Choice ()
-testChoice5 = CExpr [] $ SAbs
-  (TAbs [TNumber TI32] (TNumber TI32))
+testChoice5 :: Choice Abs
+testChoice5 = CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
   [Ident "x"]
   [(Ident "x", ALocal, CExpr [] (SConst (I32 0)))]
   (CExpr [] $ SOp (TNumber TI32) Add (CExpr [] (SVar (TNumber TI32) (Ident "x"))) (CExpr [] (SVar (TNumber TI32) (Ident "freeVar"))))
 
 -- Test 6: Complex case with binding that captures and is itself captured
-testChoice6 :: Choice ()
-testChoice6 = CExpr [] $ SAbs
-  (TAbs [TNumber TI32, TNumber TI32] (TNumber TI32))
+testChoice6 :: Choice Abs
+testChoice6 = CExpr [] $ SAbs (TAbs [TNumber TI32, TNumber TI32] (TNumber TI32)) $ Abs
   [Ident "x", Ident "y"]
   [ (Ident "x", ALocal, CExpr [] (SConst (I32 10)))
-  , (Ident "helper", ALocal, CExpr [] $ SAbs
-      (TAbs [TNumber TI32] (TNumber TI32))
+  , (Ident "helper", ALocal, CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
       [Ident "z"]
       [(Ident "z", ALocal, CExpr [] (SConst (I32 0)))]
       (CExpr [] $ SOp (TNumber TI32) Add (CExpr [] (SVar (TNumber TI32) (Ident "x"))) (CExpr [] (SVar (TNumber TI32) (Ident "z")))))
   ]
-  (CExpr [] $ SAbs
-    (TAbs [TNumber TI32] (TNumber TI32))
+  (CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
     [Ident "y"]
     [(Ident "y", ALocal, CExpr [] (SConst (I32 20)))]
     (CExpr [] $ SApp (TNumber TI32) (CExpr [] (SVar (TNumber TI32) (Ident "helper"))) [CExpr [] (SVar (TNumber TI32) (Ident "y"))]))
 
-testMark :: Choice () -> (Map FuncRef Abs, GlobalsEnv)
+testMark :: Choice Abs -> (Map FuncRef Func, GlobalsEnv)
 testMark e = runUnique $ do
   e' <- abstractUnsaturatedApps e
-  let (e'', env) = gatherAbstractions e'
+  let (e'', env) = ST.runState (gatherAbstractions e') (AbsEnv mempty mempty)
   let freeVarMap = gatherFreeVars env.funcRefMap
   markCapturedBindings freeVarMap env.funcRefMap
