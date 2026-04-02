@@ -23,16 +23,18 @@ import qualified Control.Monad.Trans.Writer.CPS as W
 import Data.Generics.Uniplate.Data
 import Data.Generics.Str
 
-data Type = TI32 | TF32 | TI64 | TF64 | TArr Type {- length -} Int | TAbs [Type] Type
+data TNumber = TI32 | TF32 | TI64 | TF64 deriving Data
+
+data Type = TNumber TNumber | TArr Type {- length -} Int | TAbs [Type] Type
   deriving (Data)
 
 sizeOfType :: Type -> Int
-sizeOfType TI32 = 4
-sizeOfType TF32 = 4
-sizeOfType TI64 = 8
-sizeOfType TF64 = 8
+sizeOfType (TNumber TI32) = 4
+sizeOfType (TNumber TF32) = 4
+sizeOfType (TNumber TI64) = 8
+sizeOfType (TNumber TF64) = 8
 sizeOfType (TArr t dim) = sizeOfType t * dim
-sizeOfType (TAbs _ _) = sizeOfType TI32 -- TODO PLATFORM: funcref is I32
+sizeOfType (TAbs _ _) = sizeOfType (TNumber TI32) -- TODO PLATFORM: funcref is I32
 
 returnType :: Type -> Type
 returnType t@(TArr _ _) = t
@@ -53,10 +55,10 @@ data Number = I32 Int | I64 Int | F32 Float | F64 Double
   deriving (Show, Data)
 
 numberType :: Number -> Type
-numberType (I32 _) = TI32
-numberType (F32 _) = TF32
-numberType (I64 _) = TI64
-numberType (F64 _) = TF64
+numberType (I32 _) = TNumber TI32
+numberType (F32 _) = TNumber TF32
+numberType (I64 _) = TNumber TI64
+numberType (F64 _) = TNumber TF64
 
 data Ident = Ident String
   deriving (Eq, Ord, Data, Show)
@@ -219,10 +221,10 @@ instance Show Type where
   show = showType
 
 showType :: Type -> String
-showType TI32 = "i32"
-showType TF32 = "f32"
-showType TI64 = "i64"
-showType TF64 = "f64"
+showType (TNumber TI32) = "i32"
+showType (TNumber TF32) = "f32"
+showType (TNumber TI64) = "i64"
+showType (TNumber TF64) = "f64"
 showType (TArr t dim) = showType t <> "[" <> show dim <> "]"
 showType (TAbs [] retType) = "() -> " <> showType retType
 showType (TAbs params retType) = 
@@ -259,6 +261,9 @@ toC e = do
   idxs <- ST.get
   pure $ CExpr (map (second toChoice) idxs) e
 
+-- Pair each index with the appropriate array, so an an expression like
+-- `[[0, 1], [2, 3]][1][0]` turns into `[[0, 1][0], [2, 3][0]][1]`.
+-- This allows for easy constant index elimination and the generation of more efficient code.
 choiceTree :: Monad m => Expr -> StackM (Type, Expr) m Choice
 choiceTree (EConst n) = toC (SConst n)
 choiceTree (EOp t op a b) = toC (SOp t op (toChoice a) (toChoice b))
