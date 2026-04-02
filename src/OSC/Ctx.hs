@@ -355,21 +355,43 @@ abstractUnsaturatedApps = transformBiM go
     go e = pure e
 
 gatherAbstractions :: Choice Abs -> ST.State AbsEnv (Choice FuncRef)
-gatherAbstractions = transformBiM processAbstraction
-  where
-    processAbstraction :: SExpr Abs -> ST.State AbsEnv (SExpr FuncRef)
-    processAbstraction (SAbs t (Abs params bindings body)) = do
-      fr <- FuncRef <$> ST.gets (.nextFuncRef)
-      bindings' <- sequence [ (n, region,) <$> gatherAbstractions b | (n, region, b) <- bindings ]
-      body' <- gatherAbstractions body
+gatherAbstractions (CChoice t choices selector) = do
+  choices' <- traverse gatherAbstractions choices
+  selector' <- gatherAbstractions selector
+  pure $ CChoice t choices' selector'
+gatherAbstractions (CExpr idxs expr) = do
+  idxs' <- traverse (\(t, c) -> (t,) <$> gatherAbstractions c) idxs
+  expr' <- gatherAbstractionsExpr expr
+  pure $ CExpr idxs' expr'
 
-      ST.modify $ \st -> st
-        { nextFuncRef = st.nextFuncRef + 1
-        , funcRefMap = M.insert fr (Func t params bindings' body') st.funcRefMap
-        }
+gatherAbstractionsExpr :: SExpr Abs -> ST.State AbsEnv (SExpr FuncRef)
+gatherAbstractionsExpr (SConst n) = pure $ SConst n
+gatherAbstractionsExpr (SArr t choices) = do
+  choices' <- traverse gatherAbstractions choices
+  pure $ SArr t choices'
+gatherAbstractionsExpr (SOp t op a b) = do
+  a' <- gatherAbstractions a
+  b' <- gatherAbstractions b
+  pure $ SOp t op a' b'
+gatherAbstractionsExpr (SVar t ident) = pure $ SVar t ident
+gatherAbstractionsExpr (SAbs t (Abs params bindings body)) = do
+  fr <- FuncRef <$> ST.gets (.nextFuncRef)
+  bindings' <- sequence [ (n, region,) <$> gatherAbstractions b | (n, region, b) <- bindings ]
+  body' <- gatherAbstractions body
 
-      pure $ SAbs t fr
-    processAbstraction e = pure e
+  ST.modify $ \st -> st
+    { nextFuncRef = st.nextFuncRef + 1
+    , funcRefMap = M.insert fr (Func t params bindings' body') st.funcRefMap
+    }
+
+  pure $ SAbs t fr
+gatherAbstractionsExpr (SApp t f args) = do
+  f' <- gatherAbstractions f
+  args' <- traverse gatherAbstractions args
+  pure $ SApp t f' args'
+gatherAbstractionsExpr (SRec t delay body) = do
+  body' <- gatherAbstractions body
+  pure $ SRec t delay body'
 
 -- | Compute the free variables for each abstraction in the function map.
 --
