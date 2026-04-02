@@ -206,6 +206,7 @@ instance Show SExpr where
       showRegion ALocal = "local"
       showRegion AGlobal = "global"
   show (SApp _ f a) = show f <> "(" <> show a <> ")"
+  show (SRec t delay body) = "rec[" <> showType t <> ", delay=" <> show delay <> "](" <> show body <> ")"
   show (SFuncRef _ (FuncRef n)) = "funcref#" <> show n
 
 instance Show Choice where
