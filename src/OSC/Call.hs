@@ -143,7 +143,7 @@ allocGlobals = traverse $ \t -> calloc t AGlobal
 allocAndStore :: Map Ident Ref -> Type -> Choice -> CallM Ref
 allocAndStore globals t e = do
   ref <- calloc t ALocal
-  R.local (const $ newEnv t ref) (sexpr globals e)
+  R.local (const $ newEnv t ref) (retvalue globals e)
   pure ref
 
 ret :: Type -> Ref -> CallM ()
@@ -151,69 +151,63 @@ ret t ref = do
   env <- R.ask
   ccopyRef t ref env.ret env.lens
 
-rvalue :: Map Ident Ref -> Choice -> CallM (Type, Ref)
-rvalue _ (CExpr _ (SConst n)) = pure (numberType n, RConst n)
-rvalue _ (CExpr _ (SFuncRef t fr)) = pure (t, RFuncRef fr)
-rvalue globals (CExpr _ (SVar t n))
+rhsvalue :: Map Ident Ref -> Choice -> CallM (Type, Ref)
+rhsvalue _ (CExpr _ (SConst n)) = pure (numberType n, RConst n)
+rhsvalue _ (CExpr _ (SFuncRef t fr)) = pure (t, RFuncRef fr)
+rhsvalue globals (CExpr _ (SVar t n))
   | Just ref <- M.lookup n globals = pure (t, ref)
-  | otherwise = error "rvalue: unknown global (this is a bug)"
-rvalue globals (CExpr _ (SVarNS t n))
-  | Just ref <- M.lookup n globals = pure (t, ref)
-  | otherwise = error "rvalue: unknown global (this is a bug)"
-rvalue globals e@(CExpr _ (SArr t _)) = (t,) <$> allocAndStore globals t e
-rvalue _ (CExpr _ (SAbs _ _ _)) = error "rvalue: SAbs: (this is a bug)"
-rvalue globals e@(CExpr _ (SApp t _ _)) = (t,) <$> allocAndStore globals t e
+  | otherwise = error "rhsvalue: unknown global (this is a bug)"
+rhsvalue globals e@(CExpr _ (SArr t _)) = (t,) <$> allocAndStore globals t e
+rhsvalue globals e@(CExpr _ (SOp t _ _ _)) = (t,) <$> allocAndStore globals t e
+rhsvalue _ (CExpr _ (SAbs _ _ _ _)) = error "rhsvalue: SAbs: (this is a bug)"
+rhsvalue globals e@(CExpr _ (SApp t _ _)) = (t,) <$> allocAndStore globals t e
+rhsvalue globals e@(CExpr _ (SRec t _ _)) = undefined
 
-rvalue _ (CChoice _ _ _) = undefined
-rvalue _ (CRec _ _ _ _ _) = undefined
+rhsvalue _ (CChoice _ _ _) = undefined
 
-sexpr :: Map Ident Ref -> Choice -> CallM ()
-sexpr globals e@(CExpr [] (SConst _)) = rvalue globals e >>= uncurry ret
-sexpr globals e@(CExpr [] (SFuncRef _ _)) = rvalue globals e >>= uncurry ret
-sexpr globals e@(CExpr [] (SVar _ _)) = rvalue globals e >>= uncurry ret
-sexpr globals e@(CExpr [] (SVarNS _ _)) = rvalue globals e >>= uncurry ret
-sexpr globals (CExpr [] (SArr _ elems)) = sequence_
-  [ R.local (focusTo i) $ sexpr globals elem
+retvalue :: Map Ident Ref -> Choice -> CallM ()
+retvalue globals e@(CExpr [] (SConst _)) = rhsvalue globals e >>= uncurry ret
+retvalue globals e@(CExpr [] (SFuncRef _ _)) = rhsvalue globals e >>= uncurry ret
+retvalue globals e@(CExpr [] (SVar _ _)) = rhsvalue globals e >>= uncurry ret
+retvalue globals (CExpr [] (SArr _ elems)) = sequence_
+  [ R.local (focusTo i) $ retvalue globals elem
   | (i, elem) <- zip [0..] elems
   ]
-sexpr _ (CExpr _ (SArr _ _)) = error "sexpr: SArr: non empty selection indices (this is a bug)"
-sexpr globals (CExpr [] (SOp _ op a b)) = do
-  (_, aref) <- rvalue globals a
-  (_, bref) <- rvalue globals b
+retvalue _ (CExpr _ (SArr _ _)) = error "retvalue: SArr: non empty selection indices (this is a bug)"
+retvalue globals (CExpr [] (SOp _ op a b)) = do
+  (_, aref) <- rhsvalue globals a
+  (_, bref) <- rhsvalue globals b
   
   R.ask >>= \env -> cbinOp op aref bref env.ret
 
-sexpr _ (CExpr _ (SOp _ _ _ _)) = error "sexpr: SOp: non empty selection indices (this is a bug)"
-sexpr _ (CExpr _ (SAbs _ _ _)) = error "sexpr: SAbs: (this is a bug)"
+retvalue _ (CExpr _ (SOp _ _ _ _)) = error "retvalue: SOp: non empty selection indices (this is a bug)"
+retvalue _ (CExpr _ (SAbs _ _ _ _)) = error "retvalue: SAbs: (this is a bug)"
 
-sexpr globals (CExpr _ (SApp _ f as)) = do -- TODO: sel indices
-  (_, fref) <- rvalue globals f
-  arefs <- traverse (rvalue globals) as
+retvalue globals (CExpr _ (SApp _ f as)) = do -- TODO: sel indices
+  (_, fref) <- rhsvalue globals f
+  arefs <- traverse (rhsvalue globals) as
     
   R.ask >>= \env -> ccall fref (map snd arefs) env.ret
 
 -- General selection expression
-sexpr globals (CExpr idxs cexpr) = do
-  refs <- sequence [ rvalue globals idx | (_, idx) <- idxs ]
-  R.local (focusFrom $ fmap snd refs) (sexpr globals (CExpr [] cexpr))
+retvalue globals (CExpr idxs cexpr) = do
+  refs <- sequence [ rhsvalue globals idx | (_, idx) <- idxs ]
+  R.local (focusFrom $ fmap snd refs) (retvalue globals (CExpr [] cexpr))
 
-sexpr globals (CChoice _ chs sel) = do
+retvalue globals (CChoice _ chs sel) = do
   env <- R.ask
 
-  (_, sref) <- rvalue globals sel
+  (_, sref) <- rhsvalue globals sel
   recif env chs sref 0
   where
     -- TODO: binary tree if
     recif _ [] _ _ = error "recif: no choice (this is a bug)"
-    recif _ [ch] _ _ = sexpr globals ch
+    recif _ [ch] _ _ = retvalue globals ch
     recif env (ch:chs) sref idx = do
       cond <- calloc TI32 ALocal
       cbinOp Eq sref (RConst (I32 idx)) cond
 
-      cif cond (sexpr globals ch) (recif env chs sref (idx + 1))
-
--- TODO
-sexpr globals (CRec t delay n ini body) = sexpr globals body
+      cif cond (retvalue globals ch) (recif env chs sref (idx + 1))
 
 -- TODO: oversampling just means that we insert some stateful code around the oversampled function (which we should always inline when generating code; this can happen directly in the codegen)
 --- https://github.com/juce-framework/JUCE/blob/master/modules/juce_dsp/processors/juce_Oversampling.cpp
