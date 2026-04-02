@@ -399,9 +399,7 @@ instance Monoid GlobalsEnv where mempty = GlobalsEnv mempty mempty
 markCapturedBindings :: Map FuncRef (Set Ident) -> Map FuncRef Abs -> Unique (Map FuncRef Abs, GlobalsEnv)
 markCapturedBindings freeVarMap funcRefMap = do
   (funcRefMapWithGlobalBindings, genv) <- W.runWriterT (traverse go funcRefMap)
-  pure ( fmap (transformBi (substituteVars genv.substMap)) funcRefMapWithGlobalBindings
-       , genv
-       )
+  pure (funcRefMapWithGlobalBindings, genv)
   where
     go :: Abs -> W.WriterT GlobalsEnv Unique Abs
     go abs@(Abs t params bindings body) = do
@@ -411,26 +409,29 @@ markCapturedBindings freeVarMap funcRefMap = do
         , S.member n fvs
         ]
       
-      let bindings' = mkBindings capturedParams
+      let substMap = M.fromList [ (o, n) | (_, o, n) <- capturedParams ]
+      
+      -- Apply substitution to existing bindings and body BEFORE adding global bindings
+      let bindings' = [ if S.member n fvs then (n, AGlobal, substituteVars substMap body) else (n, r, substituteVars substMap body)
+                      | (n, r, body) <- bindings
+                      ]
+      let body' = substituteVars substMap body
+      
+      -- Now add the global bindings for captured params (these won't be substituted)
+      let globalBindings = [ (n, AGlobal, CExpr [] (SVar t o)) | (t, o, n) <- capturedParams ]
+      let allBindings = bindings' <> globalBindings
       
       W.tell $ GlobalsEnv
-        { substMap = M.fromList [ (o, n) | (_, o, n) <- capturedParams ]
+        { substMap = substMap
         , globals = mconcat
             [ M.fromList [ (n, ptype) | (ptype, _, n) <- capturedParams ]
-            , M.fromList [ (n, choiceType e) | (n, AGlobal, e) <- bindings' ]
+            , M.fromList [ (n, choiceType e) | (n, AGlobal, e) <- allBindings ]
             ] 
         }
 
-      pure $ Abs t params bindings' body
+      pure $ Abs t params allBindings body'
       where
         fvs = transientFreeVars abs
-
-        mkBindings capturedParams = mconcat
-          [ [ if S.member n fvs then (n, AGlobal, body) else b
-            | b@(n, _, body) <- bindings
-            ]
-          , [ (n, AGlobal, CExpr [] (SVarNS t o)) | (t, o, n) <- capturedParams ] 
-          ]
 
     -- We are only interested in free (escaping) variables only of escaping closures
     -- (i.e. those that may be returned).
@@ -462,6 +463,7 @@ markCapturedBindings freeVarMap funcRefMap = do
     substituteVars subst = transformBi substVar
       where
         substVar (SVar t n) = SVar t (M.findWithDefault n n subst)
+        substVar (SVarNS t n) = SVarNS t (M.findWithDefault n n subst)
         substVar e = e
 
 --------------------------------------------------------------------------------
