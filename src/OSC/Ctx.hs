@@ -86,7 +86,7 @@ data Expr
   -- NOTE: The (return) type of a recursive expression can not contain abstractions
   -- in order to simplify the logic and not require an initial value. It wouldn't make
   -- much sense generally anyway.
-  | ERec Type {- delay -} Int Ident Expr {- body -} Expr
+  | ERec Type {- delay -} Int {- must be of type abstraction -} Expr
   deriving Show
 
 exprType :: Expr -> Type
@@ -97,7 +97,7 @@ exprType (EVar t _) = t
 exprType (EAbs t _ _ _) = t
 exprType (EApp t _ _) = t
 exprType (ESelect t _ _) = t
-exprType (ERec t _ _ _ _) = t
+exprType (ERec t _ _) = t
 
 --------------------------------------------------------------------------------
 
@@ -150,6 +150,8 @@ data SExpr
   | SAbs Type {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Choice)] Choice
   | SApp Type Choice [Choice]
 
+  | SRec Type {- delay -} Int {- must be of type abstraction -} Choice
+
   | SFuncRef Type FuncRef
   deriving Data
 
@@ -162,12 +164,10 @@ newtype CanFloat = CanFloat Bool
 data Choice
   = CChoice Type [Choice] {- selectors -} Choice
   | CExpr [(Type, Choice)] SExpr -- selection indices that flow into the inner expression
-  | CRec Type {- delay -} Int Ident {- init value -} Choice Choice
   deriving Data
 
 choiceType :: Choice -> Type
 choiceType (CChoice t _ _) = t
-choiceType (CRec t _ _ _ _) = t
 choiceType (CExpr idxs expr) = peelOffIndices (length idxs) (sexprType expr)
   where
     peelOffIndices :: Int -> Type -> Type
@@ -183,6 +183,7 @@ sexprType (SVar t _) = t
 sexprType (SVarNS t _) = t
 sexprType (SAbs t _ _ _) = t
 sexprType (SApp t _ _) = t
+sexprType (SRec t _ _) = t
 sexprType (SFuncRef t _) = t
 
 --------------------------------------------------------------------------------
@@ -215,8 +216,6 @@ instance Show Choice where
     show expr <> " @ [" <> intercalate ", " (map showIdxPair idxs) <> "]"
     where
       showIdxPair (t, idx) = showType t <> "[" <> show idx <> "]"
-  show (CRec t n (Ident d) ini body) = 
-    "rec[" <> showType t <> ", " <> show n <> "] |" <> d <> " = " <> show ini <> "| -> " <> show body
 
 instance Show Type where
   show = showType
@@ -268,6 +267,7 @@ choiceTree (EOp t op a b) = toC (SOp t op (toChoice a) (toChoice b))
 choiceTree (EVar t n) = toC (SVar t n)
 choiceTree (EApp t f as) = toC (SApp t (toChoice f) (fmap toChoice as))
 choiceTree (EAbs t params bs e) = toC (SAbs t params (map (second toChoice) [ (n, ALocal, b) | (n, b) <- bs ]) (toChoice e))
+choiceTree (ERec t d e) = toC (SRec t d (toChoice e))
 choiceTree (EArr t es) = do
   s <- pop
   case s of
@@ -281,7 +281,6 @@ choiceTree (ESelect t e idx) = do
   c <- choiceTree e
   _ <- pop
   pure c
-choiceTree (ERec t n d i e) = CRec t n d <$> choiceTree i <*> choiceTree e
 
 --------------------------------------------------------------------------------
 
