@@ -61,6 +61,7 @@ data Ref
 -- NOTE: a literal array paired with a selection is a choice
 
 data Lens = Lens { from :: [Ref], to :: [Int] }
+  deriving Show
 
 data Env = Env
   { typ :: Type
@@ -85,6 +86,7 @@ data Statement
   | SCall Ref [Ref] Ref
   | SBinOp Op Ref Ref Ref
   | SFor {- counter -} Ref {- initial -} Int {- steps -} Int {- step -} Int [Statement]
+  deriving Show
 
 data Allocation = Allocation Type Idx
 
@@ -103,11 +105,8 @@ cextract m = do
 
 calloc :: Type -> AllocRegion -> CallM Ref
 calloc t region = case t of
+  TNumber _ -> fmap RVar $ lift $ lift (allocInRegion region)
   TArr _ _-> fmap (RArray t) $ lift $ lift (allocInRegion region)
-  TI32 -> fmap RVar $ lift $ lift (allocInRegion region)
-  TF32 -> fmap RVar $ lift $ lift (allocInRegion region)
-  TI64 -> fmap RVar $ lift $ lift (allocInRegion region)
-  TF64 -> fmap RVar $ lift $ lift (allocInRegion region)
   TAbs _ _ -> error "alloc: SAbs (this is a bug)"
   where
     allocInRegion :: AllocRegion -> ST.State AllocState Idx
@@ -131,7 +130,7 @@ cif r t e = do
 
 cfor :: Int -> Int -> Int -> (Ref -> CallM ()) -> CallM ()
 cfor initial steps step f = do
-  i <- calloc TI32 ALocal
+  i <- calloc (TNumber TI32) ALocal
   f' <- cextract (f i)
   lift $ W.tell [SFor i initial steps step f']
 
@@ -161,9 +160,8 @@ rhsvalue globals e@(CExpr _ (SArr t _)) = (t,) <$> allocAndStore globals t e
 rhsvalue globals e@(CExpr _ (SOp t _ _ _)) = (t,) <$> allocAndStore globals t e
 rhsvalue _ (CExpr _ (SAbs _ _ _ _)) = error "rhsvalue: SAbs: (this is a bug)"
 rhsvalue globals e@(CExpr _ (SApp t _ _)) = (t,) <$> allocAndStore globals t e
-rhsvalue globals e@(CExpr _ (SRec t _ _)) = undefined
-
-rhsvalue _ (CChoice _ _ _) = undefined
+rhsvalue globals e@(CExpr _ (SRec t _ _)) = (t,) <$> allocAndStore globals t e
+rhsvalue globals e@(CChoice t _ _) = (t,) <$> allocAndStore globals t e
 
 retvalue :: Map Ident Ref -> Choice -> CallM ()
 retvalue globals e@(CExpr [] (SConst _)) = rhsvalue globals e >>= uncurry ret
@@ -173,7 +171,7 @@ retvalue globals (CExpr [] (SArr _ elems)) = sequence_
   [ R.local (focusTo i) $ retvalue globals elem
   | (i, elem) <- zip [0..] elems
   ]
-retvalue _ (CExpr _ (SArr _ _)) = error "retvalue: SArr: non empty selection indices (this is a bug)"
+retvalue _ (CExpr _ (SArr _ _)) = error "retvalue: SArr: non empty selection indices instead of choice (this is a bug)"
 retvalue globals (CExpr [] (SOp _ op a b)) = do
   (_, aref) <- rhsvalue globals a
   (_, bref) <- rhsvalue globals b
@@ -183,11 +181,21 @@ retvalue globals (CExpr [] (SOp _ op a b)) = do
 retvalue _ (CExpr _ (SOp _ _ _ _)) = error "retvalue: SOp: non empty selection indices (this is a bug)"
 retvalue _ (CExpr _ (SAbs _ _ _ _)) = error "retvalue: SAbs: (this is a bug)"
 
-retvalue globals (CExpr _ (SApp _ f as)) = do -- TODO: sel indices
+retvalue globals (CExpr [] (SApp _ f as)) = do
   (_, fref) <- rhsvalue globals f
   arefs <- traverse (rhsvalue globals) as
     
   R.ask >>= \env -> ccall fref (map snd arefs) env.ret
+
+retvalue globals (CExpr [] (SRec t delay body))
+  | typeContainsAbs t = error "retvalue: SRec: type contains abstraction"
+  | otherwise = do
+      delayLines <- calloc t AGlobal
+      undefined
+  where
+    typeContainsAbs (TNumber _) = False
+    typeContainsAbs (TArr t _) = typeContainsAbs t
+    typeContainsAbs (TAbs _ _) = True
 
 -- General selection expression
 retvalue globals (CExpr idxs cexpr) = do
@@ -204,7 +212,7 @@ retvalue globals (CChoice _ chs sel) = do
     recif _ [] _ _ = error "recif: no choice (this is a bug)"
     recif _ [ch] _ _ = retvalue globals ch
     recif env (ch:chs) sref idx = do
-      cond <- calloc TI32 ALocal
+      cond <- calloc (TNumber TI32) ALocal
       cbinOp Eq sref (RConst (I32 idx)) cond
 
       cif cond (retvalue globals ch) (recif env chs sref (idx + 1))

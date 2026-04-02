@@ -6,6 +6,8 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeAbstractions #-}
+{-# LANGUAGE TypeApplications #-}
 
 module OSC.Ctx where
 
@@ -192,6 +194,7 @@ showAbs t (Abs params bs body) =
   where
     showParams [] = "()"
     showParams ps = "(" <> intercalate ", " (map (\(Ident n) -> n) ps) <> ")"
+
     showBindings [] = ""
     showBindings bindings = "{ " <> intercalate "; " (map showBinding bindings) <> " }"
     showBinding (Ident n, region, expr) = 
@@ -208,7 +211,7 @@ instance Show (SExpr Abs) where
   show (SApp _ f a) = show f <> "(" <> show a <> ")"
   show (SRec t delay body) = "rec[" <> showType t <> ", delay=" <> show delay <> "](" <> show body <> ")"
 
-instance Show abs => Show (Choice abs) where
+instance Show (Choice Abs) where
   show (CChoice t cs idx) = 
     "choice[" <> showType t <> "](" <> intercalate " | " (map show cs) <> ")[" <> show idx <> "]"
   show (CExpr [] expr) = show expr
@@ -429,8 +432,8 @@ gatherFreeVars funcRefMap = freeVarMap
 
         allVars :: [(Ident, AllocRegion, Choice FuncRef)] -> Choice FuncRef -> Set Ident
         allVars bindings body = mconcat $ fmap mconcat
-          [ [ S.fromList [ n | SVar _ n <- universeBi body ] ]
-          , [ S.fromList [ n | (_, _, b) <- bindings, SVar _ n <- universeBi b ] ]
+          [ [ S.fromList [ n | SVar @FuncRef _ n <- universeBi body ] ]
+          , [ S.fromList [ n | (_, _, b) <- bindings, SVar @FuncRef _ n <- universeBi b ] ]
 
           -- Gather transient free vars (by lazily referencing freeVarMap; this works because no mutual recursion between bindings is allowed)
           , [ fvs | SAbs _ fr <- universeBi body, Just fvs <- [ M.lookup fr freeVarMap ] ]
@@ -548,6 +551,7 @@ markCapturedBindings freeVarMap funcRefMap = do
             | Just _ <- M.lookup n substMap = (n, region, body)
             | otherwise = (n, region, transformBi substVar body)
 
+          substVar :: SExpr FuncRef -> SExpr FuncRef
           substVar (SVar t n) = SVar t (M.findWithDefault n n substMap)
           substVar e = e
       _ -> a
@@ -684,6 +688,6 @@ testChoice6 = CExpr [] $ SAbs (TAbs [TNumber TI32, TNumber TI32] (TNumber TI32))
 testMark :: Choice Abs -> (Map FuncRef Func, GlobalsEnv)
 testMark e = runUnique $ do
   e' <- abstractUnsaturatedApps e
-  let (e'', env) = ST.runState (gatherAbstractions e') (AbsEnv mempty mempty)
+  let (e'', env) = ST.runState (gatherAbstractions e') (AbsEnv mempty 0)
   let freeVarMap = gatherFreeVars env.funcRefMap
   markCapturedBindings freeVarMap env.funcRefMap
