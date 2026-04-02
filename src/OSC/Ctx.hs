@@ -145,7 +145,6 @@ data SExpr
   | SOp Type Op Choice Choice
 
   | SVar Type Ident
-  | SVarNS Type Ident -- shouldn't be substituted
 
   | SAbs Type {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Choice)] Choice
   | SApp Type Choice [Choice]
@@ -180,7 +179,6 @@ sexprType (SConst n) = numberType n
 sexprType (SArr t _) = t
 sexprType (SOp t _ _ _) = t
 sexprType (SVar t _) = t
-sexprType (SVarNS t _) = t
 sexprType (SAbs t _ _ _) = t
 sexprType (SApp t _ _) = t
 sexprType (SRec t _ _) = t
@@ -193,7 +191,6 @@ instance Show SExpr where
   show (SArr t cs) = "[" <> showType t <> ": " <> intercalate ", " (map show cs) <> "]"
   show (SOp _ op a b) = "(" <> show a <> " " <> showOp op <> " " <> show b <> ")"
   show (SVar _ (Ident n)) = n
-  show (SVarNS _ (Ident n)) = n
   show (SAbs t params bs body) = 
     "λ" <> showParams params <> " : " <> showType t <> " " <> showBindings bs <> " = " <> show body
     where
@@ -399,7 +396,7 @@ instance Monoid GlobalsEnv where mempty = GlobalsEnv mempty mempty
 markCapturedBindings :: Map FuncRef (Set Ident) -> Map FuncRef Abs -> Unique (Map FuncRef Abs, GlobalsEnv)
 markCapturedBindings freeVarMap funcRefMap = do
   (funcRefMapWithGlobalBindings, genv) <- W.runWriterT (traverse go funcRefMap)
-  pure (funcRefMapWithGlobalBindings, genv)
+  pure (fmap (substituteVars genv.substMap) funcRefMapWithGlobalBindings, genv)
   where
     go :: Abs -> W.WriterT GlobalsEnv Unique Abs
     go abs@(Abs t params bindings body) = do
@@ -409,61 +406,43 @@ markCapturedBindings freeVarMap funcRefMap = do
         , S.member n fvs
         ]
       
-      let substMap = M.fromList [ (o, n) | (_, o, n) <- capturedParams ]
-      
-      -- Apply substitution to existing bindings and body BEFORE adding global bindings
-      let bindings' = [ if S.member n fvs then (n, AGlobal, substituteVars substMap body) else (n, r, substituteVars substMap body)
-                      | (n, r, body) <- bindings
-                      ]
-      let body' = substituteVars substMap body
-      
-      -- Now add the global bindings for captured params (these won't be substituted)
-      let globalBindings = [ (n, AGlobal, CExpr [] (SVar t o)) | (t, o, n) <- capturedParams ]
-      let allBindings = bindings' <> globalBindings
+      let bindings' = mconcat
+            [ [ if S.member n fvs then (n, AGlobal, body) else (n, r, body)
+              | (n, r, body) <- bindings
+              ]
+            , [ (n, AGlobal, CExpr [] (SVar t o)) | (t, o, n) <- capturedParams ]
+            ]
       
       W.tell $ GlobalsEnv
-        { substMap = substMap
+        { substMap = M.fromList [ (o, n) | (_, o, n) <- capturedParams ]
         , globals = mconcat
             [ M.fromList [ (n, ptype) | (ptype, _, n) <- capturedParams ]
-            , M.fromList [ (n, choiceType e) | (n, AGlobal, e) <- allBindings ]
+            , M.fromList [ (n, choiceType e) | (n, AGlobal, e) <- bindings' ]
             ] 
         }
 
-      pure $ Abs t params allBindings body'
+      pure $ Abs t params bindings' body
       where
         fvs = transientFreeVars abs
 
-    -- We are only interested in free (escaping) variables only of escaping closures
-    -- (i.e. those that may be returned).
-    evalToFuncRefs :: Map Ident Choice -> Choice -> [FuncRef]
-    evalToFuncRefs _ (CExpr _ (SConst _)) = []
-    evalToFuncRefs bindings (CExpr _ (SArr _ elems)) = concatMap (evalToFuncRefs bindings) elems
-    evalToFuncRefs _ (CExpr _ (SOp _ _ _ _)) = []
-    evalToFuncRefs _ (CExpr _ (SFuncRef _ fr)) = [fr]
-    evalToFuncRefs bindings (CExpr _ (SVar _ n))
-      | Just ch <- M.lookup n bindings = evalToFuncRefs bindings ch
-      | otherwise = []
-    evalToFuncRefs bindings (CExpr _ (SVarNS _ n))
-      | Just ch <- M.lookup n bindings = evalToFuncRefs bindings ch
-      | otherwise = []
-    evalToFuncRefs _ (CExpr _ (SAbs _ _ _ _)) = error "evalToFuncRefs: SAbs (this is a bug)"
-    evalToFuncRefs bindings (CExpr _ (SApp _ f _)) = evalToFuncRefs bindings f
-    evalToFuncRefs _ (CExpr _ (SRec _ _ _)) = [] -- Recs can't return abstractions
-    evalToFuncRefs bindings (CChoice _ chs _) = concatMap (evalToFuncRefs bindings) chs
-
     transientFreeVars :: Abs -> Set Ident
-    transientFreeVars (Abs _ _ bindings body) = mconcat
+    transientFreeVars abs = mconcat
       [ fvs
-      | fr <- evalToFuncRefs (M.fromList [ (k, v) | (k, _, v) <- bindings ]) body
+      | SFuncRef _ fr <- universeBi abs
       , Just fvs <- [ M.lookup fr freeVarMap ]
       ]
 
-    -- Substitute variable references using uniplate
-    substituteVars :: Map Ident Ident -> Choice -> Choice
-    substituteVars subst = transformBi substVar
+    substituteVars :: Map Ident Ident -> Abs -> Abs
+    substituteVars substMap (Abs t params bindings body) = Abs t params
+      (fmap substBinding bindings)
+      (transformBi substVar body)
       where
-        substVar (SVar t n) = SVar t (M.findWithDefault n n subst)
-        substVar (SVarNS t n) = SVarNS t (M.findWithDefault n n subst)
+        substBinding (n, region, body)
+          -- Don't substitute the RHS of the captured param binding!
+          | Just _ <- M.lookup n substMap = (n, region, body)
+          | otherwise = (n, region, transformBi substVar body)
+
+        substVar (SVar t n) = SVar t (M.findWithDefault n n substMap)
         substVar e = e
 
 --------------------------------------------------------------------------------
