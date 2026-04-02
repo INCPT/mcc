@@ -162,7 +162,7 @@ newtype CanFloat = CanFloat Bool
   deriving (Data, Show)
 
 data Choice
-  = CChoice Type [Choice] {- selectors -} Choice
+  = CChoice Type [Choice] {- selector -} Choice
   | CExpr [(Type, Choice)] SExpr -- selection indices that flow into the inner expression
   deriving Data
 
@@ -432,10 +432,28 @@ markCapturedBindings freeVarMap funcRefMap = do
           , [ (n, AGlobal, CExpr [] (SVarNS t o)) | (t, o, n) <- capturedParams ] 
           ]
 
+    -- We are only interested in free (escaping) variables only of escaping closures
+    -- (i.e. those that may be returned).
+    evalToFuncRefs :: Map Ident Choice -> Choice -> [FuncRef]
+    evalToFuncRefs _ (CExpr _ (SConst _)) = []
+    evalToFuncRefs bindings (CExpr _ (SArr _ elems)) = concatMap (evalToFuncRefs bindings) elems
+    evalToFuncRefs _ (CExpr _ (SOp _ _ _ _)) = []
+    evalToFuncRefs _ (CExpr _ (SFuncRef _ fr)) = [fr]
+    evalToFuncRefs bindings (CExpr _ (SVar _ n))
+      | Just ch <- M.lookup n bindings = evalToFuncRefs bindings ch
+      | otherwise = []
+    evalToFuncRefs bindings (CExpr _ (SVarNS _ n))
+      | Just ch <- M.lookup n bindings = evalToFuncRefs bindings ch
+      | otherwise = []
+    evalToFuncRefs _ (CExpr _ (SAbs _ _ _ _)) = error "evalToFuncRefs: SAbs (this is a bug)"
+    evalToFuncRefs bindings (CExpr _ (SApp _ f _)) = evalToFuncRefs bindings f
+    evalToFuncRefs _ (CExpr _ (SRec _ _ _)) = [] -- Recs can't return abstractions
+    evalToFuncRefs bindings (CChoice _ chs _) = concatMap (evalToFuncRefs bindings) chs
+
     transientFreeVars :: Abs -> Set Ident
-    transientFreeVars abs = mconcat
+    transientFreeVars (Abs _ _ bindings body) = mconcat
       [ fvs
-      | SFuncRef _ fr <- universeBi abs
+      | fr <- evalToFuncRefs (M.fromList [ (k, v) | (k, _, v) <- bindings ]) body
       , Just fvs <- [ M.lookup fr freeVarMap ]
       ]
 
