@@ -26,7 +26,7 @@ import Data.Generics.Str
 data TNumber = TI32 | TF32 | TI64 | TF64 deriving Data
 
 data Type = TNumber TNumber | TArr Type {- length -} Int | TAbs [Type] Type
-  deriving (Data)
+  deriving Data
 
 sizeOfType :: Type -> Int
 sizeOfType (TNumber TI32) = 4
