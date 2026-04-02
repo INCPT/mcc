@@ -188,30 +188,30 @@ sexprType (SRec t _ _) = t
 
 --------------------------------------------------------------------------------
 
-showAbs :: Type -> Abs -> String
-showAbs t (Abs params bs body) = 
-  "λ" <> showParams params <> " : " <> showType t <> " " <> showBindings bs <> " = " <> show body
-  where
-    showParams [] = "()"
-    showParams ps = "(" <> intercalate ", " (map (\(Ident n) -> n) ps) <> ")"
+instance Show Abs where
+  show (Abs params bs body) = 
+    "λ" <> showParams params <> " " <> showBindings bs <> " = " <> show body
+    where
+      showParams [] = "()"
+      showParams ps = "(" <> intercalate ", " (map (\(Ident n) -> n) ps) <> ")"
+  
+      showBindings [] = ""
+      showBindings bindings = "{ " <> intercalate "; " (map showBinding bindings) <> " }"
+      showBinding (Ident n, region, expr) = 
+        n <> "@" <> showRegion region <> " = " <> show expr
+      showRegion ALocal = "local"
+      showRegion AGlobal = "global"
 
-    showBindings [] = ""
-    showBindings bindings = "{ " <> intercalate "; " (map showBinding bindings) <> " }"
-    showBinding (Ident n, region, expr) = 
-      n <> "@" <> showRegion region <> " = " <> show expr
-    showRegion ALocal = "local"
-    showRegion AGlobal = "global"
-
-instance Show (SExpr Abs) where
+instance Show abs => Show (SExpr abs) where
   show (SConst n) = show n
   show (SArr t cs) = "[" <> showType t <> ": " <> intercalate ", " (map show cs) <> "]"
   show (SOp _ op a b) = "(" <> show a <> " " <> showOp op <> " " <> show b <> ")"
   show (SVar _ (Ident n)) = n
-  show (SAbs t abs) = showAbs t abs
+  show (SAbs _ abs) = show abs
   show (SApp _ f a) = show f <> "(" <> show a <> ")"
   show (SRec t delay body) = "rec[" <> showType t <> ", delay=" <> show delay <> "](" <> show body <> ")"
 
-instance Show (Choice Abs) where
+instance Show abs => Show (Choice abs) where
   show (CChoice t cs idx) = 
     "choice[" <> showType t <> "](" <> intercalate " | " (map show cs) <> ")[" <> show idx <> "]"
   show (CExpr [] expr) = show expr
