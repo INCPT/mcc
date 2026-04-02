@@ -386,7 +386,7 @@ gatherFreeVars funcRefMap = freeVarMap
 --------------------------------------------------------------------------------
 
 data GlobalsEnv = GlobalsEnv
-  { substMap :: Map Ident Ident
+  { substMap :: Map FuncRef (Map Ident Ident)
   , globals :: Map Ident Type
   }
 
@@ -396,25 +396,40 @@ instance Monoid GlobalsEnv where mempty = GlobalsEnv mempty mempty
 markCapturedBindings :: Map FuncRef (Set Ident) -> Map FuncRef Abs -> Unique (Map FuncRef Abs, GlobalsEnv)
 markCapturedBindings freeVarMap funcRefMap = do
   (funcRefMapWithGlobalBindings, genv) <- W.runWriterT (traverse go funcRefMap)
-  pure (fmap (substituteVars genv.substMap) funcRefMapWithGlobalBindings, genv)
+  pure (M.mapWithKey (substituteVars genv.substMap) funcRefMapWithGlobalBindings, genv)
   where
     go :: Abs -> W.WriterT GlobalsEnv Unique Abs
     go abs@(Abs t params bindings body) = do
+      let freeVarsForClosure =
+            [ (fr, fvs)
+            | SFuncRef _ fr <- universeBi abs
+            , Just fvs <- [ M.lookup fr freeVarMap ]
+            ]
+      let freeVars = mconcat (fmap snd freeVarsForClosure)
+
       capturedParams <- sequence
         [ (ptype, n,) <$> lift fresh
         | (ptype, n) <- zip (paramTypes t) params
-        , S.member n fvs
+        , S.member n freeVars
         ]
+
+      let paramSubsts = M.fromList [ (n, subst) | (_, n, subst) <- capturedParams ]
       
       let bindings' = mconcat
-            [ [ if S.member n fvs then (n, AGlobal, body) else (n, r, body)
+            [ [ if S.member n freeVars then (n, AGlobal, body) else (n, r, body)
               | (n, r, body) <- bindings
               ]
-            , [ (n, AGlobal, CExpr [] (SVar t o)) | (t, o, n) <- capturedParams ]
+            , [ (subst, AGlobal, CExpr [] (SVar t n)) | (t, n, subst) <- capturedParams ]
             ]
       
       W.tell $ GlobalsEnv
-        { substMap = M.fromList [ (o, n) | (_, o, n) <- capturedParams ]
+        { substMap = M.fromListWith (<>)
+            [ (fr, M.singleton fv subst)
+            | (fr, fvs) <- freeVarsForClosure
+            , fv <- S.toList fvs
+            , Just subst <- [ M.lookup fv paramSubsts ]
+            ]
+
         , globals = mconcat
             [ M.fromList [ (n, ptype) | (ptype, _, n) <- capturedParams ]
             , M.fromList [ (n, choiceType e) | (n, AGlobal, e) <- bindings' ]
@@ -422,28 +437,21 @@ markCapturedBindings freeVarMap funcRefMap = do
         }
 
       pure $ Abs t params bindings' body
-      where
-        fvs = transientFreeVars abs
 
-    transientFreeVars :: Abs -> Set Ident
-    transientFreeVars abs = mconcat
-      [ fvs
-      | SFuncRef _ fr <- universeBi abs
-      , Just fvs <- [ M.lookup fr freeVarMap ]
-      ]
+    substituteVars :: Map FuncRef (Map Ident Ident) -> FuncRef -> Abs -> Abs
+    substituteVars frSubstMap fr a@(Abs t params bindings body) = case M.lookup fr frSubstMap of
+      Just substMap -> Abs t params
+        (fmap substBinding bindings)
+        (transformBi substVar body)
+        where
+          substBinding (n, region, body)
+            -- Don't substitute the RHS of the captured param binding!
+            | Just _ <- M.lookup n substMap = (n, region, body)
+            | otherwise = (n, region, transformBi substVar body)
 
-    substituteVars :: Map Ident Ident -> Abs -> Abs
-    substituteVars substMap (Abs t params bindings body) = Abs t params
-      (fmap substBinding bindings)
-      (transformBi substVar body)
-      where
-        substBinding (n, region, body)
-          -- Don't substitute the RHS of the captured param binding!
-          | Just _ <- M.lookup n substMap = (n, region, body)
-          | otherwise = (n, region, transformBi substVar body)
-
-        substVar (SVar t n) = SVar t (M.findWithDefault n n substMap)
-        substVar e = e
+          substVar (SVar t n) = SVar t (M.findWithDefault n n substMap)
+          substVar e = e
+      _ -> a
 
 --------------------------------------------------------------------------------
 
