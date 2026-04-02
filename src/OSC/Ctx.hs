@@ -364,6 +364,31 @@ gatherAbstractions = flip ST.runState (AbsEnv mempty 0) . transformBiM processAb
       pure $ SFuncRef t fr
     processAbstraction e = pure e
 
+-- | Compute the free variables for each abstraction in the function map.
+--
+-- Free variables are variables that are referenced but not bound by parameters or bindings.
+-- This includes both direct variable references (SVar) and transitive free variables from
+-- nested closures (via SFuncRef).
+--
+-- The computation is recursive: when a function contains a closure (SFuncRef), that closure's
+-- free variables are included in the parent function's free variables (unless they're bound
+-- by the parent's parameters or bindings). This allows us to track which variables need to
+-- be captured across multiple levels of nesting.
+--
+-- Example:
+--   function outer(x) {
+--     let y = 1;
+--     return function middle(z) {
+--       return function inner(w) {
+--         return x + y + z + w;  // inner's free vars: {x, y, z}
+--       }
+--     }
+--   }
+--
+-- Results:
+--   - inner's free vars: {x, y, z}
+--   - middle's free vars: {x, y} (includes inner's free vars minus middle's params/bindings)
+--   - outer's free vars: {} (all variables are bound by outer)
 gatherFreeVars :: Map FuncRef Abs -> Map FuncRef (Set Ident)
 gatherFreeVars funcRefMap = freeVarMap
   where
@@ -393,28 +418,68 @@ data GlobalsEnv = GlobalsEnv
 instance Semigroup GlobalsEnv where GlobalsEnv a b <> GlobalsEnv a' b' = GlobalsEnv (a <> a') (b <> b')
 instance Monoid GlobalsEnv where mempty = GlobalsEnv mempty mempty
 
+-- | Transform abstractions to handle captured parameters by creating global bindings.
+--
+-- This function implements closure conversion for captured parameters. When a nested closure
+-- references a parameter from an outer function, we need to make that parameter accessible
+-- to the closure. Since the target language (WASM) doesn't support closures natively, we:
+--
+-- 1. Create a global binding for each captured parameter (e.g., _captured_0 = x)
+-- 2. Mark any captured local bindings as global (they keep their original names)
+-- 3. Build a substitution map for each closure, mapping original param names to global names
+-- 4. Apply substitutions to each closure so it references the global bindings
+--
+-- Example transformation:
+--   function outer(x, y) {
+--     let z = 1;
+--     return function inner(a) {
+--       return x + z + a;  // inner captures param x and binding z
+--     }
+--   }
+--
+-- Becomes:
+--   function outer(x, y) {
+--     global _captured_0 = x;  // New global binding for captured param
+--     global z = 1;             // Existing binding marked as global
+--     return function inner(a) {
+--       return _captured_0 + z + a;  // References substituted
+--     }
+--   }
+--
+-- The substitution map tracks: inner -> {x -> _captured_0}
+-- Note that z doesn't need substitution since bindings keep their original names.
+--
+-- Returns:
+--   - Updated function map with global bindings and substitutions applied
+--   - GlobalsEnv containing the substitution map and global variable types
 markCapturedBindings :: Map FuncRef (Set Ident) -> Map FuncRef Abs -> Unique (Map FuncRef Abs, GlobalsEnv)
 markCapturedBindings freeVarMap funcRefMap = do
   (funcRefMapWithGlobalBindings, genv) <- W.runWriterT (traverse go funcRefMap)
   pure (M.mapWithKey (substituteVars genv.substMap) funcRefMapWithGlobalBindings, genv)
   where
+    -- Process a single function to create global bindings for captured parameters
     go :: Abs -> W.WriterT GlobalsEnv Unique Abs
     go abs@(Abs t params bindings body) = do
+      -- Find all closures defined in this function and their free variables
       let freeVarsForClosure =
             [ (fr, fvs)
             | SFuncRef _ fr <- universeBi abs
             , Just fvs <- [ M.lookup fr freeVarMap ]
             ]
+      -- Union of all free variables from nested closures
       let freeVars = mconcat (fmap snd freeVarsForClosure)
 
+      -- Create fresh global names for each captured parameter
       capturedParams <- sequence
         [ (ptype, n,) <$> lift fresh
         | (ptype, n) <- zip (paramTypes t) params
         , S.member n freeVars
         ]
 
+      -- Build substitution map: original param name -> fresh global name
       let paramSubsts = M.fromList [ (n, subst) | (_, n, subst) <- capturedParams ]
       
+      -- Update bindings: mark captured bindings as global, add new global bindings for captured params
       let bindings' = mconcat
             [ [ if S.member n freeVars then (n, AGlobal, body) else (n, r, body)
               | (n, r, body) <- bindings
@@ -422,8 +487,11 @@ markCapturedBindings freeVarMap funcRefMap = do
             , [ (subst, AGlobal, CExpr [] (SVar t n)) | (t, n, subst) <- capturedParams ]
             ]
       
+      -- Record substitutions and global types
       W.tell $ GlobalsEnv
         { substMap = M.fromListWith (<>)
+            -- For each closure and each of its free variables that's a captured param,
+            -- record the substitution that should be applied to that closure
             [ (fr, M.singleton fv subst)
             | (fr, fvs) <- freeVarsForClosure
             , fv <- S.toList fvs
@@ -438,6 +506,7 @@ markCapturedBindings freeVarMap funcRefMap = do
 
       pure $ Abs t params bindings' body
 
+    -- Apply substitutions to a specific function based on its FuncRef
     substituteVars :: Map FuncRef (Map Ident Ident) -> FuncRef -> Abs -> Abs
     substituteVars frSubstMap fr a@(Abs t params bindings body) = case M.lookup fr frSubstMap of
       Just substMap -> Abs t params
@@ -445,7 +514,8 @@ markCapturedBindings freeVarMap funcRefMap = do
         (transformBi substVar body)
         where
           substBinding (n, region, body)
-            -- Don't substitute the RHS of the captured param binding!
+            -- Don't substitute the RHS of captured param bindings (e.g., _captured_0 = x)
+            -- We want to keep the original reference to the parameter
             | Just _ <- M.lookup n substMap = (n, region, body)
             | otherwise = (n, region, transformBi substVar body)
 
