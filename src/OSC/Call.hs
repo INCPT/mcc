@@ -139,7 +139,7 @@ cfor initial steps step f = do
 allocGlobals :: Map Ident Type -> CallM (Map Ident Ref)
 allocGlobals = traverse $ \t -> calloc t AGlobal
 
-allocAndStore :: Map Ident Ref -> Type -> Choice -> CallM Ref
+allocAndStore :: Map Ident Ref -> Type -> Choice FuncRef -> CallM Ref
 allocAndStore globals t e = do
   ref <- calloc t ALocal
   R.local (const $ newEnv t ref) (retvalue globals e)
@@ -150,22 +150,21 @@ ret t ref = do
   env <- R.ask
   ccopyRef t ref env.ret env.lens
 
-rhsvalue :: Map Ident Ref -> Choice -> CallM (Type, Ref)
+rhsvalue :: Map Ident Ref -> Choice FuncRef -> CallM (Type, Ref)
 rhsvalue _ (CExpr _ (SConst n)) = pure (numberType n, RConst n)
-rhsvalue _ (CExpr _ (SFuncRef t fr)) = pure (t, RFuncRef fr)
+rhsvalue _ (CExpr _ (SAbs t fr)) = pure (t, RFuncRef fr)
 rhsvalue globals (CExpr _ (SVar t n))
   | Just ref <- M.lookup n globals = pure (t, ref)
   | otherwise = error "rhsvalue: unknown global (this is a bug)"
 rhsvalue globals e@(CExpr _ (SArr t _)) = (t,) <$> allocAndStore globals t e
 rhsvalue globals e@(CExpr _ (SOp t _ _ _)) = (t,) <$> allocAndStore globals t e
-rhsvalue _ (CExpr _ (SAbs _ _ _ _)) = error "rhsvalue: SAbs: (this is a bug)"
 rhsvalue globals e@(CExpr _ (SApp t _ _)) = (t,) <$> allocAndStore globals t e
 rhsvalue globals e@(CExpr _ (SRec t _ _)) = (t,) <$> allocAndStore globals t e
 rhsvalue globals e@(CChoice t _ _) = (t,) <$> allocAndStore globals t e
 
-retvalue :: Map Ident Ref -> Choice -> CallM ()
+retvalue :: Map Ident Ref -> Choice FuncRef -> CallM ()
 retvalue globals e@(CExpr [] (SConst _)) = rhsvalue globals e >>= uncurry ret
-retvalue globals e@(CExpr [] (SFuncRef _ _)) = rhsvalue globals e >>= uncurry ret
+retvalue globals e@(CExpr [] (SAbs _ _)) = rhsvalue globals e >>= uncurry ret
 retvalue globals e@(CExpr [] (SVar _ _)) = rhsvalue globals e >>= uncurry ret
 retvalue globals (CExpr [] (SArr _ elems)) = sequence_
   [ R.local (focusTo i) $ retvalue globals elem
@@ -179,7 +178,6 @@ retvalue globals (CExpr [] (SOp _ op a b)) = do
   R.ask >>= \env -> cbinOp op aref bref env.ret
 
 retvalue _ (CExpr _ (SOp _ _ _ _)) = error "retvalue: SOp: non empty selection indices (this is a bug)"
-retvalue _ (CExpr _ (SAbs _ _ _ _)) = error "retvalue: SAbs: (this is a bug)"
 
 retvalue globals (CExpr [] (SApp _ f as)) = do
   (_, fref) <- rhsvalue globals f
