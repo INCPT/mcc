@@ -139,7 +139,7 @@ cfor initial steps step f = do
 allocGlobals :: Map Ident Type -> CallM (Map Ident Ref)
 allocGlobals = traverse $ \t -> calloc t AGlobal
 
-allocAndStore :: Map Ident Ref -> Type -> Choice FuncRef -> CallM Ref
+allocAndStore :: Map Ident Ref -> Type -> CExpr FuncRef -> CallM Ref
 allocAndStore globals t e = do
   ref <- calloc t ALocal
   R.local (const $ newEnv t ref) (retvalue globals e)
@@ -150,50 +150,47 @@ ret t ref = do
   env <- R.ask
   ccopyRef t ref env.ret env.lens
 
-rhsvalue :: Map Ident Ref -> Choice FuncRef -> CallM (Type, Ref)
-rhsvalue _ (CExpr _ (SConst n)) = pure (numberType n, RConst n)
-rhsvalue _ (CExpr _ (SAbs t fr)) = pure (t, RFuncRef fr)
-rhsvalue globals (CExpr _ (SVar t n))
+rhsvalue :: Map Ident Ref -> CExpr FuncRef -> CallM (Type, Ref)
+rhsvalue _ (CConst n) = pure (numberType n, RConst n)
+rhsvalue _ (CAbs t fr) = pure (t, RFuncRef fr)
+rhsvalue globals (CIndexed _ (CVar t n))
   | Just ref <- M.lookup n globals = pure (t, ref)
   | otherwise = error "rhsvalue: unknown global (this is a bug)"
-rhsvalue globals e@(CExpr _ (SArr t _)) = (t,) <$> allocAndStore globals t e
-rhsvalue globals e@(CExpr _ (SOp t _ _ _)) = (t,) <$> allocAndStore globals t e
-rhsvalue globals e@(CExpr _ (SApp t _ _)) = (t,) <$> allocAndStore globals t e
-rhsvalue globals e@(CExpr _ (SRec t _ _)) = (t,) <$> allocAndStore globals t e
-rhsvalue globals e@(CChoice t _ _) = (t,) <$> allocAndStore globals t e
+rhsvalue globals e@(CArr t _) = (t,) <$> allocAndStore globals t e
+rhsvalue globals e@(COp t _ _ _) = (t,) <$> allocAndStore globals t e
+rhsvalue globals e@(CIndexed _ (CApp t _ _)) = (t,) <$> allocAndStore globals t e
+rhsvalue globals e@(CIndexed _ (CRec t _ _)) = (t,) <$> allocAndStore globals t e
+rhsvalue globals e@(CCExpr t _ _) = (t,) <$> allocAndStore globals t e
 
-retvalue :: Map Ident Ref -> Choice FuncRef -> CallM ()
-retvalue globals e@(CExpr [] (SConst _)) = rhsvalue globals e >>= uncurry ret
-retvalue globals e@(CExpr [] (SAbs _ _)) = rhsvalue globals e >>= uncurry ret
-retvalue globals e@(CExpr [] (SVar _ _)) = rhsvalue globals e >>= uncurry ret
-retvalue globals (CExpr [] (SArr _ elems)) = sequence_
+retvalue :: Map Ident Ref -> CExpr FuncRef -> CallM ()
+retvalue globals e@(CConst _) = rhsvalue globals e >>= uncurry ret
+retvalue globals e@(CAbs _ _) = rhsvalue globals e >>= uncurry ret
+retvalue globals e@(CIndexed [] (CVar _ _)) = rhsvalue globals e >>= uncurry ret
+retvalue globals (CArr _ elems) = sequence_
   [ R.local (focusTo i) $ retvalue globals elem
   | (i, elem) <- zip [0..] elems
   ]
-retvalue _ (CExpr _ (SArr _ _)) = error "retvalue: SArr: non empty selection indices instead of choice (this is a bug)"
-retvalue globals (CExpr [] (SOp _ op a b)) = do
+retvalue globals (COp _ op a b) = do
   (_, aref) <- rhsvalue globals a
   (_, bref) <- rhsvalue globals b
   
   R.ask >>= \env -> cbinOp op aref bref env.ret
 
-retvalue _ (CExpr _ (SOp _ _ _ _)) = error "retvalue: SOp: non empty selection indices (this is a bug)"
-
-retvalue globals (CExpr [] (SApp _ f as)) = do
+retvalue globals (CIndexed [] (CApp _ f as)) = do
   (_, fref) <- rhsvalue globals f
   arefs <- traverse (rhsvalue globals) as
     
   R.ask >>= \env -> ccall fref (map snd arefs) env.ret
 
-retvalue globals (CExpr [] (SRec t delay body))
-  | typeContainsAbs t = error "retvalue: SRec: type contains abstraction"
+retvalue globals (CIndexed [] (CRec t delay body))
+  | typeContainsAbs t = error "retvalue: CRec: type contains abstraction"
   | otherwise = do
       delayLines <- calloc t AGlobal
       case body of
         -- Inline funcref
-        CExpr _ (SAbs _ fr) -> undefined
+        CAbs _ fr -> undefined
         -- Inline funcref
-        CExpr _ (SVar _ n) -> undefined
+        CIndexed _ (CVar _ n) -> undefined
       undefined
   where
     typeContainsAbs (TNumber _) = False
@@ -201,11 +198,11 @@ retvalue globals (CExpr [] (SRec t delay body))
     typeContainsAbs (TAbs _ _) = True
 
 -- General selection expression
-retvalue globals (CExpr idxs cexpr) = do
+retvalue globals (CIndexed idxs indexable) = do
   refs <- sequence [ rhsvalue globals idx | (_, idx) <- idxs ]
-  R.local (focusFrom $ fmap snd refs) (retvalue globals (CExpr [] cexpr))
+  R.local (focusFrom $ fmap snd refs) (retvalue globals (CIndexed [] indexable))
 
-retvalue globals (CChoice _ chs sel) = do
+retvalue globals (CCExpr _ chs sel) = do
   env <- R.ask
 
   (_, sref) <- rhsvalue globals sel
