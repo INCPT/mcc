@@ -146,11 +146,7 @@ data AllocRegion = ALocal | AGlobal
   deriving (Show, Data)
 
 data SExpr abs
-  = SConst Number
-  | SArr Type [Choice abs]
-  | SOp Type Op (Choice abs) (Choice abs)
-
-  | SVar Type Ident
+  = SVar Type Ident
 
   | SAbs Type abs
   | SApp Type (Choice abs) [Choice abs]
@@ -167,6 +163,9 @@ newtype CanFloat = CanFloat Bool
 data Choice abs
   = CChoice Type [Choice abs] {- selector -} (Choice abs)
   | CExpr [(Type, Choice abs)] (SExpr abs) -- selection indices that flow into the inner expression
+  | CArr [Choice abs]
+  | CConst Number
+  | COp Type Op (Choice abs) (Choice abs)
   deriving Data
 
 choiceType :: Choice abs -> Type
