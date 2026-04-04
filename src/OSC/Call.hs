@@ -189,6 +189,11 @@ retvalue globals (CExpr [] (SRec t delay body))
   | typeContainsAbs t = error "retvalue: SRec: type contains abstraction"
   | otherwise = do
       delayLines <- calloc t AGlobal
+      case body of
+        -- Inline funcref
+        CExpr _ (SAbs _ fr) -> undefined
+        -- Inline funcref
+        CExpr _ (SVar _ n) -> undefined
       undefined
   where
     typeContainsAbs (TNumber _) = False
