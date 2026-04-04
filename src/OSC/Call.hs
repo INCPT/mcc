@@ -158,8 +158,8 @@ rhsvalue globals (CIndexed _ (CVar t n))
   | otherwise = error "rhsvalue: unknown global (this is a bug)"
 rhsvalue globals e@(CArr t _) = (t,) <$> allocAndStore globals t e
 rhsvalue globals e@(COp t _ _ _) = (t,) <$> allocAndStore globals t e
-rhsvalue globals e@(CIndexed _ (CApp t _ _)) = (t,) <$> allocAndStore globals t e
-rhsvalue globals e@(CIndexed _ (CRec t _ _)) = (t,) <$> allocAndStore globals t e
+rhsvalue globals e@(CIndexed t (CApp _ _ _)) = (t,) <$> allocAndStore globals t e
+rhsvalue globals e@(CIndexed t (CRec _ _ _)) = (t,) <$> allocAndStore globals t e
 rhsvalue globals e@(CCExpr t _ _) = (t,) <$> allocAndStore globals t e
 
 retvalue :: Map Ident Ref -> CExpr FuncRef -> CallM ()
