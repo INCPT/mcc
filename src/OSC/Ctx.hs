@@ -147,10 +147,8 @@ data AllocRegion = ALocal | AGlobal
 
 data SExpr abs
   = SVar Type Ident
-
   | SAbs Type abs
   | SApp Type (Choice abs) [Choice abs]
-
   | SRec Type {- delay -} Int {- must be of type abstraction -} (Choice abs)
   deriving Data
 
@@ -163,7 +161,7 @@ newtype CanFloat = CanFloat Bool
 data Choice abs
   = CChoice Type [Choice abs] {- selector -} (Choice abs)
   | CExpr [(Type, Choice abs)] (SExpr abs) -- selection indices that flow into the inner expression
-  | CArr [Choice abs]
+  | CArr Type [Choice abs]
   | CConst Number
   | COp Type Op (Choice abs) (Choice abs)
   deriving Data
@@ -176,11 +174,11 @@ choiceType (CExpr idxs expr) = peelOffIndices (length idxs) (sexprType expr)
     peelOffIndices 0 t = t
     peelOffIndices n (TArr t _) = peelOffIndices (n - 1) t
     peelOffIndices _ t = error $ "choiceType: cannot peel " <> show (length idxs) <> " indices from type " <> show t <> " (this is a bug)"
+choiceType (CArr t _) = t
+choiceType (CConst n) = numberType n
+choiceType (COp t _ _ _) = t
 
 sexprType :: SExpr abs -> Type
-sexprType (SConst n) = numberType n
-sexprType (SArr t _) = t
-sexprType (SOp t _ _ _) = t
 sexprType (SVar t _) = t
 sexprType (SAbs t _) = t
 sexprType (SApp t _ _) = t
@@ -203,12 +201,9 @@ instance Show Abs where
       showRegion AGlobal = "global"
 
 instance Show abs => Show (SExpr abs) where
-  show (SConst n) = show n
-  show (SArr t cs) = "[" <> showType t <> ": " <> intercalate ", " (map show cs) <> "]"
-  show (SOp _ op a b) = "(" <> show a <> " " <> showOp op <> " " <> show b <> ")"
   show (SVar _ (Ident n)) = n
   show (SAbs _ abs) = show abs
-  show (SApp _ f a) = show f <> "(" <> show a <> ")"
+  show (SApp _ f a) = show f <> "(" <> intercalate ", " (map show a) <> ")"
   show (SRec t delay body) = "rec[" <> showType t <> ", delay=" <> show delay <> "](" <> show body <> ")"
 
 instance Show abs => Show (Choice abs) where
@@ -219,6 +214,9 @@ instance Show abs => Show (Choice abs) where
     show expr <> " @ [" <> intercalate ", " (map showIdxPair idxs) <> "]"
     where
       showIdxPair (t, idx) = showType t <> "[" <> show idx <> "]"
+  show (CArr t cs) = "[" <> showType t <> ": " <> intercalate ", " (map show cs) <> "]"
+  show (CConst n) = show n
+  show (COp _ op a b) = "(" <> show a <> " " <> showOp op <> " " <> show b <> ")"
 
 instance Show Type where
   show = showType
@@ -259,6 +257,7 @@ showOp Rem = "rem"
 
 --------------------------------------------------------------------------------
 
+-- QUESTIONABLE: toC now wraps SExpr in CExpr, but SExpr no longer contains CConst, COp, CArr
 toC :: Monad m => SExpr Abs -> StackM (Type, Expr) m (Choice Abs)
 toC e = do
   idxs <- ST.get
@@ -267,9 +266,20 @@ toC e = do
 -- Pair each index with the appropriate array, so an an expression like
 -- `[[0, 1], [2, 3]][1][0]` turns into `[[0, 1][0], [2, 3][0]][1]`.
 -- This allows for easy constant index elimination and the generation of more efficient code.
+-- QUESTIONABLE: choiceTree now returns CConst/COp/CArr directly when no indices,
+-- but wraps them in CExpr when indices are present. This seems inconsistent with
+-- the design where CExpr should only contain SExpr constructors.
 choiceTree :: Monad m => Expr -> StackM (Type, Expr) m (Choice Abs)
-choiceTree (EConst n) = toC (SConst n)
-choiceTree (EOp t op a b) = toC (SOp t op (toChoice a) (toChoice b))
+choiceTree (EConst n) = do
+  idxs <- ST.get
+  pure $ case idxs of
+    [] -> CConst n
+    _ -> error "choiceTree: cannot index into a constant"
+choiceTree (EOp t op a b) = do
+  idxs <- ST.get
+  case idxs of
+    [] -> pure $ COp t op (toChoice a) (toChoice b)
+    _ -> error "choiceTree: cannot index into an operation result"
 choiceTree (EVar t n) = toC (SVar t n)
 choiceTree (EApp t f as) = toC (SApp t (toChoice f) (fmap toChoice as))
 choiceTree (EAbs t params bs e) = toC (SAbs t (Abs params (map (second toChoice) [ (n, ALocal, b) | (n, b) <- bs ]) (toChoice e)))
@@ -281,7 +291,7 @@ choiceTree (EArr t es) = do
       es' <- traverse choiceTree es
       push (t, idx)
       pure $ CChoice t es' (toChoice idx)
-    Nothing -> pure $ CExpr [] (SArr t $ map toChoice es)
+    Nothing -> pure $ CArr t (map toChoice es)
 choiceTree (ESelect t e idx) = do
   push (t, idx)
   c <- choiceTree e
@@ -297,8 +307,8 @@ elimConstIndices = transform go
 
     -- Eliminate constant index selections by directly selecting the choice
     -- It's ok to prune impure expressions here (since the index is constant those expressions will never be accessible)
-    go (CChoice _ chs (CExpr _ (SConst (I32 idx)))) = chs !! idx
-    go (CChoice _ chs (CExpr _ (SConst (I64 idx)))) = chs !! idx
+    go (CChoice _ chs (CConst (I32 idx))) = chs !! idx
+    go (CChoice _ chs (CConst (I64 idx))) = chs !! idx
 
     -- Keep everything else as-is
     go ch = ch
@@ -366,16 +376,16 @@ gatherAbstractions (CExpr idxs expr) = do
   idxs' <- traverse (\(t, c) -> (t,) <$> gatherAbstractions c) idxs
   expr' <- gatherAbstractionsExpr expr
   pure $ CExpr idxs' expr'
-
-gatherAbstractionsExpr :: SExpr Abs -> ST.State AbsEnv (SExpr FuncRef)
-gatherAbstractionsExpr (SConst n) = pure $ SConst n
-gatherAbstractionsExpr (SArr t choices) = do
+gatherAbstractions (CArr t choices) = do
   choices' <- traverse gatherAbstractions choices
-  pure $ SArr t choices'
-gatherAbstractionsExpr (SOp t op a b) = do
+  pure $ CArr t choices'
+gatherAbstractions (CConst n) = pure $ CConst n
+gatherAbstractions (COp t op a b) = do
   a' <- gatherAbstractions a
   b' <- gatherAbstractions b
-  pure $ SOp t op a' b'
+  pure $ COp t op a' b'
+
+gatherAbstractionsExpr :: SExpr Abs -> ST.State AbsEnv (SExpr FuncRef)
 gatherAbstractionsExpr (SVar t ident) = pure $ SVar t ident
 gatherAbstractionsExpr (SAbs t (Abs params bindings body)) = do
   fr <- FuncRef <$> ST.gets (.nextFuncRef)
@@ -593,24 +603,24 @@ markPureExpressions = fmap go
 testChoice1 :: Choice Abs
 testChoice1 = CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
   [Ident "x"]
-  [(Ident "x", ALocal, CExpr [] (SConst (I32 0)))]
+  [(Ident "x", ALocal, CConst (I32 0))]
   (CExpr [] (SVar (TNumber TI32) (Ident "x")))
 
 -- Test 2: Abstraction that captures a parameter in a nested abstraction
 testChoice2 :: Choice Abs
 testChoice2 = CExpr [] $ SAbs (TAbs [TNumber TI32, TNumber TI32] (TNumber TI32)) $ Abs
   [Ident "x", Ident "y"]
-  [(Ident "z", ALocal, CExpr [] (SConst (I32 0)))]
+  [(Ident "z", ALocal, CConst (I32 0))]
   (CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
     [Ident "a"]
-    [(Ident "b", ALocal, CExpr [] (SConst (I32 1)))]
-    (CExpr [] $ SOp (TNumber TI32) Add (CExpr [] (SVar (TNumber TI32) (Ident "x"))) (CExpr [] (SVar (TNumber TI32) (Ident "z")))))
+    [(Ident "b", ALocal, CConst (I32 1))]
+    (COp (TNumber TI32) Add (CExpr [] (SVar (TNumber TI32) (Ident "x"))) (CExpr [] (SVar (TNumber TI32) (Ident "z")))))
 
 -- Test 3: Abstraction with a binding that references a parameter
 testChoice3 :: Choice Abs
 testChoice3 = CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
   [Ident "x"]
-  [ (Ident "x", ALocal, CExpr [] (SConst (I32 5)))
+  [ (Ident "x", ALocal, CConst (I32 5))
   , (Ident "y", ALocal, CExpr [] (SVar (TNumber TI32) (Ident "x")))
   ]
   (CExpr [] (SVar (TNumber TI32) (Ident "y")))
@@ -619,70 +629,70 @@ testChoice3 = CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
 testChoice4 :: Choice Abs
 testChoice4 = CExpr [] $ SAbs (TAbs [TNumber TI32, TNumber TI32] (TNumber TI32)) $ Abs
   [Ident "a", Ident "b"]
-  [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
+  [(Ident "bnd_a", ALocal, CConst (I32 1))]
   (CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
     [Ident "c"]
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar (TNumber TI32) (Ident "bnd_a")))
     , (Ident "bnd_c", ALocal, CExpr [] (SVar (TNumber TI32) (Ident "a")))
     ]
-    (CExpr [] $ SOp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "b")))))
+    (COp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "b")))))
 
 -- Test 4: Nested abstractions with multiple captures
 testChoice4_2 :: Choice Abs
 testChoice4_2 = CExpr [] $ SAbs (TAbs [TNumber TI32, TNumber TI32, TNumber TI32] (TNumber TI32)) $ Abs
   [Ident "a", Ident "b", Ident "z"]
-  [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
+  [(Ident "bnd_a", ALocal, CConst (I32 1))]
   (CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
     [Ident "c"]
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar (TNumber TI32) (Ident "a")))
     , (Ident "bnd_c", ALocal, CExpr [] (SVar (TNumber TI32) (Ident "z")))
     ]
     (CChoice (TNumber TI32)
-      [ (CExpr [] $ SOp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "b"))))
-      , (CExpr [] $ SOp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "z"))))
-      ] (CExpr [] $ SOp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "bnd_a"))) (CExpr [] (SVar (TNumber TI32) (Ident "z"))))))
+      [ (COp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "b"))))
+      , (COp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "z"))))
+      ] (COp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "bnd_a"))) (CExpr [] (SVar (TNumber TI32) (Ident "z"))))))
 
 testChoice4_3 :: Choice Abs
 testChoice4_3 = CExpr [] $ SAbs (TAbs [TNumber TI32, TNumber TI32, TNumber TI32] (TNumber TI32)) $ Abs
   [Ident "a", Ident "b", Ident "z"]
-  [(Ident "bnd_a", ALocal, CExpr [] (SConst (I32 1)))]
+  [(Ident "bnd_a", ALocal, CConst (I32 1))]
   (CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
     [Ident "c"]
     [ (Ident "bnd_b", ALocal, CExpr [] (SVar (TNumber TI32) (Ident "a")))
     , (Ident "bnd_c", ALocal, CExpr [] (SVar (TNumber TI32) (Ident "z")))
     ]
     (CChoice (TArr (TNumber TI32) 3)
-      [ (CExpr [] $ SOp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "b"))))
-      , (CExpr [] $ SOp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "z"))))
+      [ (COp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "b"))))
+      , (COp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "z"))))
       , (CChoice (TArr (TNumber TI32) 3)
-          [ (CExpr [] $ SOp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "b"))))
-          , (CExpr [] $ SOp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "z"))))
+          [ (COp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "b"))))
+          , (COp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "z"))))
           ] (CChoice (TArr (TNumber TI32) 3)
-                 [ (CExpr [] $ SConst $ I32 1)
-                 , (CExpr [] $ SOp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "z"))))
-                 ] (CExpr [] $ SConst $ I32 0))) 
-      ] (CExpr [] $ SConst $ I32 2)))
+                 [ (CConst $ I32 1)
+                 , (COp (TNumber TI32) Mul (CExpr [] (SVar (TNumber TI32) (Ident "c"))) (CExpr [] (SVar (TNumber TI32) (Ident "z"))))
+                 ] (CConst $ I32 0))) 
+      ] (CConst $ I32 2)))
 
 -- Test 5: Abstraction with free variable (not captured, just free)
 testChoice5 :: Choice Abs
 testChoice5 = CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
   [Ident "x"]
-  [(Ident "x", ALocal, CExpr [] (SConst (I32 0)))]
-  (CExpr [] $ SOp (TNumber TI32) Add (CExpr [] (SVar (TNumber TI32) (Ident "x"))) (CExpr [] (SVar (TNumber TI32) (Ident "freeVar"))))
+  [(Ident "x", ALocal, CConst (I32 0))]
+  (COp (TNumber TI32) Add (CExpr [] (SVar (TNumber TI32) (Ident "x"))) (CExpr [] (SVar (TNumber TI32) (Ident "freeVar"))))
 
 -- Test 6: Complex case with binding that captures and is itself captured
 testChoice6 :: Choice Abs
 testChoice6 = CExpr [] $ SAbs (TAbs [TNumber TI32, TNumber TI32] (TNumber TI32)) $ Abs
   [Ident "x", Ident "y"]
-  [ (Ident "x", ALocal, CExpr [] (SConst (I32 10)))
+  [ (Ident "x", ALocal, CConst (I32 10))
   , (Ident "helper", ALocal, CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
       [Ident "z"]
-      [(Ident "z", ALocal, CExpr [] (SConst (I32 0)))]
-      (CExpr [] $ SOp (TNumber TI32) Add (CExpr [] (SVar (TNumber TI32) (Ident "x"))) (CExpr [] (SVar (TNumber TI32) (Ident "z")))))
+      [(Ident "z", ALocal, CConst (I32 0))]
+      (COp (TNumber TI32) Add (CExpr [] (SVar (TNumber TI32) (Ident "x"))) (CExpr [] (SVar (TNumber TI32) (Ident "z")))))
   ]
   (CExpr [] $ SAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
     [Ident "y"]
-    [(Ident "y", ALocal, CExpr [] (SConst (I32 20)))]
+    [(Ident "y", ALocal, CConst (I32 20))]
     (CExpr [] $ SApp (TNumber TI32) (CExpr [] (SVar (TNumber TI32) (Ident "helper"))) [CExpr [] (SVar (TNumber TI32) (Ident "y"))]))
 
 testMark :: Choice Abs -> (Map FuncRef Func, GlobalsEnv)
