@@ -89,6 +89,7 @@ data AllocState = AllocState
   { localIdx :: Int
   , globalIdx :: Int
   , allocations :: [Allocation]
+  , funcRefIdx :: Int
   }
 
 type CallM = R.ReaderT Env (W.WriterT [Statement] (ST.State AllocState))
@@ -237,10 +238,18 @@ retvalue (CSel _ chs sel) = do
 
       cif cond (retvalue ch) (recif env chs sref (idx + 1))
 
-func :: Map Ident Func -> CallM (Map Ident FuncRef)
-func m = M.fromList <$> sequence [ (n,) <$> go n f | (n, f) <- M.toList m ]
+toplevel :: M.Map Ident (CExpr FuncRef) -> Map FuncRef Func -> CallM (Map FuncRef Ref)
+toplevel m funcRefMap = M.fromList <$> sequence [ (n,) <$> go n f | (n, f) <- M.toList funcRefMap ]
   where
-    go n f = undefined
+    go n (Func _ params bindings body) = mdo
+      bindingRefs <- mconcat <$> sequence
+        [ pure $ M.fromList [ (p, RArg idx) | (idx, p) <- zip [0..] params ]
+        , M.fromList <$> sequenceA [ (n,) <$> R.local withBindingRefs (snd <$> rhsvalue region bbody) | (n, region, bbody) <- bindings ]
+        ]
+      let withBindingRefs :: Env -> Env
+          withBindingRefs Env {..} = Env { globals = bindingRefs <> globals, .. }
+
+      R.local withBindingRefs $ snd <$> rhsvalue AGlobal body
 
 -- TODO: oversampling just means that we insert some stateful code around the oversampled function (which we should always inline when generating code; this can happen directly in the codegen)
 --- https://github.com/juce-framework/JUCE/blob/master/modules/juce_dsp/processors/juce_Oversampling.cpp
