@@ -5,6 +5,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NoFieldSelectors #-}
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE TupleSections #-}
 
@@ -32,9 +33,12 @@ data Ref
   | RConst Number
 
   | RVar Idx -- either a function local var index (e.g. in function f() { int a; float b; } would be locals with index 0 and 1) or an index into a global var table
-  | RArray Type Idx -- global base address of array in a linear memory layout
-  | RIndexed Type Ref Ref
+
+  | RArr Type Idx -- global base address of array in a linear memory layout
+  | RProj {- ref must be an array -} Ref [Ref] -- projection from or into array
+
   | RFuncRef FuncRef -- index into a global function table
+  | RFuncRefRef Idx -- local or global var index with index into global function table (e.g. pointer to a function pointer)
   deriving Show
 
 --------------------------------------------------------------------------------
@@ -61,24 +65,17 @@ data Lens = Lens { from :: [Ref], to :: [Ref] }
   deriving Show
 
 data Env = Env
-  { typ :: Type
-  , ret :: Ref
-  , lens :: Lens
+  { ret :: Ref
+  , to :: [Ref]
   }
 
-newEnv :: Type -> Ref -> Env
-newEnv t ref = Env t ref (Lens [] [])
-
 focusTo :: Ref -> Env -> Env
-focusTo idx env = env { lens = env.lens { to = env.lens.to <> [idx] } }
-
-focusFrom :: [Ref] -> Env -> Env
-focusFrom idxs env = env { lens = env.lens { from = env.lens.from <> idxs } }
+focusTo idx (Env {..}) = Env { to = to <> [idx], .. }
 
 --------------------------------------------------------------------------------
 
 data Statement
-  = SCopy Type Ref Ref Lens
+  = SCopy Type Ref Ref
   | SIf Ref [Statement] [Statement]
   | SCall Ref [Ref] Ref
   | SBinOp Op Ref Ref Ref
@@ -103,15 +100,15 @@ cextract m = do
 calloc :: Type -> AllocRegion -> CallM Ref
 calloc t region = case t of
   TNumber _ -> fmap RVar $ lift $ lift (allocInRegion region)
-  TArr _ _-> fmap (RArray t) $ lift $ lift (allocInRegion region)
-  TAbs _ _ -> error "alloc: SAbs (this is a bug)"
+  TArr _ _-> fmap (RArr t) $ lift $ lift (allocInRegion region)
+  TAbs _ _ -> fmap RFuncRefRef $ lift $ lift (allocInRegion region)
   where
     allocInRegion :: AllocRegion -> ST.State AllocState Idx
     allocInRegion AGlobal = ST.state $ \st -> (Global st.globalIdx, st { globalIdx = st.globalIdx + 1, allocations = Allocation t (Global st.globalIdx):st.allocations})
     allocInRegion ALocal = ST.state $ \st -> (Local st.localIdx, st { localIdx = st.localIdx + 1, allocations = Allocation t (Local st.localIdx):st.allocations})
 
-ccopyRef :: Type -> Ref -> Ref -> Lens -> CallM ()
-ccopyRef t src dst lens = lift $ W.tell [SCopy t src dst lens]
+ccopyRef :: Type -> Ref -> Ref -> CallM ()
+ccopyRef t src dst = lift $ W.tell [SCopy t src dst]
 
 cbinOp :: Op -> Ref -> Ref -> Ref -> CallM ()
 cbinOp op r1 r2 r3 = lift $ W.tell [SBinOp op r1 r2 r3]
@@ -139,7 +136,7 @@ allocGlobals = traverse $ \t -> calloc t AGlobal
 allocAndStore :: Map Ident Ref -> AllocRegion -> CExpr FuncRef -> CallM (Type, Ref)
 allocAndStore globals region e = do
   ref <- calloc t region
-  R.local (const $ newEnv t ref) (retvalue globals e)
+  R.local (const $ Env ref []) (retvalue globals e)
   pure (t, ref)
   where
     t = cexprType e
@@ -147,7 +144,7 @@ allocAndStore globals region e = do
 ret :: Type -> Ref -> CallM ()
 ret t ref = do
   env <- R.ask
-  ccopyRef t ref env.ret env.lens
+  ccopyRef t ref (RProj env.ret env.to)
 
 --------------------------------------------------------------------------------
 
@@ -169,8 +166,8 @@ rhsvalue globals region e@(CIndexed _ _) = allocAndStore globals region e
 
 retvalue :: Map Ident Ref -> CExpr FuncRef -> CallM ()
 
-retvalue globals e@(CConst _) = rhsvalue globals ALocal e >>= uncurry ret
-retvalue globals e@(CAbs _ _) = rhsvalue globals ALocal e >>= uncurry ret
+retvalue _ (CConst c) = ret (numberType c) (RConst c)
+retvalue _ (CAbs t fr) = ret t (RFuncRef fr)
 retvalue globals (CArr _ elems) = sequence_
   [ R.local (focusTo $ RConst $ I32 i) $ retvalue globals elem
   | (i, elem) <- zip [0..] elems
@@ -192,13 +189,12 @@ retvalue globals (CIndexed [] (CApp _ f as)) = do
 retvalue globals (CIndexed [] (CRec t delay param bindings body))
   | typeContainsAbs t = error "retvalue: CRec: type contains abstraction"
   | otherwise = mdo
-      let delayType = TArr t delay
-
-      delayLine <- calloc delayType AGlobal
+      -- Alloc delay number of samples of type t[]
+      delayRef <- calloc (TArr t delay) AGlobal
       delayIdx <- calloc (TNumber TI32) AGlobal
 
       globals' <- mconcat <$> sequence
-        [ pure $ M.singleton param (RIndexed delayType delayLine delayIdx)
+        [ pure $ M.singleton param (RProj delayRef [delayIdx])
         , pure globals
         , M.fromList <$> sequenceA [ (n,) . snd <$> rhsvalue globals' region bbody | (n, region, bbody) <- bindings ]
         ]
@@ -206,10 +202,10 @@ retvalue globals (CIndexed [] (CRec t delay param bindings body))
       retvalue globals' body
       
       -- Copy result to delay line
-      R.ask >>= \env -> ccopyRef t env.ret (RIndexed delayType delayLine delayIdx) (Lens [] [])
+      R.ask >>= \env -> ccopyRef t env.ret (RProj delayRef [delayIdx])
 
-      cbinOp Add delayLine (RConst $ I32 1) delayLine
-      cbinOp Mod delayLine (RConst $ I32 delay) delayLine
+      cbinOp Add delayRef (RConst $ I32 1) delayRef
+      cbinOp Mod delayRef (RConst $ I32 delay) delayRef
   where
     typeContainsAbs (TNumber _) = False
     typeContainsAbs (TArr t _) = typeContainsAbs t
@@ -217,9 +213,9 @@ retvalue globals (CIndexed [] (CRec t delay param bindings body))
 
 -- General indexed expression
 retvalue globals (CIndexed idxs indexable) = do
-  refs <- sequence [ rhsvalue globals ALocal idx | (_, idx) <- idxs ]
+  idxRefs <- sequence [ rhsvalue globals ALocal idx | (_, idx) <- idxs ]
   (t, ref) <- rhsvalue globals ALocal (CIndexed [] indexable)
-  R.local (focusFrom $ fmap snd refs) (ret t ref)
+  ret t $ RProj ref (fmap snd idxRefs)
 
 retvalue globals (CSel _ chs sel) = do
   env <- R.ask
@@ -245,5 +241,5 @@ retvalue globals (CSel _ chs sel) = do
 -- TODO: rec and oversample take a lambda abstraction (or a Var pointing to a lambda abstraction)
 -- TODO: zig std math: https://github.com/ziglang/zig/tree/master/lib/std/math
 
-abs :: Map Ident Ref -> Abs -> CallM Ref
+abs :: Map Ident Ref -> Func -> CallM Ref
 abs = undefined
