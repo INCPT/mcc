@@ -65,7 +65,8 @@ data Lens = Lens { from :: [Ref], to :: [Ref] }
   deriving Show
 
 data Env = Env
-  { ret :: Ref
+  { globals :: Map Ident Ref
+  , ret :: Ref
   , to :: [Ref]
   }
 
@@ -131,12 +132,12 @@ cfor initial steps step f = do
 --------------------------------------------------------------------------------
 
 allocGlobals :: Map Ident Type -> CallM (Map Ident Ref)
-allocGlobals = traverse $ \t -> calloc t AGlobal
+allocGlobals = traverse (\t -> calloc t AGlobal)
 
-allocAndStore :: Map Ident Ref -> AllocRegion -> CExpr FuncRef -> CallM (Type, Ref)
-allocAndStore globals region e = do
+allocAndStore :: AllocRegion -> CExpr FuncRef -> CallM (Type, Ref)
+allocAndStore region e = do
   ref <- calloc t region
-  R.local (const $ Env ref []) (retvalue globals e)
+  R.local (\Env {..} -> Env { ret = ref, to = [], .. }) (retvalue e)
   pure (t, ref)
   where
     t = cexprType e
@@ -148,58 +149,62 @@ ret t ref = do
 
 --------------------------------------------------------------------------------
 
-rhsvalue :: Map Ident Ref -> AllocRegion -> CExpr FuncRef -> CallM (Type, Ref)
+rhsvalue :: AllocRegion -> CExpr FuncRef -> CallM (Type, Ref)
 
-rhsvalue _ _ (CConst n) = pure (numberType n, RConst n)
-rhsvalue _ _ (CAbs t fr) = pure (t, RFuncRef fr)
-rhsvalue globals region e@(CArr _ _) = allocAndStore globals region e
-rhsvalue globals region e@(COp _ _ _ _) = allocAndStore globals region e
-rhsvalue globals region e@(CSel _ _ _) = allocAndStore globals region e
+rhsvalue _ (CConst n) = pure (numberType n, RConst n)
+rhsvalue _ (CAbs t fr) = pure (t, RFuncRef fr)
+rhsvalue region e@(CArr _ _) = allocAndStore region e
+rhsvalue region e@(COp _ _ _ _) = allocAndStore region e
+rhsvalue region e@(CSel _ _ _) = allocAndStore region e
 
 -- Indexed expressions
-rhsvalue globals _ (CIndexed [] (CVar t n))
-  | Just ref <- M.lookup n globals = pure (t, ref)
-  | otherwise = error "rhsvalue: unknown global (this is a bug)"
-rhsvalue globals region e@(CIndexed _ _) = allocAndStore globals region e
+rhsvalue _ (CIndexed [] (CVar t n)) = do
+  env <- R.ask
+  case M.lookup n env.globals of
+    Just ref -> pure (t, ref)
+    _ -> error "rhsvalue: unknown global (this is a bug)"
+rhsvalue region e@(CIndexed _ _) = allocAndStore region e
 
 --------------------------------------------------------------------------------
 
-retvalue :: Map Ident Ref -> CExpr FuncRef -> CallM ()
+retvalue :: CExpr FuncRef -> CallM ()
 
-retvalue _ (CConst c) = ret (numberType c) (RConst c)
-retvalue _ (CAbs t fr) = ret t (RFuncRef fr)
-retvalue globals (CArr _ elems) = sequence_
-  [ R.local (focusTo $ RConst $ I32 i) $ retvalue globals elem
+retvalue (CConst c) = ret (numberType c) (RConst c)
+retvalue (CAbs t fr) = ret t (RFuncRef fr)
+retvalue (CArr _ elems) = sequence_
+  [ R.local (focusTo $ RConst $ I32 i) $ retvalue elem
   | (i, elem) <- zip [0..] elems
   ]
-retvalue globals (COp _ op a b) = do
-  (_, aref) <- rhsvalue globals ALocal a
-  (_, bref) <- rhsvalue globals ALocal b
+retvalue (COp _ op a b) = do
+  (_, aref) <- rhsvalue ALocal a
+  (_, bref) <- rhsvalue ALocal b
   
   R.ask >>= \env -> cbinOp op aref bref env.ret
 
-retvalue globals e@(CIndexed [] (CVar _ _)) = rhsvalue globals ALocal e >>= uncurry ret
+retvalue e@(CIndexed [] (CVar _ _)) = rhsvalue ALocal e >>= uncurry ret
 
-retvalue globals (CIndexed [] (CApp _ f as)) = do
-  (_, fref) <- rhsvalue globals ALocal f
-  arefs <- traverse (rhsvalue globals ALocal) as
+retvalue (CIndexed [] (CApp _ f as)) = do
+  (_, fref) <- rhsvalue ALocal f
+  arefs <- traverse (rhsvalue ALocal) as
     
   R.ask >>= \env -> ccall fref (map snd arefs) env.ret
 
-retvalue globals (CIndexed [] (CRec t delay param bindings body))
+retvalue (CIndexed [] (CRec t delay param bindings body))
   | typeContainsAbs t = error "retvalue: CRec: type contains abstraction"
   | otherwise = mdo
       -- Alloc delay number of samples of type t[]
       delayRef <- calloc (TArr t delay) AGlobal
       delayIdx <- calloc (TNumber TI32) AGlobal
 
-      globals' <- mconcat <$> sequence
+      bindingRefs <- mconcat <$> sequence
         [ pure $ M.singleton param (RProj delayRef [delayIdx])
-        , pure globals
-        , M.fromList <$> sequenceA [ (n,) . snd <$> rhsvalue globals' region bbody | (n, region, bbody) <- bindings ]
+        , M.fromList <$> sequenceA [ (n,) <$> R.local withBindingRefs (snd <$> rhsvalue region bbody) | (n, region, bbody) <- bindings ]
         ]
 
-      retvalue globals' body
+      let withBindingRefs :: Env -> Env
+          withBindingRefs Env {..} = Env { globals = bindingRefs <> globals, .. }
+
+      R.local withBindingRefs $ retvalue body
       
       -- Copy result to delay line
       R.ask >>= \env -> ccopyRef t env.ret (RProj delayRef [delayIdx])
@@ -212,25 +217,30 @@ retvalue globals (CIndexed [] (CRec t delay param bindings body))
     typeContainsAbs (TAbs _ _) = True
 
 -- General indexed expression
-retvalue globals (CIndexed idxs indexable) = do
-  idxRefs <- sequence [ rhsvalue globals ALocal idx | (_, idx) <- idxs ]
-  (t, ref) <- rhsvalue globals ALocal (CIndexed [] indexable)
+retvalue (CIndexed idxs indexable) = do
+  idxRefs <- sequence [ rhsvalue ALocal idx | (_, idx) <- idxs ]
+  (t, ref) <- rhsvalue ALocal (CIndexed [] indexable)
   ret t $ RProj ref (fmap snd idxRefs)
 
-retvalue globals (CSel _ chs sel) = do
+retvalue (CSel _ chs sel) = do
   env <- R.ask
 
-  (_, sref) <- rhsvalue globals ALocal sel
+  (_, sref) <- rhsvalue ALocal sel
   recif env chs sref 0
   where
     -- TODO: binary tree if
     recif _ [] _ _ = error "recif: no choice (this is a bug)"
-    recif _ [ch] _ _ = retvalue globals ch
+    recif _ [ch] _ _ = retvalue ch
     recif env (ch:chs) sref idx = do
       cond <- calloc (TNumber TI32) ALocal
       cbinOp Eq sref (RConst (I32 idx)) cond
 
-      cif cond (retvalue globals ch) (recif env chs sref (idx + 1))
+      cif cond (retvalue ch) (recif env chs sref (idx + 1))
+
+func :: Map Ident Func -> CallM (Map Ident FuncRef)
+func m = M.fromList <$> sequence [ (n,) <$> go n f | (n, f) <- M.toList m ]
+  where
+    go n f = undefined
 
 -- TODO: oversampling just means that we insert some stateful code around the oversampled function (which we should always inline when generating code; this can happen directly in the codegen)
 --- https://github.com/juce-framework/JUCE/blob/master/modules/juce_dsp/processors/juce_Oversampling.cpp
@@ -240,6 +250,3 @@ retvalue globals (CSel _ chs sel) = do
 -- TODO: replace refs to params with RArg 0, 1, 2 etc
 -- TODO: rec and oversample take a lambda abstraction (or a Var pointing to a lambda abstraction)
 -- TODO: zig std math: https://github.com/ziglang/zig/tree/master/lib/std/math
-
-abs :: Map Ident Ref -> Func -> CallM Ref
-abs = undefined
