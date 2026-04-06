@@ -92,7 +92,7 @@ data Expr
   -- NOTE: The (return) type of a recursive expression can not contain abstractions
   -- in order to simplify the logic and not require an initial value. It wouldn't make
   -- much sense generally anyway.
-  | ERec Type {- delay -} Int {- must be of type abstraction -} Expr
+  | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr)] {- body -} Expr
   deriving Show
 
 exprType :: Expr -> Type
@@ -103,7 +103,7 @@ exprType (EVar t _) = t
 exprType (EAbs t _ _ _) = t
 exprType (EApp t _ _) = t
 exprType (ESelect t _ _) = t
-exprType (ERec t _ _) = t
+exprType (ERec t _ _ _ _) = t
 
 --------------------------------------------------------------------------------
 
@@ -148,11 +148,11 @@ data AllocRegion = ALocal | AGlobal
 data CIndexable abs
   = CVar Type Ident
   | CApp Type (CExpr abs) [CExpr abs]
-  | CRec Type {- delay -} Int {- must be of type abstraction -} (CExpr abs)
+  | CRec Type {- delay -} Int {- must be of type abstraction -} {- params -} Ident {- bindings -} [(Ident, AllocRegion, CExpr abs)] (CExpr abs)
   deriving Data
 
 data CExpr abs
-  = CCExpr Type [CExpr abs] {- selector -} (CExpr abs)
+  = CSel Type [CExpr abs] {- selector -} (CExpr abs)
   | CIndexed [(Type, CExpr abs)] (CIndexable abs) -- selection indices that flow into the inner expression
   | CArr Type [CExpr abs]
   | CConst Number
@@ -160,47 +160,50 @@ data CExpr abs
   | CAbs Type abs
   deriving Data
 
-choiceType :: CExpr abs -> Type
-choiceType (CCExpr t _ _) = t
-choiceType (CIndexed idxs expr) = peelOffIndices (length idxs) (sexprType expr)
+cexprType :: CExpr abs -> Type
+cexprType (CSel t _ _) = t
+cexprType (CIndexed idxs expr) = peelOffIndices (length idxs) (indexableType expr)
   where
     peelOffIndices :: Int -> Type -> Type
     peelOffIndices 0 t = t
     peelOffIndices n (TArr t _) = peelOffIndices (n - 1) t
-    peelOffIndices _ t = error $ "choiceType: cannot peel " <> show (length idxs) <> " indices from type " <> show t <> " (this is a bug)"
-choiceType (CArr t _) = t
-choiceType (CConst n) = numberType n
-choiceType (COp t _ _ _) = t
-choiceType (CAbs t _) = t
+    peelOffIndices _ t = error $ "cexprType: cannot peel " <> show (length idxs) <> " indices from type " <> show t <> " (this is a bug)"
+cexprType (CArr t _) = t
+cexprType (CConst n) = numberType n
+cexprType (COp t _ _ _) = t
+cexprType (CAbs t _) = t
 
-sexprType :: CIndexable abs -> Type
-sexprType (CVar t _) = t
-sexprType (CApp t _ _) = t
-sexprType (CRec t _ _) = t
+indexableType :: CIndexable abs -> Type
+indexableType (CVar t _) = t
+indexableType (CApp t _ _) = t
+indexableType (CRec t _ _ _ _) = t
 
 --------------------------------------------------------------------------------
 
-instance Show Abs where
-  show (Abs params bs body) = 
-    "λ" <> showParams params <> " " <> showBindings bs <> " = " <> show body
-    where
-      showParams [] = "()"
-      showParams ps = "(" <> intercalate ", " (map (\(Ident n) -> n) ps) <> ")"
+showAbs :: Show abs => [Ident] -> [(Ident, AllocRegion, CExpr abs)] -> CExpr abs -> String
+showAbs params bs body =
+  "λ" <> showParams params <> " " <> showBindings bs <> " = " <> show body
+  where
+    showParams [] = "()"
+    showParams ps = "(" <> intercalate ", " (map (\(Ident n) -> n) ps) <> ")"
   
-      showBindings [] = ""
-      showBindings bindings = "{ " <> intercalate "; " (map showBinding bindings) <> " }"
-      showBinding (Ident n, region, expr) = 
-        n <> "@" <> showRegion region <> " = " <> show expr
-      showRegion ALocal = "local"
-      showRegion AGlobal = "global"
+    showBindings [] = ""
+    showBindings bindings = "{ " <> intercalate "; " (map showBinding bindings) <> " }"
+    showBinding (Ident n, region, expr) = 
+      n <> "@" <> showRegion region <> " = " <> show expr
+    showRegion ALocal = "local"
+    showRegion AGlobal = "global"
+
+instance Show Abs where
+  show (Abs params bs body) = showAbs params bs body
 
 instance Show abs => Show (CIndexable abs) where
   show (CVar _ (Ident n)) = n
   show (CApp _ f a) = show f <> "(" <> intercalate ", " (map show a) <> ")"
-  show (CRec t delay body) = "rec[" <> showType t <> ", delay=" <> show delay <> "](" <> show body <> ")"
+  show (CRec t delay param bs body) = "rec[" <> showType t <> ", delay=" <> show delay <> "](" <> showAbs [param] bs body <> ")"
 
 instance Show abs => Show (CExpr abs) where
-  show (CCExpr t cs idx) = 
+  show (CSel t cs idx) = 
     "choice[" <> showType t <> "](" <> intercalate " | " (map show cs) <> ")[" <> show idx <> "]"
   show (CIndexed [] expr) = show expr
   show (CIndexed idxs expr) = 
@@ -272,19 +275,19 @@ choiceTree (EOp t op a b) = do
     _ -> error "choiceTree: cannot index into an operation result (this is a bug)"
 choiceTree (EVar t n) = toC (CVar t n)
 choiceTree (EApp t f as) = toC (CApp t (toCExpr f) (fmap toCExpr as))
-choiceTree (EAbs t params bs e) = do
+choiceTree (EAbs t params bs body) = do
   idxs <- ST.get
   pure $ case idxs of
-    [] -> CAbs t (Abs params (map (second toCExpr) [ (n, ALocal, b) | (n, b) <- bs ]) (toCExpr e))
+    [] -> CAbs t (Abs params [ (n, ALocal, toCExpr b) | (n, b) <- bs ] (toCExpr body))
     _ -> error "choiceTree: cannot index into an abstraction (this is a bug)"
-choiceTree (ERec t d e) = toC (CRec t d (toCExpr e))
+choiceTree (ERec t d param bs body) = toC (CRec t d param [ (n, ALocal, toCExpr b) | (n, b) <- bs ] (toCExpr body))
 choiceTree (EArr t es) = do
   s <- pop
   case s of
     Just (t, idx) -> do
       es' <- traverse choiceTree es
       push (t, idx)
-      pure $ CCExpr t es' (toCExpr idx)
+      pure $ CSel t es' (toCExpr idx)
     Nothing -> pure $ CArr t (map toCExpr es)
 choiceTree (ESelect t e idx) = do
   push (t, idx)
@@ -301,8 +304,8 @@ elimConstIndices = transform go
 
     -- Eliminate constant index selections by directly selecting the choice
     -- It's ok to prune impure expressions here (since the index is constant those expressions will never be accessible)
-    go (CCExpr _ chs (CConst (I32 idx))) = chs !! idx
-    go (CCExpr _ chs (CConst (I64 idx))) = chs !! idx
+    go (CSel _ chs (CConst (I32 idx))) = chs !! idx
+    go (CSel _ chs (CConst (I64 idx))) = chs !! idx
 
     -- Keep everything else as-is
     go ch = ch
@@ -344,9 +347,9 @@ abstractUnsaturatedApps :: CExpr Abs -> Unique (CExpr Abs)
 abstractUnsaturatedApps = transformM go
   where
     go :: CExpr Abs -> Unique (CExpr Abs)
-    go (CIndexed idxs (CApp t f args)) = case drop (length args) (paramTypes $ choiceType f) of
+    go e@(CIndexed [] (CApp t f args)) = case drop (length args) (paramTypes $ cexprType f) of
       -- Saturated, keep as is
-      [] -> pure $ CIndexed idxs (CApp t f args)
+      [] -> pure e
       -- Unsaturated, create closure
       remainingParams -> do
         argNames <- sequence [ fresh | _ <- args ]
@@ -354,7 +357,7 @@ abstractUnsaturatedApps = transformM go
 
         let argBindings = [ (n, ALocal, arg) | (n, arg) <- zip argNames args ]
         let closureBody = CIndexed [] $ CApp t f $ mconcat
-              [ [ CIndexed [] (CVar (choiceType a) n) | (n, a) <- zip argNames args ]
+              [ [ CIndexed [] (CVar (cexprType a) n) | (n, a) <- zip argNames args ]
               , [ CIndexed [] (CVar pt mn) | (mn, pt) <- remainingParamNames ]
               ]
 
@@ -362,10 +365,10 @@ abstractUnsaturatedApps = transformM go
     go ch = pure ch
 
 gatherAbstractions :: CExpr Abs -> ST.State AbsEnv (CExpr FuncRef)
-gatherAbstractions (CCExpr t choices selector) = do
+gatherAbstractions (CSel t choices selector) = do
   choices' <- traverse gatherAbstractions choices
   selector' <- gatherAbstractions selector
-  pure $ CCExpr t choices' selector'
+  pure $ CSel t choices' selector'
 gatherAbstractions (CIndexed idxs expr) = do
   idxs' <- traverse (\(t, c) -> (t,) <$> gatherAbstractions c) idxs
   expr' <- gatherAbstractionsExpr expr
@@ -396,9 +399,10 @@ gatherAbstractionsExpr (CApp t f args) = do
   f' <- gatherAbstractions f
   args' <- traverse gatherAbstractions args
   pure $ CApp t f' args'
-gatherAbstractionsExpr (CRec t delay body) = do
+gatherAbstractionsExpr (CRec t delay param bindings body) = do
   body' <- gatherAbstractions body
-  pure $ CRec t delay body'
+  bindings' <- sequence [ (n, region,) <$> gatherAbstractions bbody | (n, region, bbody) <- bindings ]
+  pure $ CRec t delay param bindings' body'
 
 -- | Compute the free variables for each abstraction in the function map.
 --
@@ -536,7 +540,7 @@ markCapturedBindings freeVarMap funcRefMap = do
 
         , globals = mconcat
             [ M.fromList [ (n, ptype) | (ptype, _, n) <- capturedParams ]
-            , M.fromList [ (n, choiceType e) | (n, AGlobal, e) <- bindings' ]
+            , M.fromList [ (n, cexprType e) | (n, AGlobal, e) <- bindings' ]
             ] 
         }
 
@@ -641,7 +645,7 @@ testCExpr4_2 = CAbs (TAbs [TNumber TI32, TNumber TI32, TNumber TI32] (TNumber TI
     [ (Ident "bnd_b", ALocal, CIndexed [] (CVar (TNumber TI32) (Ident "a")))
     , (Ident "bnd_c", ALocal, CIndexed [] (CVar (TNumber TI32) (Ident "z")))
     ]
-    (CCExpr (TNumber TI32)
+    (CSel (TNumber TI32)
       [ (COp (TNumber TI32) Mul (CIndexed [] (CVar (TNumber TI32) (Ident "c"))) (CIndexed [] (CVar (TNumber TI32) (Ident "b"))))
       , (COp (TNumber TI32) Mul (CIndexed [] (CVar (TNumber TI32) (Ident "c"))) (CIndexed [] (CVar (TNumber TI32) (Ident "z"))))
       ] (COp (TNumber TI32) Mul (CIndexed [] (CVar (TNumber TI32) (Ident "bnd_a"))) (CIndexed [] (CVar (TNumber TI32) (Ident "z"))))))
@@ -655,13 +659,13 @@ testCExpr4_3 = CAbs (TAbs [TNumber TI32, TNumber TI32, TNumber TI32] (TNumber TI
     [ (Ident "bnd_b", ALocal, CIndexed [] (CVar (TNumber TI32) (Ident "a")))
     , (Ident "bnd_c", ALocal, CIndexed [] (CVar (TNumber TI32) (Ident "z")))
     ]
-    (CCExpr (TArr (TNumber TI32) 3)
+    (CSel (TArr (TNumber TI32) 3)
       [ (COp (TNumber TI32) Mul (CIndexed [] (CVar (TNumber TI32) (Ident "c"))) (CIndexed [] (CVar (TNumber TI32) (Ident "b"))))
       , (COp (TNumber TI32) Mul (CIndexed [] (CVar (TNumber TI32) (Ident "c"))) (CIndexed [] (CVar (TNumber TI32) (Ident "z"))))
-      , (CCExpr (TArr (TNumber TI32) 3)
+      , (CSel (TArr (TNumber TI32) 3)
           [ (COp (TNumber TI32) Mul (CIndexed [] (CVar (TNumber TI32) (Ident "c"))) (CIndexed [] (CVar (TNumber TI32) (Ident "b"))))
           , (COp (TNumber TI32) Mul (CIndexed [] (CVar (TNumber TI32) (Ident "c"))) (CIndexed [] (CVar (TNumber TI32) (Ident "z"))))
-          ] (CCExpr (TArr (TNumber TI32) 3)
+          ] (CSel (TArr (TNumber TI32) 3)
                  [ (CConst $ I32 1)
                  , (COp (TNumber TI32) Mul (CIndexed [] (CVar (TNumber TI32) (Ident "c"))) (CIndexed [] (CVar (TNumber TI32) (Ident "z"))))
                  ] (CConst $ I32 0))) 
