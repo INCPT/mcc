@@ -199,7 +199,7 @@ retvalue (CIndexed [] (CRec t delay param bindings body))
 
       bindingRefs <- mconcat <$> sequence
         [ pure $ M.singleton param (RProj delayRef [delayIdx])
-        , M.fromList <$> sequenceA [ (n,) <$> R.local withBindingRefs (snd <$> rhsvalue region bbody) | (n, region, bbody) <- bindings ]
+        , M.fromList <$> sequenceA [ (n,) . snd <$> R.local withBindingRefs (rhsvalue region bbody) | (n, region, bbody) <- bindings ]
         ]
 
       let withBindingRefs :: Env -> Env
@@ -238,13 +238,24 @@ retvalue (CSel _ chs sel) = do
 
       cif cond (retvalue ch) (recif env chs sref (idx + 1))
 
-toplevel :: M.Map Ident (CExpr FuncRef) -> Map FuncRef Func -> CallM (Map FuncRef Ref)
-toplevel m funcRefMap = M.fromList <$> sequence [ (n,) <$> go n f | (n, f) <- M.toList funcRefMap ]
+toplevel :: M.Map Ident (CExpr FuncRef) -> Map FuncRef Func -> CallM (Map Ident Ref)
+toplevel toplevelMap funcRefMap = mdo
+  funcMap <- traverse func funcRefMap
+
+  refMap <- M.fromList <$> sequence
+    [ (n,) . snd <$> R.local withRefMap (rhsvalue AGlobal expr)
+    | (n, expr) <- M.toList toplevelMap
+    ]
+
+  let withRefMap :: Env -> Env
+      withRefMap Env {..} = Env { globals = refMap <> globals, .. }
+
+  pure refMap
   where
-    go n (Func _ params bindings body) = mdo
+    func (Func _ params bindings body) = mdo
       bindingRefs <- mconcat <$> sequence
         [ pure $ M.fromList [ (p, RArg idx) | (idx, p) <- zip [0..] params ]
-        , M.fromList <$> sequenceA [ (n,) <$> R.local withBindingRefs (snd <$> rhsvalue region bbody) | (n, region, bbody) <- bindings ]
+        , M.fromList <$> sequenceA [ (n,) . snd <$> R.local withBindingRefs (rhsvalue region bbody) | (n, region, bbody) <- bindings ]
         ]
       let withBindingRefs :: Env -> Env
           withBindingRefs Env {..} = Env { globals = bindingRefs <> globals, .. }
