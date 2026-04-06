@@ -33,11 +33,8 @@ data Ref
 
   | RVar Idx -- either a function local var index (e.g. in function f() { int a; float b; } would be locals with index 0 and 1) or an index into a global var table
   | RArray Type Idx -- global base address of array in a linear memory layout
+  | RIndexed Type Ref Ref
   | RFuncRef FuncRef -- index into a global function table
-
-  -- double references
-  | RRArray Type Idx -- contains the local/global var index containing the base address of an array
-  | RRFuncRef Idx -- contains the local/global var index containing the index into the function table
   deriving Show
 
 --------------------------------------------------------------------------------
@@ -60,7 +57,7 @@ data Ref
 
 -- NOTE: a literal array paired with a selection is a choice
 
-data Lens = Lens { from :: [Ref], to :: [Int] }
+data Lens = Lens { from :: [Ref], to :: [Ref] }
   deriving Show
 
 data Env = Env
@@ -72,7 +69,7 @@ data Env = Env
 newEnv :: Type -> Ref -> Env
 newEnv t ref = Env t ref (Lens [] [])
 
-focusTo :: Int -> Env -> Env
+focusTo :: Ref -> Env -> Env
 focusTo idx env = env { lens = env.lens { to = env.lens.to <> [idx] } }
 
 focusFrom :: [Ref] -> Env -> Env
@@ -162,6 +159,7 @@ rhsvalue globals region e@(CArr _ _) = allocAndStore globals region e
 rhsvalue globals region e@(COp _ _ _ _) = allocAndStore globals region e
 rhsvalue globals region e@(CSel _ _ _) = allocAndStore globals region e
 
+-- Indexed expressions
 rhsvalue globals _ (CIndexed [] (CVar t n))
   | Just ref <- M.lookup n globals = pure (t, ref)
   | otherwise = error "rhsvalue: unknown global (this is a bug)"
@@ -174,7 +172,7 @@ retvalue :: Map Ident Ref -> CExpr FuncRef -> CallM ()
 retvalue globals e@(CConst _) = rhsvalue globals ALocal e >>= uncurry ret
 retvalue globals e@(CAbs _ _) = rhsvalue globals ALocal e >>= uncurry ret
 retvalue globals (CArr _ elems) = sequence_
-  [ R.local (focusTo i) $ retvalue globals elem
+  [ R.local (focusTo $ RConst $ I32 i) $ retvalue globals elem
   | (i, elem) <- zip [0..] elems
   ]
 retvalue globals (COp _ op a b) = do
@@ -184,28 +182,40 @@ retvalue globals (COp _ op a b) = do
   R.ask >>= \env -> cbinOp op aref bref env.ret
 
 retvalue globals e@(CIndexed [] (CVar _ _)) = rhsvalue globals ALocal e >>= uncurry ret
+
 retvalue globals (CIndexed [] (CApp _ f as)) = do
   (_, fref) <- rhsvalue globals ALocal f
   arefs <- traverse (rhsvalue globals ALocal) as
     
   R.ask >>= \env -> ccall fref (map snd arefs) env.ret
+
 retvalue globals (CIndexed [] (CRec t delay param bindings body))
   | typeContainsAbs t = error "retvalue: CRec: type contains abstraction"
   | otherwise = mdo
-      delayLine <- calloc (TArr t delay) AGlobal
+      let delayType = TArr t delay
+
+      delayLine <- calloc delayType AGlobal
       delayIdx <- calloc (TNumber TI32) AGlobal
+
       globals' <- mconcat <$> sequence
-        [ pure $ M.singleton param delayLine
+        [ pure $ M.singleton param (RIndexed delayType delayLine delayIdx)
         , pure globals
         , M.fromList <$> sequenceA [ (n,) . snd <$> rhsvalue globals' region bbody | (n, region, bbody) <- bindings ]
         ]
-      undefined
+
+      retvalue globals' body
+      
+      -- Copy result to delay line
+      R.ask >>= \env -> ccopyRef t env.ret (RIndexed delayType delayLine delayIdx) (Lens [] [])
+
+      cbinOp Add delayLine (RConst $ I32 1) delayLine
+      cbinOp Mod delayLine (RConst $ I32 delay) delayLine
   where
     typeContainsAbs (TNumber _) = False
     typeContainsAbs (TArr t _) = typeContainsAbs t
     typeContainsAbs (TAbs _ _) = True
 
--- General selection expression
+-- General indexed expression
 retvalue globals (CIndexed idxs indexable) = do
   refs <- sequence [ rhsvalue globals ALocal idx | (_, idx) <- idxs ]
   (t, ref) <- rhsvalue globals ALocal (CIndexed [] indexable)
