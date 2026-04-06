@@ -61,9 +61,6 @@ data Ref
 
 -- NOTE: a literal array paired with a selection is a choice
 
-data Lens = Lens { from :: [Ref], to :: [Ref] }
-  deriving Show
-
 data Env = Env
   { globals :: Map Ident Ref
   , ret :: Ref

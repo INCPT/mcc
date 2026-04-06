@@ -283,6 +283,7 @@ data LBox
 -- **** (ERec _ _ _ (EConst n)) = n
 -- **** (ESelect [a, b, c])[1] = b
 -- **** (App (Abs f)) = can inline if feasible
+-- **** (Abs _ -> let b = xs in b) = (Abs _ -> xs) (bust this should be handled by inline-if-used-only-once rule)
 -- * if something is not referenced in delay, don't alloc delay box and compute it lazily in e.g. select
 -- ** e.g. bindings that do not reference the recusive head can be outside the rec block
 -- * codegen
