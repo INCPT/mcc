@@ -197,7 +197,7 @@ retvalue (CIndexed [] (CRec t delay param bindings body))
       delayRef <- calloc (TArr t delay) AGlobal
       delayIdx <- calloc (TNumber TI32) AGlobal
 
-      bindingRefs <- mconcat <$> sequence
+      bindingRefs <- mconcat <$> sequenceA
         [ pure $ M.singleton param (RProj delayRef [delayIdx])
         , M.fromList <$> sequenceA [ (n,) . snd <$> R.local withBindingRefs (rhsvalue region bbody) | (n, region, bbody) <- bindings ]
         ]
@@ -238,10 +238,8 @@ retvalue (CSel _ chs sel) = do
 
       cif cond (retvalue ch) (recif env chs sref (idx + 1))
 
-toplevel :: M.Map Ident (CExpr FuncRef) -> Map FuncRef Func -> CallM (Map Ident Ref)
+toplevel :: M.Map Ident (CExpr FuncRef) -> Map FuncRef Func -> CallM (Map Ident [Statement])
 toplevel toplevelMap funcRefMap = mdo
-  funcMap <- traverse func funcRefMap
-
   refMap <- M.fromList <$> sequence
     [ (n,) . snd <$> R.local withRefMap (rhsvalue AGlobal expr)
     | (n, expr) <- M.toList toplevelMap
@@ -250,17 +248,27 @@ toplevel toplevelMap funcRefMap = mdo
   let withRefMap :: Env -> Env
       withRefMap Env {..} = Env { globals = refMap <> globals, .. }
 
-  pure refMap
+  funcMap <- R.local withRefMap (traverse func funcRefMap)
+
+  pure $ M.fromList
+    [ (n, sts)
+    | (fr, sts) <- M.toList funcMap
+    , Just n <- [ M.lookup fr funcRefToIdent ]
+    ]
+
   where
-    func (Func _ params bindings body) = mdo
-      bindingRefs <- mconcat <$> sequence
+    funcRefToIdent = M.fromList [ (fr, n) | (n, CAbs _ fr) <- M.toList toplevelMap ]
+
+    func (Func _ params bindings body) = cextract $ mdo
+      bindingRefs <- mconcat <$> sequenceA
         [ pure $ M.fromList [ (p, RArg idx) | (idx, p) <- zip [0..] params ]
         , M.fromList <$> sequenceA [ (n,) . snd <$> R.local withBindingRefs (rhsvalue region bbody) | (n, region, bbody) <- bindings ]
         ]
       let withBindingRefs :: Env -> Env
           withBindingRefs Env {..} = Env { globals = bindingRefs <> globals, .. }
 
-      R.local withBindingRefs $ snd <$> rhsvalue AGlobal body
+      (t, ref) <- R.local withBindingRefs $ rhsvalue AGlobal body
+      ret t ref
 
 -- TODO: oversampling just means that we insert some stateful code around the oversampled function (which we should always inline when generating code; this can happen directly in the codegen)
 --- https://github.com/juce-framework/JUCE/blob/master/modules/juce_dsp/processors/juce_Oversampling.cpp
