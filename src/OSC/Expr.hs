@@ -186,6 +186,9 @@ typecheckBindings bindings
 
       pure bindings'
 
+infer :: [(Ident, Expr ())] -> Either TypeError [(Ident, Expr Type)]
+infer = flip R.runReader mempty . E.runExceptT . typecheckBindings
+
 --------------------------------------------------------------------------------
 
 i32 :: Int -> Expr ()
@@ -220,3 +223,5 @@ select = ESelect ()
 
 rec_ :: Int -> Ident -> [(Ident, Expr ())] -> Expr () -> Expr ()
 rec_ = ERec ()
+
+--------------------------------------------------------------------------------
