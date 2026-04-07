@@ -15,8 +15,8 @@ data TypeError = TypeError String
 
 type GenM = E.ExceptT TypeError (R.Reader (Map Ident Type))
 
-holes :: [a] -> (a, [a])
-holes = undefined
+holes :: [a] -> [(a, [a])]
+holes xs = [ (x, take i xs ++ drop (i + 1) xs) | (i, x) <- zip [0..] xs ]
 
 reccheck :: Map Ident (Expr ()) -> GenM ()
 reccheck = undefined
