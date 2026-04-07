@@ -1,12 +1,16 @@
 module OSC.Expr where
 
 import qualified Control.Monad.Except as E
+import qualified Control.Monad.Reader as R
+
+import Data.Map (Map)
+import qualified Data.Map as M
 
 import OSC.Ctx
 
 data TypeError = TypeError String
 
-type GenM = E.Except TypeError
+type GenM = E.ExceptT TypeError (R.Reader (Map Ident Type))
 
 i32 :: Int -> GenM Expr
 i32 = pure . EConst . I32
@@ -38,3 +42,9 @@ arr (a:as) = do
   if all ((== at) . exprType) as'
     then pure $ EArr (TArr at (length as + 1)) (a':as')
     else E.throwError $ TypeError $ "arr: mismatched types: " <> show (at:fmap exprType as')
+
+var :: Ident -> GenM Expr
+var = undefined
+
+bindings :: [(Ident, GenM Expr)] -> GenM [(Ident, Expr)]
+bindings = undefined

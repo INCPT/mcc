@@ -95,8 +95,8 @@ data Expr t
   | ERec t {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
   deriving Show
 
-exprType :: Expr t -> t
-exprType (EConst n) = error "exprType: EConst has no type parameter"
+exprType :: Expr Type -> Type
+exprType (EConst n) = numberType n
 exprType (EOp t _ _ _) = t
 exprType (EArr t _) = t
 exprType (EVar t _) = t
