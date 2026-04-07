@@ -41,9 +41,8 @@ sizeOfType (TArr t dim) = sizeOfType t * dim
 sizeOfType (TAbs _ _) = sizeOfType (TNumber TI32) -- TODO PLATFORM: funcref is I32
 
 returnType :: Type -> Type
-returnType t@(TArr _ _) = t
 returnType (TAbs _ t) = t
-returnType t = t
+returnType _ = error "returnType: not an abs"
 
 peelType :: Type -> Type
 peelType (TArr t _) = t
@@ -51,9 +50,8 @@ peelType (TAbs _ _) = error "peelType: abstraction"
 peelType t = error $ "peelType: " <> show t
 
 paramTypes :: Type -> [Type]
-paramTypes (TArr _ _) = []
 paramTypes (TAbs params _) = params
-paramTypes _ = []
+paramTypes _ = error "paramTypes: not an abs"
 
 data Number = I32 Int | I64 Int | F32 Float | F64 Double
   deriving (Show, Data)
@@ -84,7 +82,7 @@ data Expr t
 
   | EVar t Ident
 
-  | EAbs t {- params -} [Ident] {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
+  | EAbs Type {- params -} [Ident] {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
   | EApp t (Expr t) [Expr t]
 
   | ESelect t (Expr t) {- selector -} (Expr t)

@@ -314,6 +314,8 @@ toplevel toplevelMap funcRefMap = IR { toplevelAllocations = st.allocations, .. 
 
           R.local withBindingRefs $ retvalue body
 
+-- TODO: use mtl constraints for allocLocal/Global?
+
 -- TODO: oversampling just means that we insert some stateful code around the oversampled function (which we should always inline when generating code; this can happen directly in the codegen)
 -- TODO: zig std math: https://github.com/ziglang/zig/tree/master/lib/std/math
 

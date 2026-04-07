@@ -1,7 +1,10 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RecursiveDo #-}
 
 module OSC.Expr where
 
+import Control.Monad (when)
 import qualified Control.Monad.Except as E
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as S
@@ -46,6 +49,18 @@ shadowcheck = undefined
 
 --------------------------------------------------------------------------------
 
+treturnType :: E.MonadError TypeError m => Type -> m Type
+treturnType (TAbs _ t) = pure t
+treturnType t = E.throwError $ TypeError $ "returnType: not an abstraction: " <> show t
+
+tpeelType :: E.MonadError TypeError m => Type -> m Type
+tpeelType (TArr t _) = pure t
+tpeelType t = E.throwError $ TypeError $ "peelType: not an array: " <> show t
+
+tparamTypes :: E.MonadError TypeError m => Type -> m [Type]
+tparamTypes (TAbs params _) = pure params
+tparamTypes t = E.throwError $ TypeError $ "paramTypes: not an abstraction" <> show t
+
 typecheck :: Expr () -> GenM (Expr Type)
 typecheck (EConst n) = pure $ EConst n
 
@@ -55,7 +70,7 @@ typecheck (EOp () op a b) = do
   case (op, exprType a', exprType b') of
     (Add, TNumber t, TNumber u)
       | t /= u -> E.throwError $ TypeError $ "typecheck: +: mismatched types: " <> show t <> ", " <> show u
-      | otherwise -> pure $ EOp (TNumber t) o a' b'
+      | otherwise -> pure $ EOp (TNumber t) op a' b'
 
 typecheck (EArr () []) = E.throwError $ TypeError $ "typecheck: empty array"
 typecheck (EArr () (a:as)) = do
@@ -70,10 +85,53 @@ typecheck (EVar () n) = fmap (M.lookup n) R.ask >>= \case
   Just t -> pure $ EVar t n
   Nothing -> E.throwError $ TypeError $ "typecheck: unknown binding: " <> show n
 
-typecheck _ = undefined
+typecheck (EAbs t params bindings body) = do
+  ptypes <- tparamTypes t
+  let paramsEnv = M.fromList (zip params ptypes)
 
-bindings :: Map Ident (Expr ()) -> GenM (Map Ident (Expr Type))
-bindings m
+  bindings' <- R.local (\env -> paramsEnv <> env) $ typecheckBindings (M.fromList bindings)
+  body' <- R.local (\env -> paramsEnv <> fmap exprType bindings' <> env) $ typecheck body
+  pure $ EAbs t params (M.toList bindings') body'
+
+typecheck (EApp () f params) = do
+  f' <- typecheck f
+  params' <- traverse typecheck params
+
+  ptypes <- tparamTypes (exprType f')
+  rtype <- treturnType (exprType f')
+
+  sequence_
+    [ when (fpt /= pt) $ E.throwError $ TypeError $ "typecheck: type mismatch in function application: " <> show fpt <> " <=> " <> show pt
+    | (fpt, pt) <- zip ptypes (fmap exprType params')
+    ]
+
+  case drop (length params) ptypes of
+    [] -> pure $ EApp rtype f' params'
+    remparams -> pure $ EApp (TAbs remparams rtype) f' params'
+
+typecheck (ESelect () expr sel) = do
+  expr' <- typecheck expr
+  sel' <- typecheck sel
+
+  t <- tpeelType (exprType expr')
+  
+  case exprType sel' of
+    TNumber TI32 -> pure ()
+    TNumber TI64 -> pure ()
+    t -> E.throwError $ TypeError $ "typecheck: selection index not an integer: " <> show t
+  
+  pure $ ESelect t expr' sel'
+
+typecheck (ERec () delay param bindings body) = mdo
+  bindings' <- R.local (\env -> paramsEnv <> env) $ typecheckBindings (M.fromList bindings)
+  body' <- R.local (\env -> paramsEnv <> fmap exprType bindings' <> env) $ typecheck body
+
+  let paramsEnv = M.singleton param (exprType body')
+
+  pure $ ERec (exprType body') delay param (M.toList bindings') body'
+
+typecheckBindings :: Map Ident (Expr ()) -> GenM (Map Ident (Expr Type))
+typecheckBindings m
   | Just e <- reccheck m = E.throwError e
   | otherwise = do
       undefined
