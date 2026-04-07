@@ -41,6 +41,14 @@ data Ref
   | RFuncRefRef Idx -- local or global var index with index into global function table (e.g. pointer to a function pointer)
   deriving Show
 
+data Statement
+  = SCopy Type {- source -} Ref {- dest -} Ref
+  | SIf Ref [Statement] [Statement]
+  | SCall {- funcref -} Ref {- args -} [Ref] {- return ref -} Ref
+  | SBinOp Op {- a -} Ref {- b -} Ref {- result -} Ref
+  | SFor {- counter -} Ref {- initial -} Int {- steps -} Int {- step -} Int [Statement]
+  deriving Show
+
 --------------------------------------------------------------------------------
 
 -- INFORMAL SPECS
@@ -72,16 +80,6 @@ data Env = Env
 focusTo :: Ref -> Env -> Env
 focusTo idx (Env {..}) = Env { to = idx:to, .. }
 
---------------------------------------------------------------------------------
-
-data Statement
-  = SCopy Type {- source -} Ref {- dest -} Ref
-  | SIf Ref [Statement] [Statement]
-  | SCall {- funcref -} Ref {- args -} [Ref] {- return ref -} Ref
-  | SBinOp Op {- a -} Ref {- b -} Ref {- result -} Ref
-  | SFor {- counter -} Ref {- initial -} Int {- steps -} Int {- step -} Int [Statement]
-  deriving Show
-
 data Allocation = Allocation Type Idx
 
 data AllocState = AllocState
@@ -92,11 +90,6 @@ data AllocState = AllocState
 
 type CallMBase = W.WriterT [Statement] (ST.State AllocState)
 type CallM = R.ReaderT Env CallMBase
-
-cextract :: CallM () -> CallM [Statement]
-cextract m = do
-  env <- R.ask
-  fmap snd $ lift $ lift $ W.runWriterT (R.runReaderT m env)
 
 allocLocal :: Type -> (Ref -> CallM a) -> CallM a
 allocLocal t k = case t of
@@ -117,6 +110,13 @@ allocGlobal t = lift $ case t of
     alloc :: (Idx -> Ref) -> ST.State AllocState Ref
     alloc mkRef = fmap mkRef $ ST.state $ \AllocState {..} ->
       (Global globalIdx, AllocState { globalIdx = globalIdx + 1, allocations = (t, Global globalIdx):allocations, .. })
+
+--------------------------------------------------------------------------------
+
+cextract :: CallM () -> CallM [Statement]
+cextract m = do
+  env <- R.ask
+  fmap snd $ lift $ lift $ W.runWriterT (R.runReaderT m env)
 
 ccopyRef :: Type -> Ref -> Ref -> CallM ()
 ccopyRef t src dst = lift $ W.tell [SCopy t src dst]
