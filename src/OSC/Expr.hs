@@ -166,12 +166,11 @@ typecheck (ESelect () expr sel) = do
   
   pure $ ESelect t expr' sel'
 
-typecheck (ERec () delay param bindings body) = mdo
+typecheck (ERec t delay param bindings body) = mdo
+  let paramsEnv = M.singleton param t
+
   bindings' <- R.local (\env -> paramsEnv <> env) $ typecheckBindings bindings
   body' <- R.local (\env -> M.fromList (fmap (fmap exprType) bindings') <> paramsEnv <> env) $ typecheck body
-
-  let t = exprType body'
-  let paramsEnv = M.singleton param t
   
   when (typeContainsAbs t) $ E.throwError $ TypeError $ "typecheck: return type contains abstractions: " <> show t
 
@@ -229,8 +228,8 @@ app = EApp ()
 select :: Expr () -> Expr () -> Expr ()
 select = ESelect ()
 
-rec_ :: Int -> Ident -> [(Ident, Expr ())] -> Expr () -> Expr ()
-rec_ = ERec ()
+rec_ :: Type -> Int -> Ident -> [(Ident, Expr ())] -> Expr () -> Expr ()
+rec_ = ERec
 
 --------------------------------------------------------------------------------
 

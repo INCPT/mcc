@@ -91,7 +91,7 @@ data Expr t
   -- NOTE: The (return) type of a recursive expression can not contain abstractions
   -- in order to simplify the logic and not require an initial value. It wouldn't make
   -- much sense generally anyway.
-  | ERec t {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
+  | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
   deriving (Show, Data)
 
 exprType :: Expr Type -> Type
