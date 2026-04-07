@@ -67,6 +67,13 @@ typecheck (EConst n) = pure $ EConst n
 typecheck (EOp () op a b) = do
   a' <- typecheck a
   b' <- typecheck b
+
+{-
+data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Rotl | Rotr 
+        | Eq | Ne | Gt | Lt | GEt | LEt 
+        | Min | Max | CopySign | Rem
+-}
+
   case (op, exprType a', exprType b') of
     (Add, TNumber t, TNumber u)
       | t /= u -> E.throwError $ TypeError $ "typecheck: +: mismatched types: " <> show t <> ", " <> show u
@@ -90,7 +97,7 @@ typecheck (EAbs t params bindings body) = do
   let paramsEnv = M.fromList (zip params ptypes)
 
   bindings' <- R.local (\env -> paramsEnv <> env) $ typecheckBindings (M.fromList bindings)
-  body' <- R.local (\env -> paramsEnv <> fmap exprType bindings' <> env) $ typecheck body
+  body' <- R.local (\env -> fmap exprType bindings' <> paramsEnv <> env) $ typecheck body
   pure $ EAbs t params (M.toList bindings') body'
 
 typecheck (EApp () f params) = do
@@ -124,17 +131,20 @@ typecheck (ESelect () expr sel) = do
 
 typecheck (ERec () delay param bindings body) = mdo
   bindings' <- R.local (\env -> paramsEnv <> env) $ typecheckBindings (M.fromList bindings)
-  body' <- R.local (\env -> paramsEnv <> fmap exprType bindings' <> env) $ typecheck body
+  body' <- R.local (\env -> fmap exprType bindings' <> paramsEnv <> env) $ typecheck body
 
   let paramsEnv = M.singleton param (exprType body')
 
   pure $ ERec (exprType body') delay param (M.toList bindings') body'
 
 typecheckBindings :: Map Ident (Expr ()) -> GenM (Map Ident (Expr Type))
-typecheckBindings m
-  | Just e <- reccheck m = E.throwError e
-  | otherwise = do
-      undefined
+typecheckBindings bindings
+  | Just e <- reccheck bindings = E.throwError e
+  | otherwise = mdo
+      bindings' <- R.local (\env -> bindingsEnv <> env) $ traverse typecheck bindings
+      let bindingsEnv = fmap exprType bindings'
+
+      pure bindings'
 
 --------------------------------------------------------------------------------
 
