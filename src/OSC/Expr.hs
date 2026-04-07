@@ -24,18 +24,18 @@ newtype TypeError = TypeError String
 
 type GenM = E.ExceptT TypeError (R.Reader (Map Ident Type))
 
-reccheck :: Map Ident (Expr ()) -> Maybe TypeError
-reccheck bindings = msum [ visit n mempty | n <- M.keys vars ]
+reccheck :: [(Ident, Expr ())] -> Either TypeError [(Ident, Expr ())]
+reccheck bindings = undefined -- msum [ visit n mempty | n <- M.keys vars ]
   where
-    vars = fmap (\expr -> S.fromList [ n | EVar _ n <- universe expr ]) bindings
+    vars = fmap (\expr -> S.fromList [ n | EVar _ n <- universe expr ]) $ M.fromList bindings
 
-    visit :: Ident -> Set Ident -> Maybe TypeError
-    visit n path
-      | fmap (S.member n) (M.lookup n vars) == Just True = Just $ TypeError $ "reccheck: self recursive binding: " <> show n
-      | S.member n path = Just $ TypeError $ "reccheck: mutually recursive bindings: " <> show n <> ", " <> show path
-      | otherwise = msum [ visit n' path' | n' <- S.toList (M.findWithDefault mempty n vars) ]
-          where
-            path' = S.insert n path
+    -- visit :: Ident -> Set Ident -> Maybe TypeError
+    -- visit n path
+    --   | fmap (S.member n) (M.lookup n vars) == Just True = Just $ TypeError $ "reccheck: self recursive binding: " <> show n
+    --   | S.member n path = Just $ TypeError $ "reccheck: mutually recursive bindings: " <> show n <> ", " <> show path
+    --   | otherwise = msum [ visit n' path' | n' <- S.toList (M.findWithDefault mempty n vars) ]
+    --       where
+    --         path' = S.insert n path
 
 dupcheck :: [(Ident, Expr ())] -> Maybe TypeError
 dupcheck bindings
@@ -180,7 +180,7 @@ typecheck (ERec () delay param bindings body) = mdo
 typecheckBindings :: [(Ident, Expr ())] -> GenM [(Ident, Expr Type)]
 typecheckBindings bindings
   | Just e <- dupcheck bindings = E.throwError e
-  | Just e <- reccheck (M.fromList bindings) = E.throwError e
+  | Left e <- reccheck bindings = E.throwError e
   | otherwise = mdo
       bindings' <- R.local (\env -> bindingsEnv <> env) $ sequenceA [ (n,) <$> typecheck expr | (n, expr) <- bindings ]
       let bindingsEnv = M.fromList $ fmap (fmap exprType) bindings'
