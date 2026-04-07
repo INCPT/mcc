@@ -11,11 +11,9 @@ import qualified Control.Monad.Reader as R
 
 import Data.Generics.Uniplate.Data (universe)
 
-import Data.Foldable (msum)
-import Data.Graph (Graph, Vertex, graphFromEdges, reachable, topSort)
+import qualified Data.Graph as G
 import Data.Map (Map)
 import qualified Data.Map as M
-import Data.Set (Set)
 import qualified Data.Set as S
 
 import OSC.Ctx
@@ -26,25 +24,22 @@ newtype TypeError = TypeError String
 type GenM = E.ExceptT TypeError (R.Reader (Map Ident Type))
 
 reccheck :: [(Ident, Expr ())] -> Either TypeError [(Ident, Expr ())]
-reccheck bindings =
-  case findCycle graph of
-    Just ident -> Left $ TypeError $ "reccheck: cyclic dependency involving: " <> show ident
-    Nothing -> Right [ (ident, bindingsMap M.! ident) | v <- reverse (topSort graph), let (_, ident, _) = nodeFromVertex v ]
+reccheck bindings = if hasCycles
+  then Left $ TypeError $ "reccheck: cyclic dependency involving: " <> show (G.scc graph)
+  else Right [ (ident, bindingsMap M.! ident) | v <- reverse (G.topSort graph), let (_, ident, _) = nodeFromVertex v ]
+
   where
     bindingsMap = M.fromList bindings
     vars = fmap (\expr -> S.fromList [ n | EVar _ n <- universe expr ]) bindingsMap
     
     edges = [ (ident, ident, S.toList deps) | (ident, deps) <- M.toList vars ]
-    (graph, nodeFromVertex, _) = graphFromEdges edges
-    
-    findCycle :: Graph -> Maybe Ident
-    findCycle g = msum [ checkVertex v | v <- [0 .. length edges - 1] ]
+    (graph, nodeFromVertex, _) = G.graphFromEdges edges
+
+    hasCycles :: Bool
+    hasCycles = or [ isCycle node | node <- G.scc graph ]
       where
-        checkVertex v =
-          let (_, ident, _) = nodeFromVertex v
-          in if v `elem` reachable g v
-             then Just ident
-             else Nothing
+        isCycle (G.Node _ []) = False  -- single node SCC = no cycle
+        isCycle (G.Node _ _) = True    -- multi-node SCC = cycle
 
 dupcheck :: [(Ident, Expr ())] -> Maybe TypeError
 dupcheck bindings
@@ -189,12 +184,15 @@ typecheck (ERec () delay param bindings body) = mdo
 typecheckBindings :: [(Ident, Expr ())] -> GenM [(Ident, Expr Type)]
 typecheckBindings bindings
   | Just e <- dupcheck bindings = E.throwError e
-  | Left e <- reccheck bindings = E.throwError e
-  | otherwise = mdo
-      bindings' <- R.local (\env -> bindingsEnv <> env) $ sequenceA [ (n,) <$> typecheck expr | (n, expr) <- bindings ]
-      let bindingsEnv = M.fromList $ fmap (fmap exprType) bindings'
-
-      pure bindings'
+  | otherwise = case reccheck bindings of
+      Left e -> E.throwError e
+      Right sortedBindings -> go sortedBindings
+        where
+          go [] = pure []
+          go ((n, expr):bs) = do
+            expr' <- typecheck expr
+            bs' <- R.local (\env -> M.singleton n (exprType expr') <> env) (go bs)
+            return $ (n, expr'):bs'
 
 infer :: [(Ident, Expr ())] -> Either TypeError [(Ident, Expr Type)]
 infer = flip R.runReader mempty . E.runExceptT . typecheckBindings
@@ -239,10 +237,7 @@ rec_ = ERec ()
 es :: [(Ident, Expr ())]
 es = 
   [ ("x", i32 5)
-  , ("y", var "x")
+  , ("y", op Add (var "x") (i32 8))
   ]
 
-t1 = infer
-  [ ("x", i32 5)
-  , ("y", var "x")
-  ]
+t1 = infer es
