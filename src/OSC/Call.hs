@@ -65,6 +65,8 @@ data Env = Env
   { bindings :: Map Ident Ref
   , ret :: Ref
   , to :: [Ref]
+  , localIdx :: Int
+  , allocations :: [(Type, Idx)]
   }
 
 focusTo :: Ref -> Env -> Env
@@ -73,44 +75,48 @@ focusTo idx (Env {..}) = Env { to = idx:to, .. }
 --------------------------------------------------------------------------------
 
 data Statement
-  = SCopy Type Ref Ref
+  = SCopy Type {- source -} Ref {- dest -} Ref
   | SIf Ref [Statement] [Statement]
-  | SCall Ref [Ref] Ref
-  | SBinOp Op Ref Ref Ref
+  | SCall {- funcref -} Ref {- args -} [Ref] {- return ref -} Ref
+  | SBinOp Op {- a -} Ref {- b -} Ref {- result -} Ref
   | SFor {- counter -} Ref {- initial -} Int {- steps -} Int {- step -} Int [Statement]
   deriving Show
 
 data Allocation = Allocation Type Idx
 
 data AllocState = AllocState
-  { localIdx :: Int
-  , globalIdx :: Int
-  , allocations :: [Allocation]
+  { globalIdx :: Int
+  , allocations :: [(Type, Idx)]
   , funcRefIdx :: Int
   }
 
 type CallMBase = W.WriterT [Statement] (ST.State AllocState)
 type CallM = R.ReaderT Env CallMBase
 
-runCallM m = R.runReaderT m (Env { bindings = mempty, ret = undefined, to = [] })
-
 cextract :: CallM () -> CallM [Statement]
 cextract m = do
   env <- R.ask
   fmap snd $ lift $ lift $ W.runWriterT (R.runReaderT m env)
 
-calloc' :: Type -> AllocRegion -> CallMBase Ref
-calloc' t region = case t of
-  TNumber _ -> fmap RVar $ lift (allocInRegion region)
-  TArr _ _-> fmap (RArr t) $ lift (allocInRegion region)
-  TAbs _ _ -> fmap RFuncRefRef $ lift (allocInRegion region)
+allocLocal :: Type -> (Ref -> CallM a) -> CallM a
+allocLocal t k = case t of
+  TNumber _ -> alloc RVar
+  TArr _ _ -> alloc (RArr t)
+  TAbs _ _ -> alloc RFuncRefRef
   where
-    allocInRegion :: AllocRegion -> ST.State AllocState Idx
-    allocInRegion AGlobal = ST.state $ \st -> (Global st.globalIdx, st { globalIdx = st.globalIdx + 1, allocations = Allocation t (Global st.globalIdx):st.allocations})
-    allocInRegion ALocal = ST.state $ \st -> (Local st.localIdx, st { localIdx = st.localIdx + 1, allocations = Allocation t (Local st.localIdx):st.allocations})
+    alloc mkRef = do
+      env <- R.ask
+      R.local (\Env {..} -> Env { localIdx = localIdx + 1, allocations = (t, Local localIdx):allocations, .. }) $ k (mkRef $ Local env.localIdx)
 
-calloc :: Type -> AllocRegion -> CallM Ref
-calloc t region = lift $ calloc' t region
+allocGlobal :: Type -> CallMBase Ref
+allocGlobal t = lift $ case t of
+  TNumber _ -> alloc RVar
+  TArr _ _ -> alloc (RArr t)
+  TAbs _ _ -> alloc RFuncRefRef
+  where
+    alloc :: (Idx -> Ref) -> ST.State AllocState Ref
+    alloc mkRef = fmap mkRef $ ST.state $ \AllocState {..} ->
+      (Global globalIdx, AllocState { globalIdx = globalIdx + 1, allocations = (t, Global globalIdx):allocations, .. })
 
 ccopyRef :: Type -> Ref -> Ref -> CallM ()
 ccopyRef t src dst = lift $ W.tell [SCopy t src dst]
@@ -128,16 +134,20 @@ cif r t e = do
   lift $ W.tell [SIf r t' e']
 
 cfor :: Int -> Int -> Int -> (Ref -> CallM ()) -> CallM ()
-cfor initial steps step f = do
-  i <- calloc (TNumber TI32) ALocal
+cfor initial steps step f = allocLocal (TNumber TI32) $ \i -> do
   f' <- cextract (f i)
   lift $ W.tell [SFor i initial steps step f']
 
 --------------------------------------------------------------------------------
 
 allocAndStore :: AllocRegion -> CExpr FuncRef -> CallM (Type, Ref)
-allocAndStore region e = do
-  ref <- calloc t region
+allocAndStore ALocal e = allocLocal t $ \ref -> do
+  R.local (\Env {..} -> Env { ret = ref, to = [], .. }) (retvalue e)
+  pure (t, ref)
+  where
+    t = cexprType e
+allocAndStore AGlobal e = do
+  ref <- lift $ allocGlobal t
   R.local (\Env {..} -> Env { ret = ref, to = [], .. }) (retvalue e)
   pure (t, ref)
   where
@@ -198,8 +208,8 @@ retvalue (CIndexed [] (CRec t delay param bindings body))
   | typeContainsAbs t = error "retvalue: CRec: type contains abstraction"
   | otherwise = mdo
       -- Alloc delay number of samples of type t[]
-      delayRef <- calloc (TArr t delay) AGlobal
-      delayIdx <- calloc (TNumber TI32) AGlobal
+      delayRef <- lift $ allocGlobal (TArr t delay)
+      delayIdx <- lift $ allocGlobal (TNumber TI32)
 
       bindingRefs <- mconcat <$> sequenceA
         [ pure $ M.singleton param (proj delayRef [delayIdx])
@@ -236,38 +246,44 @@ retvalue (CSel _ chs sel) = do
     -- TODO: binary tree if
     recif _ [] _ _ = error "recif: no choice (this is a bug)"
     recif _ [ch] _ _ = retvalue ch
-    recif env (ch:chs) sref idx = do
-      cond <- calloc (TNumber TI32) ALocal
+    recif env (ch:chs) sref idx = allocLocal (TNumber TI32) $ \cond -> do
       cbinOp Eq sref (RConst (I32 idx)) cond
-
       cif cond (retvalue ch) (recif env chs sref (idx + 1))
 
-toplevel :: Map Ident (CExpr FuncRef) -> Map FuncRef Func -> CallMBase (Map Ident [Statement])
+toplevel :: Map Ident (CExpr FuncRef) -> Map FuncRef Func -> CallMBase (Map Ident ([Statement], [(Type, Idx)]))
 toplevel toplevelMap funcRefMap = mdo
   refMap <- M.fromList <$> sequence
-    [ do
-        ref <- calloc' (cexprType expr) AGlobal
-        (n,) . snd <$> R.runReaderT (rhsvalue AGlobal expr) (Env { bindings = refMap, ret = ref, to = [] })
+    [ case expr of
+        CAbs _ fr -> pure (n, RFuncRef fr)
+        _ -> do
+          ref <- allocGlobal (cexprType expr)
+          R.runReaderT (retvalue expr) (Env { bindings = refMap, ret = ref, to = [], localIdx = 0, allocations = [] })
+          pure (n, ref)
     | (n, expr) <- M.toList toplevelMap
     ]
 
   funcMap <- M.fromList <$> sequence
-    [ (fr,) <$> R.runReaderT (func f) (Env { bindings = refMap, ret = retRef, to = [] })
+    [ do
+       stsa <- flip R.runReaderT (Env { bindings = refMap, ret = retRef, to = [], localIdx = 0, allocations = [] }) $ do
+          sts <- cextract $ func f
+          allocations <- R.asks (.allocations)
+          pure (sts, allocations)
+       pure (fr, stsa)
     | (fr, f@(Func _ params _ _)) <- M.toList funcRefMap
-    , -- Return ref is last param
-    let retRef = RArg (length params)
+    -- Return ref is last param
+    , let retRef = RArg (length params)
     ]
 
   pure $ M.fromList
-    [ (n, sts)
-    | (fr, sts) <- M.toList funcMap
+    [ (n, stsa)
+    | (fr, stsa) <- M.toList funcMap
     , Just n <- [ M.lookup fr funcRefToIdent ]
     ]
 
   where
     funcRefToIdent = M.fromList [ (fr, n) | (n, CAbs _ fr) <- M.toList toplevelMap ]
 
-    func (Func _ params bindings body) = cextract $ mdo
+    func (Func _ params bindings body) = mdo
       bindingRefs <- mconcat <$> sequenceA
         [ pure $ M.fromList [ (p, RArg idx) | (idx, p) <- zip [0..] params ]
         , M.fromList <$> sequenceA
