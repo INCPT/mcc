@@ -17,6 +17,7 @@ import Data.Data (Typeable, Data)
 import Data.Functor.Identity
 import Data.List (intercalate)
 import Data.Map (Map)
+import Data.String (IsString)
 import qualified Data.Map as M
 import Data.Set (Set, (\\))
 import qualified Data.Set as S
@@ -62,8 +63,8 @@ numberType (F32 _) = TNumber TF32
 numberType (I64 _) = TNumber TI64
 numberType (F64 _) = TNumber TF64
 
-data Ident = Ident String
-  deriving (Eq, Ord, Data, Show)
+newtype Ident = Ident String
+  deriving (Eq, Ord, Data, Show, IsString)
 
 data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Rotl | Rotr 
         | Eq | Ne | Gt | Lt | GEt | LEt 

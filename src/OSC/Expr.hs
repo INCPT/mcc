@@ -25,16 +25,17 @@ newtype TypeError = TypeError String
 type GenM = E.ExceptT TypeError (R.Reader (Map Ident Type))
 
 reccheck :: Map Ident (Expr ()) -> Maybe TypeError
-reccheck m = msum [ visit n ns | (n, ns) <- M.toList vars ]
+reccheck bindings = msum [ visit n mempty | n <- M.keys vars ]
   where
-    vars = fmap (\expr -> S.fromList [ n | EVar _ n <- universe expr ]) m
+    vars = fmap (\expr -> S.fromList [ n | EVar _ n <- universe expr ]) bindings
 
     visit :: Ident -> Set Ident -> Maybe TypeError
-    visit n ns
-      | S.member n ns = Just $ TypeError $ "reccheck: recursive bindings: " <> show n <> ", " <> show ns
-      | otherwise = msum [ visit ref ns' | ref <- S.toList (M.findWithDefault mempty n vars) ]
+    visit n path
+      | fmap (S.member n) (M.lookup n vars) == Just True = Just $ TypeError $ "reccheck: self recursive binding: " <> show n
+      | S.member n path = Just $ TypeError $ "reccheck: mutually recursive bindings: " <> show n <> ", " <> show path
+      | otherwise = msum [ visit n' path' | n' <- S.toList (M.findWithDefault mempty n vars) ]
           where
-            ns' = S.insert n ns
+            path' = S.insert n path
 
 dupcheck :: [(Ident, Expr ())] -> Maybe TypeError
 dupcheck bindings
@@ -225,3 +226,14 @@ rec_ :: Int -> Ident -> [(Ident, Expr ())] -> Expr () -> Expr ()
 rec_ = ERec ()
 
 --------------------------------------------------------------------------------
+
+es :: [(Ident, Expr ())]
+es = 
+  [ ("x", i32 5)
+  , ("y", var "x")
+  ]
+
+t1 = infer
+  [ ("x", i32 5)
+  , ("y", var "x")
+  ]
