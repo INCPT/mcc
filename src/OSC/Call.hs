@@ -16,7 +16,7 @@ import Control.Monad (when)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
-import qualified Control.Monad.State as ST
+import qualified Control.Monad.State.Lazy as ST
 import qualified Control.Monad.Trans.Writer.CPS as W
 import Data.Functor.Product (Product (Pair))
 import Data.Map (Map)
@@ -255,13 +255,13 @@ retvalue (CSel _ chs sel) = do
 data IRFunc = IRFunc
   { allocations :: [(Type, Idx)]
   , statements :: [Statement]
-  }
+  } deriving Show
 
 data IR = IR
   { toplevelAllocations :: [(Type, Idx)]
   , toplevelStatements :: [Statement]
   , toplevelFuncs :: Map Ident IRFunc
-  }
+  } deriving Show
 
 toplevel :: Map Ident (CExpr FuncRef) -> Map FuncRef Func -> IR
 toplevel toplevelMap funcRefMap = IR { toplevelAllocations = st.allocations, .. }

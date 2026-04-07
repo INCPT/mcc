@@ -16,6 +16,7 @@ import Data.Bifunctor (first, second)
 import Data.Data (Typeable, Data)
 import Data.Functor.Identity
 import Data.List (intercalate)
+import qualified Data.Graph as G
 import Data.Map (Map)
 import Data.String (IsString)
 import qualified Data.Map as M
@@ -23,7 +24,7 @@ import Data.Set (Set, (\\))
 import qualified Data.Set as S
 import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
-import qualified Control.Monad.State as ST
+import qualified Control.Monad.State.Lazy as ST
 import qualified Control.Monad.Trans.Writer.CPS as W
 import Data.Generics.Uniplate.Data
 import Data.Generics.Str
@@ -428,31 +429,59 @@ gatherAbstractionsExpr (CRec t delay param bindings body) = do
 --   - inner's free vars: {x, y, z}
 --   - middle's free vars: {x, y} (includes inner's free vars minus middle's params/bindings)
 --   - outer's free vars: {} (all variables are bound by outer)
+
+topsort :: Ord a => (b -> Set c) -> [(a, b)] -> Either [G.Tree G.Vertex] [(a, b)]
+topsort decls
+  | hasCycles = Left (G.scc graph)
+  | otherwise = Right [ (n, declsm M.! n) | v <- reverse (G.topSort graph), let (_, n, _) = nodeFromVertex v ]
+  where
+    declsm = M.fromList decls
+
+    edges = [ (a, a, S.toList deps) | (a, deps) <- decls ]
+    (graph, nodeFromVertex, _) = G.graphFromEdges edges
+
+    hasCycles :: Bool
+    hasCycles = or [ isCycle node | node <- G.scc graph ]
+      where
+        isCycle (G.Node _ []) = False  -- single node SCC = no cycle
+        isCycle (G.Node _ _) = True    -- multi-node SCC = cycle
+
 gatherFreeVars :: Map FuncRef Func -> Map FuncRef (Set Ident)
 gatherFreeVars funcRefMap = freeVarMap
   where
+    funcDeps :: Map FuncRef (Set FuncRef)
+    funcDeps = M.fromList
+      [ ( fr
+        , S.fromList $ mconcat
+            [ [ fr | CAbs _ fr <- universeBi body ]
+            , [ fr | (_, _, b) <- bindings, CAbs _ fr <- universeBi b ]
+            ]
+        )
+      | (fr, Func _ _ bindings body) <- M.toList funcRefMap
+      ]
+
     freeVarMap :: Map FuncRef (Set Ident)
     freeVarMap = fmap go funcRefMap
-      where
-        go :: Func -> Set Ident
-        go (Func _ params bindings body) = allVars bindings body \\ (S.fromList [ n | (n, _, _) <- bindings ] <> S.fromList params)
 
-        allVars :: [(Ident, AllocRegion, CExpr FuncRef)] -> CExpr FuncRef -> Set Ident
-        allVars bindings body = mconcat $ fmap mconcat
-          [ [ S.fromList [ n | CVar @FuncRef _ n <- universeBi body ] ]
-          , [ S.fromList [ n | (_, _, b) <- bindings, CVar @FuncRef _ n <- universeBi b ] ]
+    go :: Func -> Set Ident
+    go (Func _ params bindings body) = allVars bindings body \\ (S.fromList [ n | (n, _, _) <- bindings ] <> S.fromList params)
 
-          -- Gather transient free vars (by lazily referencing freeVarMap; this works because no mutual recursion between bindings is allowed)
-          , [ fvs | CAbs _ fr <- universeBi body, Just fvs <- [ M.lookup fr freeVarMap ] ]
-          , [ fvs | (_, _, b) <- bindings, CAbs _ fr <- universeBi b, Just fvs <- [ M.lookup fr freeVarMap ] ]
-          ]
+    allVars :: [(Ident, AllocRegion, CExpr FuncRef)] -> CExpr FuncRef -> Set Ident
+    allVars bindings body = mconcat $ fmap mconcat
+      [ [ S.fromList [ n | CVar @FuncRef _ n <- universeBi body ] ]
+      , [ S.fromList [ n | (_, _, b) <- bindings, CVar @FuncRef _ n <- universeBi b ] ]
+
+      -- Gather transient free vars (by lazily referencing freeVarMap; this works because no mutual recursion between bindings is allowed)
+      , [ fvs | CAbs _ fr <- universeBi body, Just fvs <- [ M.lookup fr freeVarMap ] ]
+      , [ fvs | (_, _, b) <- bindings, CAbs _ fr <- universeBi b, Just fvs <- [ M.lookup fr freeVarMap ] ]
+      ]
 
 --------------------------------------------------------------------------------
 
 data GlobalsEnv = GlobalsEnv
   { substMap :: Map FuncRef (Map Ident Ident)
   , globals :: Map Ident Type
-  }
+  } deriving Show
 
 instance Semigroup GlobalsEnv where GlobalsEnv a b <> GlobalsEnv a' b' = GlobalsEnv (a <> a') (b <> b')
 instance Monoid GlobalsEnv where mempty = GlobalsEnv mempty mempty

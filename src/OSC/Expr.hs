@@ -1,7 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeOperators #-}
 
 module OSC.Expr where
 
@@ -17,6 +17,7 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 
 import OSC.Ctx
+import OSC.Call
 
 newtype TypeError = TypeError String
   deriving Show
@@ -166,7 +167,7 @@ typecheck (ESelect () expr sel) = do
   
   pure $ ESelect t expr' sel'
 
-typecheck (ERec t delay param bindings body) = mdo
+typecheck (ERec t delay param bindings body) = do
   let paramsEnv = M.singleton param t
 
   bindings' <- R.local (\env -> paramsEnv <> env) $ typecheckBindings bindings
@@ -233,10 +234,38 @@ rec_ = ERec
 
 --------------------------------------------------------------------------------
 
+ti32 :: Type
+ti32 = TNumber TI32
+
+tf32 :: Type
+tf32 = TNumber TF32
+
+ti64 :: Type
+ti64 = TNumber TI64
+
+tf64 :: Type
+tf64 = TNumber TF64
+
+tarr :: Type -> Int -> Type
+tarr = TArr
+
+tabs :: [Type] -> Type -> Type
+tabs = TAbs
+
+(|:) :: Ident -> Type -> (Ident, Type)
+(|:) = (,)
+
 es :: [(Ident, Expr ())]
 es = 
   [ ("x", i32 5)
-  , ("y", op Add (var "x") (i32 8))
+  , ("n", f32 5)
+  , ("f", abs_ ["p" |: ti32] (tabs [ti32] ti32) [] $ abs_ ["o" |: ti32 ] ti32 [] $ op Add (var "x") (var "p"))
+  , ("z", app (var "f") [var "x"])
   ]
 
-t1 = infer es
+t1 = funcRefMap
+  where
+    Right es' = infer es
+    ces = M.fromList $ fmap (fmap toCExpr) es'
+    (identMap, funcRefMap, genv) = compile ces
+    ir = toplevel identMap funcRefMap
