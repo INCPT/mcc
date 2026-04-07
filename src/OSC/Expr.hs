@@ -68,16 +68,40 @@ typecheck (EOp () op a b) = do
   a' <- typecheck a
   b' <- typecheck b
 
-{-
-data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Rotl | Rotr 
-        | Eq | Ne | Gt | Lt | GEt | LEt 
-        | Min | Max | CopySign | Rem
--}
+  let ta = exprType a'
+  let tb = exprType b'
 
-  case (op, exprType a', exprType b') of
-    (Add, TNumber t, TNumber u)
-      | t /= u -> E.throwError $ TypeError $ "typecheck: +: mismatched types: " <> show t <> ", " <> show u
-      | otherwise -> pure $ EOp (TNumber t) op a' b'
+  case (op, ta, tb) of
+    -- Arithmetic operations: return same type as operands
+    (Add, TNumber t, TNumber u) | t == u -> pure $ EOp (TNumber t) op a' b'
+    (Sub, TNumber t, TNumber u) | t == u -> pure $ EOp (TNumber t) op a' b'
+    (Mul, TNumber t, TNumber u) | t == u -> pure $ EOp (TNumber t) op a' b'
+    (Div, TNumber t, TNumber u) | t == u -> pure $ EOp (TNumber t) op a' b'
+    (Mod, TNumber t, TNumber u) | t == u -> pure $ EOp (TNumber t) op a' b'
+    (Rem, TNumber t, TNumber u) | t == u -> pure $ EOp (TNumber t) op a' b'
+    (Min, TNumber t, TNumber u) | t == u -> pure $ EOp (TNumber t) op a' b'
+    (Max, TNumber t, TNumber u) | t == u -> pure $ EOp (TNumber t) op a' b'
+    (CopySign, TNumber t, TNumber u) | t == u -> pure $ EOp (TNumber t) op a' b'
+    
+    -- Bitwise operations: integer types only
+    (And, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ EOp (TNumber t) op a' b'
+    (Or, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ EOp (TNumber t) op a' b'
+    (Xor, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ EOp (TNumber t) op a' b'
+    (Shl, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ EOp (TNumber t) op a' b'
+    (Shr, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ EOp (TNumber t) op a' b'
+    (Rotl, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ EOp (TNumber t) op a' b'
+    (Rotr, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ EOp (TNumber t) op a' b'
+    
+    -- Comparison operations: return I32 (boolean)
+    (Eq, TNumber t, TNumber u) | t == u -> pure $ EOp (TNumber TI32) op a' b'
+    (Ne, TNumber t, TNumber u) | t == u -> pure $ EOp (TNumber TI32) op a' b'
+    (Gt, TNumber t, TNumber u) | t == u -> pure $ EOp (TNumber TI32) op a' b'
+    (Lt, TNumber t, TNumber u) | t == u -> pure $ EOp (TNumber TI32) op a' b'
+    (GEt, TNumber t, TNumber u) | t == u -> pure $ EOp (TNumber TI32) op a' b'
+    (LEt, TNumber t, TNumber u) | t == u -> pure $ EOp (TNumber TI32) op a' b'
+    
+    -- Type mismatch error
+    _ -> E.throwError $ TypeError $ "typecheck: " <> show op <> ": type mismatch: " <> show ta <> " and " <> show tb
 
 typecheck (EArr () []) = E.throwError $ TypeError $ "typecheck: empty array"
 typecheck (EArr () (a:as)) = do
