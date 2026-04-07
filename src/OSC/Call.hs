@@ -86,8 +86,8 @@ data Allocation = Allocation Type Idx
 
 data AllocState = AllocState
   { globalIdx :: Int
-  , allocations :: [(Type, Idx)]
   , funcRefIdx :: Int
+  , allocations :: [(Type, Idx)]
   }
 
 type CallMBase = W.WriterT [Statement] (ST.State AllocState)
@@ -250,52 +250,69 @@ retvalue (CSel _ chs sel) = do
       cbinOp Eq sref (RConst (I32 idx)) cond
       cif cond (retvalue ch) (recif env chs sref (idx + 1))
 
-toplevel :: Map Ident (CExpr FuncRef) -> Map FuncRef Func -> CallMBase (Map Ident ([Statement], [(Type, Idx)]))
-toplevel toplevelMap funcRefMap = mdo
-  refMap <- M.fromList <$> sequence
-    [ case expr of
-        CAbs _ fr -> pure (n, RFuncRef fr)
-        _ -> do
-          ref <- allocGlobal (cexprType expr)
-          R.runReaderT (retvalue expr) (Env { bindings = refMap, ret = ref, to = [], localIdx = 0, allocations = [] })
-          pure (n, ref)
-    | (n, expr) <- M.toList toplevelMap
-    ]
+--------------------------------------------------------------------------------
 
-  funcMap <- M.fromList <$> sequence
-    [ do
-       stsa <- flip R.runReaderT (Env { bindings = refMap, ret = retRef, to = [], localIdx = 0, allocations = [] }) $ do
-          sts <- cextract $ func f
-          allocations <- R.asks (.allocations)
-          pure (sts, allocations)
-       pure (fr, stsa)
-    | (fr, f@(Func _ params _ _)) <- M.toList funcRefMap
-    -- Return ref is last param
-    , let retRef = RArg (length params)
-    ]
+data IRFunc = IRFunc
+  { allocations :: [(Type, Idx)]
+  , statements :: [Statement]
+  }
 
-  pure $ M.fromList
-    [ (n, stsa)
-    | (fr, stsa) <- M.toList funcMap
-    , Just n <- [ M.lookup fr funcRefToIdent ]
-    ]
+data IR = IR
+  { toplevelAllocations :: [(Type, Idx)]
+  , toplevelStatements :: [Statement]
+  , toplevelFuncs :: Map Ident IRFunc
+  }
 
+toplevel :: Map Ident (CExpr FuncRef) -> Map FuncRef Func -> IR
+toplevel toplevelMap funcRefMap = IR { toplevelAllocations = st.allocations, .. }
   where
-    funcRefToIdent = M.fromList [ (fr, n) | (n, CAbs _ fr) <- M.toList toplevelMap ]
+    ((toplevelFuncs, toplevelStatements), st) = ST.runState (W.runWriterT gen) (AllocState { globalIdx = 0, funcRefIdx = 0, allocations = [] })
 
-    func (Func _ params bindings body) = mdo
-      bindingRefs <- mconcat <$> sequenceA
-        [ pure $ M.fromList [ (p, RArg idx) | (idx, p) <- zip [0..] params ]
-        , M.fromList <$> sequenceA
-            [ (n,) . snd <$> R.local withBindingRefs (rhsvalue region bbody)
-            | (n, region, bbody) <- bindings
-            ]
+    gen = mdo
+      refMap <- M.fromList <$> sequence
+        [ case expr of
+            CAbs _ fr -> pure (n, RFuncRef fr)
+            _ -> do
+              ref <- allocGlobal (cexprType expr)
+              R.runReaderT (retvalue expr) (Env { bindings = refMap, ret = ref, to = [], localIdx = 0, allocations = [] })
+              pure (n, ref)
+        | (n, expr) <- M.toList toplevelMap
         ]
 
-      let withBindingRefs :: Env -> Env
-          withBindingRefs Env {..} = Env { bindings = bindingRefs <> bindings, .. }
+      funcMap <- M.fromList <$> sequence
+        [ do
+           irf <- flip R.runReaderT (Env { bindings = refMap, ret = retRef, to = [], localIdx = 0, allocations = [] }) $ do
+              statements <- cextract $ func f
+              allocations <- R.asks (.allocations)
+              pure IRFunc {..}
+           pure (fr, irf)
+        | (fr, f@(Func _ params _ _)) <- M.toList funcRefMap
+        -- Return ref is last param
+        , let retRef = RArg (length params)
+        ]
 
-      R.local withBindingRefs $ retvalue body
+      pure $ M.fromList
+        [ (n, irf)
+        | (fr, irf) <- M.toList funcMap
+        , Just n <- [ M.lookup fr funcRefToIdent ]
+        ]
+
+      where
+        funcRefToIdent = M.fromList [ (fr, n) | (n, CAbs _ fr) <- M.toList toplevelMap ]
+
+        func (Func _ params bindings body) = mdo
+          bindingRefs <- mconcat <$> sequenceA
+            [ pure $ M.fromList [ (p, RArg idx) | (idx, p) <- zip [0..] params ]
+            , M.fromList <$> sequenceA
+                [ (n,) . snd <$> R.local withBindingRefs (rhsvalue region bbody)
+                | (n, region, bbody) <- bindings
+                ]
+            ]
+
+          let withBindingRefs :: Env -> Env
+              withBindingRefs Env {..} = Env { bindings = bindingRefs <> bindings, .. }
+
+          R.local withBindingRefs $ retvalue body
 
 -- TODO: local var indices should be function local?
 
