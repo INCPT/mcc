@@ -93,7 +93,7 @@ data Expr t
   -- in order to simplify the logic and not require an initial value. It wouldn't make
   -- much sense generally anyway.
   | ERec t {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
-  deriving Show
+  deriving (Show, Data)
 
 exprType :: Expr Type -> Type
 exprType (EConst n) = numberType n

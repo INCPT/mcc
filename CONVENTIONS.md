@@ -1,4 +1,4 @@
-- Always prefer <> over ++
+- Always prefer the Semigroup operator <> over the List ++ where possible
 
 - Use list comprehensions where possible
 
