@@ -12,6 +12,7 @@ import qualified Control.Monad.Reader as R
 import Data.Generics.Uniplate.Data (universe)
 
 import Data.Foldable (msum)
+import Data.Graph (Graph, Vertex, graphFromEdges, reachable, topSort)
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Set (Set)
@@ -25,17 +26,25 @@ newtype TypeError = TypeError String
 type GenM = E.ExceptT TypeError (R.Reader (Map Ident Type))
 
 reccheck :: [(Ident, Expr ())] -> Either TypeError [(Ident, Expr ())]
-reccheck bindings = undefined -- msum [ visit n mempty | n <- M.keys vars ]
+reccheck bindings =
+  case findCycle graph of
+    Just ident -> Left $ TypeError $ "reccheck: cyclic dependency involving: " <> show ident
+    Nothing -> Right [ (ident, bindingsMap M.! ident) | v <- reverse (topSort graph), let (_, ident, _) = nodeFromVertex v ]
   where
-    vars = fmap (\expr -> S.fromList [ n | EVar _ n <- universe expr ]) $ M.fromList bindings
-
-    -- visit :: Ident -> Set Ident -> Maybe TypeError
-    -- visit n path
-    --   | fmap (S.member n) (M.lookup n vars) == Just True = Just $ TypeError $ "reccheck: self recursive binding: " <> show n
-    --   | S.member n path = Just $ TypeError $ "reccheck: mutually recursive bindings: " <> show n <> ", " <> show path
-    --   | otherwise = msum [ visit n' path' | n' <- S.toList (M.findWithDefault mempty n vars) ]
-    --       where
-    --         path' = S.insert n path
+    bindingsMap = M.fromList bindings
+    vars = fmap (\expr -> S.fromList [ n | EVar _ n <- universe expr ]) bindingsMap
+    
+    edges = [ (ident, ident, S.toList deps) | (ident, deps) <- M.toList vars ]
+    (graph, nodeFromVertex, _) = graphFromEdges edges
+    
+    findCycle :: Graph -> Maybe Ident
+    findCycle g = msum [ checkVertex v | v <- [0 .. length edges - 1] ]
+      where
+        checkVertex v =
+          let (_, ident, _) = nodeFromVertex v
+          in if v `elem` reachable g v
+             then Just ident
+             else Nothing
 
 dupcheck :: [(Ident, Expr ())] -> Maybe TypeError
 dupcheck bindings
