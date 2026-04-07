@@ -7,10 +7,8 @@ module OSC.Expr where
 import Control.Monad (when)
 import qualified Control.Monad.Except as E
 import qualified Control.Monad.Reader as R
-import qualified Control.Monad.State as S
 
-import Data.Generics.Uniplate.Data
-import Data.Generics.Str
+import Data.Generics.Uniplate.Data (universe)
 
 import Data.Foldable (msum)
 import Data.Map (Map)
@@ -44,6 +42,7 @@ reccheck m = msum [ visit n ns | (n, ns) <- M.toList vars ]
 -- TODO: allow shadowing only if exprs of different type?
 ---- this means shadowcheck must happen after typechecking
 ---- and also in reccheck we can't indiscriminately collect EVars; nested bindings must reset the reccheck
+
 shadowcheck :: Map Ident (Expr ()) -> Maybe TypeError
 shadowcheck = undefined
 
@@ -157,9 +156,16 @@ typecheck (ERec () delay param bindings body) = mdo
   bindings' <- R.local (\env -> paramsEnv <> env) $ typecheckBindings (M.fromList bindings)
   body' <- R.local (\env -> fmap exprType bindings' <> paramsEnv <> env) $ typecheck body
 
-  let paramsEnv = M.singleton param (exprType body')
+  let t = exprType body'
+  let paramsEnv = M.singleton param t
+  
+  when (typeContainsAbs t) $ E.throwError $ TypeError $ "typecheck: return type contains abstractions: " <> show t
 
-  pure $ ERec (exprType body') delay param (M.toList bindings') body'
+  pure $ ERec t delay param (M.toList bindings') body'
+  where
+    typeContainsAbs (TNumber _) = False
+    typeContainsAbs (TArr t _) = typeContainsAbs t
+    typeContainsAbs (TAbs _ _) = True
 
 typecheckBindings :: Map Ident (Expr ()) -> GenM (Map Ident (Expr Type))
 typecheckBindings bindings
@@ -172,6 +178,22 @@ typecheckBindings bindings
 
 --------------------------------------------------------------------------------
 
+{-
+data Expr t
+  = EConst Number
+  | EOp t Op (Expr t) (Expr t) -- both args and the result are simple types
+  | EArr t [Expr t]
+
+  | EVar t Ident
+
+  | EAbs Type {- params -} [Ident] {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
+  | EApp t (Expr t) [Expr t]
+
+  | ESelect t (Expr t) {- selector -} (Expr t)
+
+  | ERec t {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
+-}
+
 i32 :: Int -> Expr ()
 i32 = EConst . I32
 
@@ -183,19 +205,3 @@ i64 = EConst . I64
 
 f64 :: Double -> Expr ()
 f64 = EConst . F64
-
--- arr :: [GenM (Expr t)] -> GenM (Expr t)
--- arr [] = E.throwError $ TypeError "empty array"
--- arr (a:as) = do
---   a' <- a
---   as' <- sequence as
---   let at = exprType a'
---   if all ((== at) . exprType) as'
---     then pure $ EArr (TArr at (length as + 1)) (a':as')
---     else E.throwError $ TypeError $ "arr: mismatched types: " <> show (at:fmap exprType as')
--- 
--- var :: Ident -> GenM (Expr t)
--- var = undefined
--- 
--- bindings :: [(Ident, GenM (Expr t))] -> GenM [(Ident, (Expr t))]
--- bindings = undefined
