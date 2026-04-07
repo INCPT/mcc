@@ -54,6 +54,8 @@ dupcheck bindings
 -- but that'd make everything more convoluted and it would make interpreting Exprs for testing potentially
 -- harder since we wouldn't have type information
 
+-- NOTE: for future reference: https://blog.stimsina.com/post/implementing-a-hindley-milner-type-system-part-2
+
 -- TODO: allow shadowing only if exprs of different type?
 ---- this means shadowcheck must happen after typechecking
 ---- and also in reccheck we can't indiscriminately collect EVars; nested bindings must reset the reccheck
