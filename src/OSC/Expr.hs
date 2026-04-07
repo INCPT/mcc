@@ -205,3 +205,24 @@ i64 = EConst . I64
 
 f64 :: Double -> Expr ()
 f64 = EConst . F64
+
+op :: Op -> Expr () -> Expr () -> Expr ()
+op = EOp ()
+
+arr :: [Expr ()] -> Expr ()
+arr = EArr ()
+
+var :: Ident -> Expr ()
+var = EVar ()
+
+abs' :: Type -> [Ident] -> [(Ident, Expr ())] -> Expr () -> Expr ()
+abs' = EAbs
+
+app :: Expr () -> [Expr ()] -> Expr ()
+app = EApp ()
+
+select :: Expr () -> Expr () -> Expr ()
+select = ESelect ()
+
+rec :: Int -> Ident -> [(Ident, Expr ())] -> Expr () -> Expr ()
+rec = ERec ()
