@@ -314,13 +314,16 @@ toplevel toplevelMap funcRefMap = IR { toplevelAllocations = st.allocations, .. 
 
           R.local withBindingRefs $ retvalue body
 
--- TODO: local var indices should be function local?
-
 -- TODO: oversampling just means that we insert some stateful code around the oversampled function (which we should always inline when generating code; this can happen directly in the codegen)
---- https://github.com/juce-framework/JUCE/blob/master/modules/juce_dsp/processors/juce_Oversampling.cpp
--- TODO: can't return Abs from Rec
--- NOTE: selection only happens after "opaque" transitions, e.g. function call or global ref; an array paired with a selection is a choice
--- TODO: generate SAbs code; pretty straightforward
--- TODO: replace refs to params with RArg 0, 1, 2 etc
--- TODO: rec and oversample take a lambda abstraction (or a Var pointing to a lambda abstraction)
 -- TODO: zig std math: https://github.com/ziglang/zig/tree/master/lib/std/math
+
+-- NOTE: selection only happens after "opaque" transitions, e.g. function call or global ref; an array paired with a selection is a choice
+-- DONE: local var indices should be function local?
+--- https://github.com/juce-framework/JUCE/blob/master/modules/juce_dsp/processors/juce_Oversampling.cpp
+-- DONE: can't return Abs from Rec
+-- DONE: generate SAbs code; pretty straightforward
+-- DONE: replace refs to params with RArg 0, 1, 2 etc
+-- RJCT: rec and oversample take a lambda abstraction (or a Var pointing to a lambda abstraction)
+
+--------------------------------------------------------------------------------
+

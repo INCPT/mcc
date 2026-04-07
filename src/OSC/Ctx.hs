@@ -27,10 +27,10 @@ import qualified Control.Monad.Trans.Writer.CPS as W
 import Data.Generics.Uniplate.Data
 import Data.Generics.Str
 
-data TNumber = TI32 | TF32 | TI64 | TF64 deriving Data
+data TNumber = TI32 | TF32 | TI64 | TF64 deriving (Eq, Data, Show)
 
 data Type = TNumber TNumber | TArr Type {- length -} Int | TAbs [Type] Type
-  deriving Data
+  deriving (Eq, Data)
 
 sizeOfType :: Type -> Int
 sizeOfType (TNumber TI32) = 4
@@ -70,12 +70,12 @@ data Ident = Ident String
 data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Rotl | Rotr 
         | Eq | Ne | Gt | Lt | GEt | LEt 
         | Min | Max | CopySign | Rem
-  deriving (Data, Show)
+  deriving (Eq, Data, Show)
 
 data UOp = Sqrt | Abs' | Neg | Ceil | Floor | Trunc | Nearest 
          | Clz | Ctz | Popcnt | Eqz
          | Extend | Wrap | Convert | Demote | Promote | Reinterpret
-  deriving (Data, Show)
+  deriving (Eq, Data, Show)
 
 data Expr
   = EConst Number

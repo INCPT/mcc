@@ -45,6 +45,7 @@ library
       OSC.Box
       OSC.Call
       OSC.Ctx
+      OSC.Expr
   other-modules:
       Paths_mcc
   hs-source-dirs:
