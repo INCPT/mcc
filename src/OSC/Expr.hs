@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE TupleSections #-}
 
 module OSC.Expr where
 
@@ -34,6 +35,14 @@ reccheck m = msum [ visit n ns | (n, ns) <- M.toList vars ]
       | otherwise = msum [ visit ref ns' | ref <- S.toList (M.findWithDefault mempty n vars) ]
           where
             ns' = S.insert n ns
+
+dupcheck :: [(Ident, Expr ())] -> Maybe TypeError
+dupcheck bindings
+  | null dups = Nothing
+  | otherwise = Just $ TypeError $ "dupcheck: duplicate bindings: " <> show dups
+  where
+    counts = M.fromListWith (+) ((, 1 :: Int) <$> fmap fst bindings)
+    dups = [ n | (n, x) <- M.toList counts, x > 1 ]
 
 -- NOTE: we could theoretically do the typechecking after transforming to CExpr and save a bit of work,
 -- but that'd make everything more convoluted and it would make interpreting Exprs for testing potentially
@@ -119,9 +128,9 @@ typecheck (EAbs t params bindings body) = do
   ptypes <- tparamTypes t
   let paramsEnv = M.fromList (zip params ptypes)
 
-  bindings' <- R.local (\env -> paramsEnv <> env) $ typecheckBindings (M.fromList bindings)
-  body' <- R.local (\env -> fmap exprType bindings' <> paramsEnv <> env) $ typecheck body
-  pure $ EAbs t params (M.toList bindings') body'
+  bindings' <- R.local (\env -> paramsEnv <> env) $ typecheckBindings bindings
+  body' <- R.local (\env -> M.fromList (fmap (fmap exprType) bindings') <> paramsEnv <> env) $ typecheck body
+  pure $ EAbs t params bindings' body'
 
 typecheck (EApp () f params) = do
   f' <- typecheck f
@@ -153,46 +162,31 @@ typecheck (ESelect () expr sel) = do
   pure $ ESelect t expr' sel'
 
 typecheck (ERec () delay param bindings body) = mdo
-  bindings' <- R.local (\env -> paramsEnv <> env) $ typecheckBindings (M.fromList bindings)
-  body' <- R.local (\env -> fmap exprType bindings' <> paramsEnv <> env) $ typecheck body
+  bindings' <- R.local (\env -> paramsEnv <> env) $ typecheckBindings bindings
+  body' <- R.local (\env -> M.fromList (fmap (fmap exprType) bindings') <> paramsEnv <> env) $ typecheck body
 
   let t = exprType body'
   let paramsEnv = M.singleton param t
   
   when (typeContainsAbs t) $ E.throwError $ TypeError $ "typecheck: return type contains abstractions: " <> show t
 
-  pure $ ERec t delay param (M.toList bindings') body'
+  pure $ ERec t delay param bindings' body'
   where
     typeContainsAbs (TNumber _) = False
     typeContainsAbs (TArr t _) = typeContainsAbs t
     typeContainsAbs (TAbs _ _) = True
 
-typecheckBindings :: Map Ident (Expr ()) -> GenM (Map Ident (Expr Type))
+typecheckBindings :: [(Ident, Expr ())] -> GenM [(Ident, Expr Type)]
 typecheckBindings bindings
-  | Just e <- reccheck bindings = E.throwError e
+  | Just e <- dupcheck bindings = E.throwError e
+  | Just e <- reccheck (M.fromList bindings) = E.throwError e
   | otherwise = mdo
-      bindings' <- R.local (\env -> bindingsEnv <> env) $ traverse typecheck bindings
-      let bindingsEnv = fmap exprType bindings'
+      bindings' <- R.local (\env -> bindingsEnv <> env) $ sequenceA [ (n,) <$> typecheck expr | (n, expr) <- bindings ]
+      let bindingsEnv = M.fromList $ fmap (fmap exprType) bindings'
 
       pure bindings'
 
 --------------------------------------------------------------------------------
-
-{-
-data Expr t
-  = EConst Number
-  | EOp t Op (Expr t) (Expr t) -- both args and the result are simple types
-  | EArr t [Expr t]
-
-  | EVar t Ident
-
-  | EAbs Type {- params -} [Ident] {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
-  | EApp t (Expr t) [Expr t]
-
-  | ESelect t (Expr t) {- selector -} (Expr t)
-
-  | ERec t {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
--}
 
 i32 :: Int -> Expr ()
 i32 = EConst . I32
@@ -215,8 +209,8 @@ arr = EArr ()
 var :: Ident -> Expr ()
 var = EVar ()
 
-abs' :: Type -> [Ident] -> [(Ident, Expr ())] -> Expr () -> Expr ()
-abs' = EAbs
+abs_ :: [(Ident, Type)] -> Type -> [(Ident, Expr ())] -> Expr () -> Expr ()
+abs_ params rtype = EAbs (TAbs (fmap snd params) rtype) (fmap fst params)
 
 app :: Expr () -> [Expr ()] -> Expr ()
 app = EApp ()
@@ -224,5 +218,5 @@ app = EApp ()
 select :: Expr () -> Expr () -> Expr ()
 select = ESelect ()
 
-rec :: Int -> Ident -> [(Ident, Expr ())] -> Expr () -> Expr ()
-rec = ERec ()
+rec_ :: Int -> Ident -> [(Ident, Expr ())] -> Expr () -> Expr ()
+rec_ = ERec ()
