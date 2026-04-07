@@ -77,26 +77,26 @@ data UOp = Sqrt | Abs' | Neg | Ceil | Floor | Trunc | Nearest
          | Extend | Wrap | Convert | Demote | Promote | Reinterpret
   deriving (Eq, Data, Show)
 
-data Expr
+data Expr t
   = EConst Number
-  | EOp Type Op Expr Expr -- both args and the result are simple types
-  | EArr Type [Expr]
+  | EOp t Op (Expr t) (Expr t) -- both args and the result are simple types
+  | EArr t [Expr t]
 
-  | EVar Type Ident
+  | EVar t Ident
 
-  | EAbs Type {- params -} [Ident] {- bindings -} [(Ident, Expr)] {- body -} Expr
-  | EApp Type Expr [Expr]
+  | EAbs t {- params -} [Ident] {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
+  | EApp t (Expr t) [Expr t]
 
-  | ESelect Type Expr {- selector -} Expr
+  | ESelect t (Expr t) {- selector -} (Expr t)
 
   -- NOTE: The (return) type of a recursive expression can not contain abstractions
   -- in order to simplify the logic and not require an initial value. It wouldn't make
   -- much sense generally anyway.
-  | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr)] {- body -} Expr
+  | ERec t {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
   deriving Show
 
-exprType :: Expr -> Type
-exprType (EConst n) = numberType n
+exprType :: Expr t -> t
+exprType (EConst n) = error "exprType: EConst has no type parameter"
 exprType (EOp t _ _ _) = t
 exprType (EArr t _) = t
 exprType (EVar t _) = t
@@ -254,7 +254,7 @@ showOp Rem = "rem"
 
 --------------------------------------------------------------------------------
 
-toC :: Monad m => CIndexable Abs -> StackM (Type, Expr) m (CExpr Abs)
+toC :: Monad m => CIndexable Abs -> StackM (Type, Expr Type) m (CExpr Abs)
 toC e = do
   idxs <- ST.get
   pure $ CIndexed (map (second toCExpr) idxs) e
@@ -262,7 +262,7 @@ toC e = do
 -- Pair each index with the appropriate array, so an an expression like
 -- `[[0, 1], [2, 3]][1][0]` turns into `[[0, 1][0], [2, 3][0]][1]`.
 -- This allows for easy constant index elimination and the generation of more efficient code.
-choiceTree :: Monad m => Expr -> StackM (Type, Expr) m (CExpr Abs)
+choiceTree :: Monad m => Expr Type -> StackM (Type, Expr Type) m (CExpr Abs)
 choiceTree (EConst n) = do
   idxs <- ST.get
   pure $ case idxs of
@@ -313,7 +313,7 @@ elimConstIndices = transform go
 optimize :: CExpr Abs -> CExpr Abs
 optimize = elimConstIndices
 
-toCExpr :: Expr -> CExpr Abs
+toCExpr :: Expr Type -> CExpr Abs
 toCExpr = optimize . flip ST.evalState [] . choiceTree
 
 --------------------------------------------------------------------------------
@@ -596,19 +596,19 @@ markPureExpressions = fmap go
 
 --------------------------------------------------------------------------------
 
-compile :: Map Ident (CExpr Abs) -> (Map Ident (CExpr FuncRef), Map FuncRef Func)
+compile :: Map Ident (CExpr Abs) -> (Map Ident (CExpr FuncRef), Map FuncRef Func, GlobalsEnv)
 compile toplevelMap = runUnique $ do
   satMap <- traverse abstractUnsaturatedApps toplevelMap
 
   let (toplevelMap', env) = flip ST.runState (AbsEnv mempty 0) $ traverse gatherAbstractions satMap
   let freeVarMap = gatherFreeVars env.funcRefMap
 
-  (funcRefMap, _) <- markCapturedBindings freeVarMap env.funcRefMap
+  (funcRefMap, genv) <- markCapturedBindings freeVarMap env.funcRefMap
   
   -- TODO
   let optimize = id
 
-  pure (toplevelMap', optimize funcRefMap)
+  pure (toplevelMap', optimize funcRefMap, genv)
 
 --------------------------------------------------------------------------------
 -- Test expressions for markCapturedBindings
