@@ -62,7 +62,7 @@ data Ref
 -- NOTE: a literal array paired with a selection is a choice
 
 data Env = Env
-  { globals :: Map Ident Ref
+  { bindings :: Map Ident Ref
   , ret :: Ref
   , to :: [Ref]
   }
@@ -89,22 +89,28 @@ data AllocState = AllocState
   , funcRefIdx :: Int
   }
 
-type CallM = R.ReaderT Env (W.WriterT [Statement] (ST.State AllocState))
+type CallMBase = W.WriterT [Statement] (ST.State AllocState)
+type CallM = R.ReaderT Env CallMBase
+
+runCallM m = R.runReaderT m (Env { bindings = mempty, ret = undefined, to = [] })
 
 cextract :: CallM () -> CallM [Statement]
 cextract m = do
   env <- R.ask
   fmap snd $ lift $ lift $ W.runWriterT (R.runReaderT m env)
 
-calloc :: Type -> AllocRegion -> CallM Ref
-calloc t region = case t of
-  TNumber _ -> fmap RVar $ lift $ lift (allocInRegion region)
-  TArr _ _-> fmap (RArr t) $ lift $ lift (allocInRegion region)
-  TAbs _ _ -> fmap RFuncRefRef $ lift $ lift (allocInRegion region)
+calloc' :: Type -> AllocRegion -> CallMBase Ref
+calloc' t region = case t of
+  TNumber _ -> fmap RVar $ lift (allocInRegion region)
+  TArr _ _-> fmap (RArr t) $ lift (allocInRegion region)
+  TAbs _ _ -> fmap RFuncRefRef $ lift (allocInRegion region)
   where
     allocInRegion :: AllocRegion -> ST.State AllocState Idx
     allocInRegion AGlobal = ST.state $ \st -> (Global st.globalIdx, st { globalIdx = st.globalIdx + 1, allocations = Allocation t (Global st.globalIdx):st.allocations})
     allocInRegion ALocal = ST.state $ \st -> (Local st.localIdx, st { localIdx = st.localIdx + 1, allocations = Allocation t (Local st.localIdx):st.allocations})
+
+calloc :: Type -> AllocRegion -> CallM Ref
+calloc t region = lift $ calloc' t region
 
 ccopyRef :: Type -> Ref -> Ref -> CallM ()
 ccopyRef t src dst = lift $ W.tell [SCopy t src dst]
@@ -128,9 +134,6 @@ cfor initial steps step f = do
   lift $ W.tell [SFor i initial steps step f']
 
 --------------------------------------------------------------------------------
-
-allocGlobals :: Map Ident Type -> CallM (Map Ident Ref)
-allocGlobals = traverse (\t -> calloc t AGlobal)
 
 allocAndStore :: AllocRegion -> CExpr FuncRef -> CallM (Type, Ref)
 allocAndStore region e = do
@@ -162,7 +165,7 @@ rhsvalue region e@(CSel _ _ _) = allocAndStore region e
 -- Indexed expressions
 rhsvalue _ (CIndexed [] (CVar t n)) = do
   env <- R.ask
-  case M.lookup n env.globals of
+  case M.lookup n env.bindings of
     Just ref -> pure (t, ref)
     _ -> error "rhsvalue: unknown global (this is a bug)"
 rhsvalue region e@(CIndexed _ _) = allocAndStore region e
@@ -204,7 +207,7 @@ retvalue (CIndexed [] (CRec t delay param bindings body))
         ]
 
       let withBindingRefs :: Env -> Env
-          withBindingRefs Env {..} = Env { globals = bindingRefs <> globals, .. }
+          withBindingRefs Env {..} = Env { bindings = bindingRefs <> bindings, .. }
 
       R.local withBindingRefs $ retvalue body
       
@@ -239,17 +242,21 @@ retvalue (CSel _ chs sel) = do
 
       cif cond (retvalue ch) (recif env chs sref (idx + 1))
 
-toplevel :: Map Ident (CExpr FuncRef) -> Map FuncRef Func -> CallM (Map Ident [Statement])
+toplevel :: Map Ident (CExpr FuncRef) -> Map FuncRef Func -> CallMBase (Map Ident [Statement])
 toplevel toplevelMap funcRefMap = mdo
   refMap <- M.fromList <$> sequence
-    [ (n,) . snd <$> R.local withRefMap (rhsvalue AGlobal expr)
+    [ do
+        ref <- calloc' (cexprType expr) AGlobal
+        (n,) . snd <$> R.runReaderT (rhsvalue AGlobal expr) (Env { bindings = refMap, ret = ref, to = [] })
     | (n, expr) <- M.toList toplevelMap
     ]
 
-  let withRefMap :: Env -> Env
-      withRefMap Env {..} = Env { globals = refMap <> globals, .. }
-
-  funcMap <- R.local withRefMap (traverse func funcRefMap)
+  funcMap <- M.fromList <$> sequence
+    [ (fr,) <$> R.runReaderT (func f) (Env { bindings = refMap, ret = retRef, to = [] })
+    | (fr, f@(Func _ params _ _)) <- M.toList funcRefMap
+    , -- Return ref is last param
+    let retRef = RArg (length params)
+    ]
 
   pure $ M.fromList
     [ (n, sts)
@@ -263,13 +270,18 @@ toplevel toplevelMap funcRefMap = mdo
     func (Func _ params bindings body) = cextract $ mdo
       bindingRefs <- mconcat <$> sequenceA
         [ pure $ M.fromList [ (p, RArg idx) | (idx, p) <- zip [0..] params ]
-        , M.fromList <$> sequenceA [ (n,) . snd <$> R.local withBindingRefs (rhsvalue region bbody) | (n, region, bbody) <- bindings ]
+        , M.fromList <$> sequenceA
+            [ (n,) . snd <$> R.local withBindingRefs (rhsvalue region bbody)
+            | (n, region, bbody) <- bindings
+            ]
         ]
-      let withBindingRefs :: Env -> Env
-          withBindingRefs Env {..} = Env { globals = bindingRefs <> globals, .. }
 
-      (t, ref) <- R.local withBindingRefs $ rhsvalue AGlobal body
-      ret t ref
+      let withBindingRefs :: Env -> Env
+          withBindingRefs Env {..} = Env { bindings = bindingRefs <> bindings, .. }
+
+      R.local withBindingRefs $ retvalue body
+
+-- TODO: local var indices should be function local?
 
 -- TODO: oversampling just means that we insert some stateful code around the oversampled function (which we should always inline when generating code; this can happen directly in the codegen)
 --- https://github.com/juce-framework/JUCE/blob/master/modules/juce_dsp/processors/juce_Oversampling.cpp
