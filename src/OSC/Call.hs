@@ -35,7 +35,7 @@ data Ref
   | RVar Idx -- either a function local var index (e.g. in function f() { int a; float b; } would be locals with index 0 and 1) or an index into a global var table
 
   | RArr Type Idx -- global base address of array in a linear memory layout
-  | RProj {- ref must be an array -} Ref [Ref] -- projection from or into array
+  | RProj {- source/dest -} Ref {- index -} Ref -- projection from or into array
 
   | RFuncRef FuncRef -- index into a global function table
   | RFuncRefRef Idx -- local or global var index with index into global function table (e.g. pointer to a function pointer)
@@ -68,7 +68,7 @@ data Env = Env
   }
 
 focusTo :: Ref -> Env -> Env
-focusTo idx (Env {..}) = Env { to = to <> [idx], .. }
+focusTo idx (Env {..}) = Env { to = idx:to, .. }
 
 --------------------------------------------------------------------------------
 
@@ -140,10 +140,14 @@ allocAndStore region e = do
   where
     t = cexprType e
 
+proj :: Ref -> [Ref] -> Ref
+proj ref [] = ref
+proj ref (pj:pjs) = RProj (proj ref pjs) pj
+
 ret :: Type -> Ref -> CallM ()
 ret t ref = do
   env <- R.ask
-  ccopyRef t ref (RProj env.ret env.to)
+  ccopyRef t ref (proj env.ret (reverse env.to))
 
 --------------------------------------------------------------------------------
 
@@ -195,7 +199,7 @@ retvalue (CIndexed [] (CRec t delay param bindings body))
       delayIdx <- calloc (TNumber TI32) AGlobal
 
       bindingRefs <- mconcat <$> sequenceA
-        [ pure $ M.singleton param (RProj delayRef [delayIdx])
+        [ pure $ M.singleton param (proj delayRef [delayIdx])
         , M.fromList <$> sequenceA [ (n,) . snd <$> R.local withBindingRefs (rhsvalue region bbody) | (n, region, bbody) <- bindings ]
         ]
 
@@ -205,7 +209,7 @@ retvalue (CIndexed [] (CRec t delay param bindings body))
       R.local withBindingRefs $ retvalue body
       
       -- Copy result to delay line
-      R.ask >>= \env -> ccopyRef t env.ret (RProj delayRef [delayIdx])
+      R.ask >>= \env -> ccopyRef t env.ret (proj delayRef [delayIdx])
 
       cbinOp Add delayRef (RConst $ I32 1) delayRef
       cbinOp Mod delayRef (RConst $ I32 delay) delayRef
@@ -218,7 +222,7 @@ retvalue (CIndexed [] (CRec t delay param bindings body))
 retvalue (CIndexed idxs indexable) = do
   idxRefs <- sequence [ rhsvalue ALocal idx | (_, idx) <- idxs ]
   (t, ref) <- rhsvalue ALocal (CIndexed [] indexable)
-  ret t $ RProj ref (fmap snd idxRefs)
+  ret t $ proj ref (fmap snd idxRefs)
 
 retvalue (CSel _ chs sel) = do
   env <- R.ask
@@ -235,7 +239,7 @@ retvalue (CSel _ chs sel) = do
 
       cif cond (retvalue ch) (recif env chs sref (idx + 1))
 
-toplevel :: M.Map Ident (CExpr FuncRef) -> Map FuncRef Func -> CallM (Map Ident [Statement])
+toplevel :: Map Ident (CExpr FuncRef) -> Map FuncRef Func -> CallM (Map Ident [Statement])
 toplevel toplevelMap funcRefMap = mdo
   refMap <- M.fromList <$> sequence
     [ (n,) . snd <$> R.local withRefMap (rhsvalue AGlobal expr)

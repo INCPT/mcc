@@ -595,6 +595,22 @@ markPureExpressions = fmap go
 -- ** fold the pure part of a computation into the if/else leaves, leaving the impure computations of all parts outside the if/else tree
 
 --------------------------------------------------------------------------------
+
+compile :: Map Ident (CExpr Abs) -> (Map Ident (CExpr FuncRef), Map FuncRef Func)
+compile toplevelMap = runUnique $ do
+  satMap <- traverse abstractUnsaturatedApps toplevelMap
+
+  let (toplevelMap', env) = flip ST.runState (AbsEnv mempty 0) $ traverse gatherAbstractions satMap
+  let freeVarMap = gatherFreeVars env.funcRefMap
+
+  (funcRefMap, _) <- markCapturedBindings freeVarMap env.funcRefMap
+  
+  -- TODO
+  let optimize = id
+
+  pure (toplevelMap', optimize funcRefMap)
+
+--------------------------------------------------------------------------------
 -- Test expressions for markCapturedBindings
 
 -- Test 1: Simple abstraction with no captures
