@@ -20,6 +20,7 @@ import qualified Control.Monad.State.Lazy as ST
 import qualified Control.Monad.Trans.Writer as W
 import Data.Functor.Product (Product (Pair))
 import Data.Map (Map)
+import Data.List (intercalate)
 import qualified Data.Map as M
 import Control.Monad.Free (Free (Free, Pure), liftF)
 import qualified Control.Monad.Trans.Free as TF
@@ -64,7 +65,7 @@ data Statement
   | SFor {- counter -} Ref {- initial -} Int {- steps -} Int {- step -} Int [Statement]
 
 instance Show Statement where
-  show (SCopy t src dst) = show dst <> " := " <> show src <> " : " <> showType t
+  show (SCopy t src dst) = show dst <> " := " <> show src
   show (SIf cond thn els) = mconcat
     [ "if " <> show cond <> " {\n"
     , showBlock thn
@@ -72,7 +73,7 @@ instance Show Statement where
     , showBlock els
     , "}"
     ]
-  show (SCall funcRef args ret) = show ret <> " := " <> show funcRef <> "(" <> mconcat (fmap (\a -> show a <> ", ") args) <> ")"
+  show (SCall funcRef args ret) = show ret <> " := " <> show funcRef <> "(" <> intercalate ", " (fmap show args) <> ")"
   show (SBinOp op a b res) = show res <> " := " <> show a <> " " <> show op <> " " <> show b
   show (SFor counter initial steps step body) = mconcat
     [ "for " <> show counter <> " = " <> show initial <> " to " <> show steps <> " step " <> show step <> " {\n"

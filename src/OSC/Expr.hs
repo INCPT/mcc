@@ -281,8 +281,8 @@ es =
 
 et :: Expr ()
 et = abs_ [] ti32
-  [ ("x", i32 5)
-  , ("n", f32 5)
+  [ ("x", i32 666)
+  , ("n", f32 777)
   , ("f", abs_ ["p" |: ti32] ([ti32] --> ti32) [] $ abs_ ["o" |: ti32 ] ti32 [] $ op Add (var "o") (var "p"))
   , ("z", app (app (var "f") [var "x"]) [var "rec"])
   , ("rec", rec_ ti32 5 "cnt" [] (op Add (i32 1) (var "cnt")))
@@ -296,7 +296,15 @@ t1 = ir
     (identMap, funcRefMap, genv) = compile ces
     ir = toplevel genv.globals identMap funcRefMap
 
-t2 = ir
+t2 = sequence
+  [ do
+      print fr
+      putStrLn "---"
+      putStrLn $ showBlock f.statements
+      putStrLn ""
+      putStrLn ""
+  | (FuncRef fr, f) <- M.toList ir.funcMap
+  ]
   where
     Right et' = infer et
     ces = toCExpr et'
