@@ -11,7 +11,6 @@ import qualified Control.Monad.Reader as R
 
 import Data.Generics.Uniplate.Data (universe)
 
-import qualified Data.Graph as G
 import Data.Map (Map)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -25,22 +24,9 @@ newtype TypeError = TypeError String
 type GenM = E.ExceptT TypeError (R.Reader (Map Ident Type))
 
 reccheck :: [(Ident, Expr ())] -> Either TypeError [(Ident, Expr ())]
-reccheck bindings = if hasCycles
-  then Left $ TypeError $ "reccheck: cyclic dependency involving: " <> show (G.scc graph)
-  else Right [ (ident, bindingsMap M.! ident) | v <- reverse (G.topSort graph), let (_, ident, _) = nodeFromVertex v ]
-
-  where
-    bindingsMap = M.fromList bindings
-    vars = fmap (\expr -> S.fromList [ n | EVar _ n <- universe expr ]) bindingsMap
-    
-    edges = [ (ident, ident, S.toList deps) | (ident, deps) <- M.toList vars ]
-    (graph, nodeFromVertex, _) = G.graphFromEdges edges
-
-    hasCycles :: Bool
-    hasCycles = or [ isCycle node | node <- G.scc graph ]
-      where
-        isCycle (G.Node _ []) = False  -- single node SCC = no cycle
-        isCycle (G.Node _ _) = True    -- multi-node SCC = cycle
+reccheck bindings = case topsort (\expr -> S.fromList [ n | EVar _ n <- universe expr ]) bindings of
+  Left scc -> Left $ TypeError $ "reccheck: cyclic dependency involving: " <> show scc
+  Right bindings' -> Right bindings'
 
 dupcheck :: [(Ident, Expr ())] -> Maybe TypeError
 dupcheck bindings
