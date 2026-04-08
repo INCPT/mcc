@@ -78,9 +78,9 @@ tpeelType :: E.MonadError TypeError m => Type -> m Type
 tpeelType (TArr t _) = pure t
 tpeelType t = E.throwError $ TypeError $ "peelType: not an array: " <> show t
 
-tparamTypes :: E.MonadError TypeError m => Type -> m [Type]
-tparamTypes (TAbs params _) = pure params
-tparamTypes t = E.throwError $ TypeError $ "paramTypes: not a function" <> show t
+tparamTypes :: E.MonadError TypeError m => Type -> String -> m [Type]
+tparamTypes (TAbs params _) _ = pure params
+tparamTypes t e = E.throwError $ TypeError $ "paramTypes: not a function: " <> e <> ": " <> show t
 
 typecheck :: Expr () -> GenM (Expr Type)
 typecheck (EConst n) = pure $ EConst n
@@ -138,7 +138,7 @@ typecheck (EVar () n) = fmap (M.lookup n) R.ask >>= \case
   Nothing -> E.throwError $ TypeError $ "typecheck: unknown binding: " <> show n
 
 typecheck (EAbs t params bindings body) = do
-  ptypes <- tparamTypes t
+  ptypes <- tparamTypes t "EAbs"
   rtype <- treturnType t
 
   let paramsEnv = M.fromList (zip params ptypes)
@@ -154,7 +154,7 @@ typecheck (EApp () f params) = do
   f' <- typecheck f
   params' <- traverse typecheck params
 
-  ptypes <- tparamTypes (exprType f')
+  ptypes <- tparamTypes (exprType f') "EApp"
   rtype <- treturnType (exprType f')
 
   when (length ptypes /= length params') $ E.throwError $ TypeError $ "typecheck: argument count doesn't match function definition"
@@ -264,8 +264,8 @@ tf64 = TNumber TF64
 tarr :: Type -> Int -> Type
 tarr = TArr
 
-tabs :: [Type] -> Type -> Type
-tabs = TAbs
+(-->) :: [Type] -> Type -> Type
+(-->) = TAbs
 
 (|:) :: Ident -> Type -> (Ident, Type)
 (|:) = (,)
@@ -274,7 +274,7 @@ es :: [(Ident, Expr ())]
 es = 
   [ ("x", i32 5)
   , ("n", f32 5)
-  , ("f", abs_ ["p" |: ti32] (tabs [ti32] ti32) [] $ abs_ ["o" |: ti32 ] ti32 [] $ op Add (var "o") (var "p"))
+  , ("f", abs_ ["p" |: ti32] ([ti32] --> ti32) [] $ abs_ ["o" |: ti32 ] ti32 [] $ op Add (var "o") (var "p"))
   , ("z", app (app (var "f") [var "x"]) [app (var "rec") []])
   , ("rec", abs_ [] ti32 [] $ rec_ ti32 5 "cnt" [] (op Add (i32 1) (var "cnt")))
   ]
@@ -283,9 +283,9 @@ et :: Expr ()
 et = abs_ [] ti32
   [ ("x", i32 5)
   , ("n", f32 5)
-  , ("f", abs_ ["p" |: ti32] (tabs [ti32] ti32) [] $ abs_ ["o" |: ti32 ] ti32 [] $ op Add (var "o") (var "p"))
-  , ("z", app (app (var "f") [var "x"]) [app (var "rec") []])
-  , ("rec", abs_ [] ti32 [] $ rec_ ti32 5 "cnt" [] (op Add (i32 1) (var "cnt")))
+  , ("f", abs_ ["p" |: ti32] ([ti32] --> ti32) [] $ abs_ ["o" |: ti32 ] ti32 [] $ op Add (var "o") (var "p"))
+  , ("z", app (app (var "f") [var "x"]) [var "rec"])
+  , ("rec", rec_ ti32 5 "cnt" [] (op Add (i32 1) (var "cnt")))
   ]
   (var "rec")
 
@@ -298,12 +298,17 @@ t1 = ir
 
 t2 = ir
   where
-    Right es' = infer es
-    ces = M.fromList $ fmap (fmap toCExpr) es'
-    (identMap, funcRefMap, genv) = compile ces
-    ir = toplevel genv.globals identMap funcRefMap
+    Right et' = infer et
+    ces = toCExpr et'
+    (expr, funcRefMap, genv) = compile3 ces
+    ir = toplevel2 genv.globals funcRefMap expr
 
 t3 = fmap compile2 ces
   where
-    es' = infer es
+    es' = inferMany es
     ces = fmap (M.fromList . fmap (fmap toCExpr)) es'
+
+t4 = fmap compile3 ces
+  where
+    et' = infer et
+    ces = fmap toCExpr et'
