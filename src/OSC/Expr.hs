@@ -272,7 +272,8 @@ es =
   [ ("x", i32 5)
   , ("n", f32 5)
   , ("f", abs_ ["p" |: ti32] (tabs [ti32] ti32) [] $ abs_ ["o" |: ti32 ] ti32 [] $ op Add (var "o") (var "p"))
-  , ("z", app (app (var "f") [var "x"]) [var "x"])
+  , ("z", app (app (var "f") [var "x"]) [app (var "rec") []])
+  , ("rec", abs_ [] ti32 [] $ rec_ ti32 5 "cnt" [] (op Add (i32 1) (var "cnt")))
   ]
 
 t1 = ir

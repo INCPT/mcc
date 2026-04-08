@@ -226,8 +226,8 @@ retvalue (CIndexed [] (CRec t delay param bindings body))
       -- Copy result to delay line
       R.ask >>= \env -> ccopyRef t env.ret (proj delayRef [delayIdx])
 
-      cbinOp Add delayRef (RConst $ I32 1) delayRef
-      cbinOp Mod delayRef (RConst $ I32 delay) delayRef
+      cbinOp Add delayIdx (RConst $ I32 1) delayIdx
+      cbinOp Mod delayIdx (RConst $ I32 delay) delayIdx
   where
     typeContainsAbs (TNumber _) = False
     typeContainsAbs (TArr t _) = typeContainsAbs t
@@ -321,7 +321,10 @@ toplevel globals toplevelMap funcRefMap = IR { toplevelAllocations = st.allocati
 
           R.local withBindingRefs $ retvalue body
 
--- TODO: topsort global statements
+-- TODO: no toplevel definitions, everything is a function
+-- TODO: topsort bindings when generating a function
+
+-- RJCT: topsort global statements
 
 -- TODO: HM type inference -> lambda specialization -> inline -> CSE -> float pure expressions out of CSel/etc
 
