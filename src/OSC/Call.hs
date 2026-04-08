@@ -413,10 +413,12 @@ toplevel globals toplevelMap funcRefMap = IR { toplevelAllocations = st.allocati
 
           R.local withBindingRefs $ retvalue body
 
--- TODO: no toplevel definitions, everything is a function
--- TODO: topsort bindings when generating a function
+-- TODO: dead code elimination
 
 -- RJCT: topsort global statements
+
+-- DONE: no toplevel definitions, everything is a function
+-- DONE: topsort bindings when generating a function
 
 -- TODO: HM type inference -> lambda specialization -> inline -> CSE -> float pure expressions out of CSel/etc
 
