@@ -251,9 +251,14 @@ es =
   , ("z", app (var "f") [var "x"])
   ]
 
-t1 = funcRefMap
+t1 = genv
   where
     Right es' = infer es
     ces = M.fromList $ fmap (fmap toCExpr) es'
     (identMap, funcRefMap, genv) = compile ces
     ir = toplevel identMap funcRefMap
+
+t2 = compile2 ces
+  where
+    Right es' = infer es
+    ces = M.fromList $ fmap (fmap toCExpr) es'

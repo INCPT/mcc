@@ -446,11 +446,36 @@ topsort nodeEdges nodes
         isCycle (G.Node _ []) = False  -- single node SCC = no cycle
         isCycle (G.Node _ _) = True    -- multi-node SCC = cycle
 
-gatherFreeVars :: Map FuncRef Func -> Map FuncRef (Set Ident)
-gatherFreeVars funcRefMap = freeVarMap
+gatherFreeVars' :: Map FuncRef Func -> Map FuncRef (Set Ident)
+gatherFreeVars' funcRefMap = case topsort id funcDeps of
+  Left scc -> error $ "gatherFreeVars: no topsort (this is a bug): " <> show scc
+  Right sortedFuncs -> go3 (fmap fst sortedFuncs) mempty
   where
-    funcDeps :: Map FuncRef (Set FuncRef)
-    funcDeps = M.fromList
+    go3 :: [FuncRef] -> Map FuncRef (Set Ident) -> Map FuncRef (Set Ident)
+    go3 [] m = m
+    go3 (fr:frs) m = go3 frs (M.singleton fr (fvs <> tfvs) <> m)
+      where
+        Func _ _ bindings body = funcRefMap M.! fr
+        fvs = funcVars M.! fr
+        tfvs = mconcat $ mconcat
+          [ [ fvs | CAbs _ fr <- universeBi body, Just fvs <- [ M.lookup fr m ] ]
+          , [ fvs | (_, _, b) <- bindings, CAbs _ fr <- universeBi b, Just fvs <- [ M.lookup fr m ] ]
+          ]
+
+    funcVars :: Map FuncRef (Set Ident)
+    funcVars = fmap go2 funcRefMap
+
+    go2 :: Func -> Set Ident
+    go2 (Func _ params bindings body) = allVars2 bindings body \\ (S.fromList [ n | (n, _, _) <- bindings ] <> S.fromList params)
+
+    allVars2 :: [(Ident, AllocRegion, CExpr FuncRef)] -> CExpr FuncRef -> Set Ident
+    allVars2 bindings body = mconcat $ fmap mconcat
+      [ [ S.fromList [ n | CVar @FuncRef _ n <- universeBi body ] ]
+      , [ S.fromList [ n | (_, _, b) <- bindings, CVar @FuncRef _ n <- universeBi b ] ]
+      ]
+
+    funcDeps :: [(FuncRef, Set FuncRef)]
+    funcDeps =
       [ ( fr
         , S.fromList $ mconcat
             [ [ fr | CAbs _ fr <- universeBi body ]
@@ -460,6 +485,25 @@ gatherFreeVars funcRefMap = freeVarMap
       | (fr, Func _ _ bindings body) <- M.toList funcRefMap
       ]
 
+    freeVarMap :: Map FuncRef (Set Ident)
+    freeVarMap = fmap go funcRefMap
+
+    go :: Func -> Set Ident
+    go (Func _ params bindings body) = allVars bindings body \\ (S.fromList [ n | (n, _, _) <- bindings ] <> S.fromList params)
+
+    allVars :: [(Ident, AllocRegion, CExpr FuncRef)] -> CExpr FuncRef -> Set Ident
+    allVars bindings body = mconcat $ fmap mconcat
+      [ [ S.fromList [ n | CVar @FuncRef _ n <- universeBi body ] ]
+      , [ S.fromList [ n | (_, _, b) <- bindings, CVar @FuncRef _ n <- universeBi b ] ]
+
+      -- Gather transient free vars (by lazily referencing freeVarMap; this works because no mutual recursion between bindings is allowed)
+      , [ fvs | CAbs _ fr <- universeBi body, Just fvs <- [ M.lookup fr freeVarMap ] ]
+      , [ fvs | (_, _, b) <- bindings, CAbs _ fr <- universeBi b, Just fvs <- [ M.lookup fr freeVarMap ] ]
+      ]
+
+gatherFreeVars :: Map FuncRef Func -> Map FuncRef (Set Ident)
+gatherFreeVars funcRefMap = freeVarMap
+  where
     freeVarMap :: Map FuncRef (Set Ident)
     freeVarMap = fmap go funcRefMap
 
@@ -624,12 +668,26 @@ markPureExpressions = fmap go
 
 --------------------------------------------------------------------------------
 
+compile2 :: Map Ident (CExpr Abs) -> (Map FuncRef (Set Ident), Map Ident (CExpr FuncRef), Map FuncRef Func, GlobalsEnv)
+compile2 toplevelMap = runUnique $ do
+  satMap <- traverse abstractUnsaturatedApps toplevelMap
+
+  let (toplevelMap', env) = flip ST.runState (AbsEnv mempty 0) $ traverse gatherAbstractions satMap
+  let freeVarMap = gatherFreeVars' env.funcRefMap
+
+  (funcRefMap, genv) <- markCapturedBindings freeVarMap env.funcRefMap
+  
+  -- TODO
+  let optimize = id
+
+  pure (freeVarMap, toplevelMap', optimize funcRefMap, genv)
+
 compile :: Map Ident (CExpr Abs) -> (Map Ident (CExpr FuncRef), Map FuncRef Func, GlobalsEnv)
 compile toplevelMap = runUnique $ do
   satMap <- traverse abstractUnsaturatedApps toplevelMap
 
   let (toplevelMap', env) = flip ST.runState (AbsEnv mempty 0) $ traverse gatherAbstractions satMap
-  let freeVarMap = gatherFreeVars env.funcRefMap
+  let freeVarMap = gatherFreeVars' env.funcRefMap
 
   (funcRefMap, genv) <- markCapturedBindings freeVarMap env.funcRefMap
   
