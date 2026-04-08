@@ -26,7 +26,11 @@ import qualified Control.Monad.Trans.Free as TF
 import Control.Monad.Trans.Free (FreeT (FreeT), FreeF)
 import OSC.Ctx
 
-data Idx = Local Int | Global Int deriving (Eq, Ord, Show)
+data Idx = Local Int | Global Int deriving (Eq, Ord)
+
+instance Show Idx where
+  show (Local i) = "l" <> show i
+  show (Global i) = "g" <> show i
 
 data Ref 
   = RArg Int
@@ -41,7 +45,16 @@ data Ref
 
   | RFuncRef FuncRef -- index into a global function table
   | RFuncRefRef Idx -- local or global var index with index into global function table (e.g. pointer to a function pointer)
-  deriving Show
+
+instance Show Ref where
+  show (RArg i) = "arg" <> show i
+  show RRet = "ret"
+  show (RConst n) = show n
+  show (RVar idx) = show idx
+  show (RArr t idx) = show idx <> ":" <> showType t
+  show (RProj ref idx) = show ref <> "[" <> show idx <> "]"
+  show (RFuncRef (FuncRef i)) = "f" <> show i
+  show (RFuncRefRef idx) = show idx <> ":funcref"
 
 data Statement
   = SCopy Type {- source -} Ref {- dest -} Ref
@@ -49,7 +62,26 @@ data Statement
   | SCall {- funcref -} Ref {- args -} [Ref] {- return ref -} Ref
   | SBinOp Op {- a -} Ref {- b -} Ref {- result -} Ref
   | SFor {- counter -} Ref {- initial -} Int {- steps -} Int {- step -} Int [Statement]
-  deriving Show
+
+instance Show Statement where
+  show (SCopy t src dst) = show dst <> " := " <> show src <> " : " <> showType t
+  show (SIf cond thn els) = mconcat
+    [ "if " <> show cond <> " {\n"
+    , showBlock thn
+    , "} else {\n"
+    , showBlock els
+    , "}"
+    ]
+  show (SCall funcRef args ret) = show ret <> " := " <> show funcRef <> "(" <> mconcat (fmap (\a -> show a <> ", ") args) <> ")"
+  show (SBinOp op a b res) = show res <> " := " <> show a <> " " <> show op <> " " <> show b
+  show (SFor counter initial steps step body) = mconcat
+    [ "for " <> show counter <> " = " <> show initial <> " to " <> show steps <> " step " <> show step <> " {\n"
+    , showBlock body
+    , "}"
+    ]
+
+showBlock :: [Statement] -> String
+showBlock stmts = mconcat [ "  " <> line <> "\n" | stmt <- stmts, line <- lines (show stmt) ]
 
 --------------------------------------------------------------------------------
 
