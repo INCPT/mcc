@@ -430,14 +430,14 @@ gatherAbstractionsExpr (CRec t delay param bindings body) = do
 --   - middle's free vars: {x, y} (includes inner's free vars minus middle's params/bindings)
 --   - outer's free vars: {} (all variables are bound by outer)
 
-topsort :: Ord a => (b -> Set c) -> [(a, b)] -> Either [G.Tree G.Vertex] [(a, b)]
-topsort decls
+topsort :: Ord node => (a -> Set node) -> [(node, a)] -> Either [G.Tree G.Vertex] [(node, a)]
+topsort nodeEdges nodes
   | hasCycles = Left (G.scc graph)
-  | otherwise = Right [ (n, declsm M.! n) | v <- reverse (G.topSort graph), let (_, n, _) = nodeFromVertex v ]
+  | otherwise = Right [ (n, nodesMap M.! n) | v <- reverse (G.topSort graph), let (_, n, _) = nodeFromVertex v ]
   where
-    declsm = M.fromList decls
+    nodesMap = M.fromList nodes
 
-    edges = [ (a, a, S.toList deps) | (a, deps) <- decls ]
+    edges = [ (node, node, S.toList (nodeEdges a)) | (node, a) <- nodes ]
     (graph, nodeFromVertex, _) = G.graphFromEdges edges
 
     hasCycles :: Bool
