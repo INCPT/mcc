@@ -30,6 +30,8 @@ data Idx = Local Int | Global Int deriving (Eq, Ord, Show)
 
 data Ref 
   = RArg Int
+  | RRet
+
   | RConst Number
 
   | RVar Idx -- either a function local var index (e.g. in function f() { int a; float b; } would be locals with index 0 and 1) or an index into a global var table
@@ -113,10 +115,10 @@ allocGlobal t = lift $ case t of
 
 --------------------------------------------------------------------------------
 
-cextract :: CallM a -> CallM (a, [Statement])
+cextract :: CallM () -> CallM [Statement]
 cextract m = do
   env <- R.ask
-  lift $ lift $ W.runWriterT (R.runReaderT m env)
+  fmap snd $ lift $ lift $ W.runWriterT (R.runReaderT m env)
 
 ccopyRef :: Type -> Ref -> Ref -> CallM ()
 ccopyRef t src dst = lift $ W.tell [SCopy t src dst]
@@ -129,13 +131,13 @@ ccall funcRef args ret = lift $ W.tell $ [SCall funcRef args ret]
 
 cif :: Ref -> CallM () -> CallM () -> CallM ()
 cif r t e = do
-  ((), t') <- cextract t
-  ((), e') <- cextract e
+  t' <- cextract t
+  e' <- cextract e
   lift $ W.tell [SIf r t' e']
 
 cfor :: Int -> Int -> Int -> (Ref -> CallM ()) -> CallM ()
 cfor initial steps step f = allocLocal (TNumber TI32) $ \i -> do
-  ((), f') <- cextract (f i)
+  f' <- cextract (f i)
   lift $ W.tell [SFor i initial steps step f']
 
 --------------------------------------------------------------------------------
@@ -260,18 +262,23 @@ data IRFunc = IRFunc
 data IR = IR
   { toplevelAllocations :: [(Type, Idx)]
   , toplevelStatements :: [Statement]
-  , toplevelFuncs :: Map Ident IRFunc
+  , toplevelFuncs :: Map Ident FuncRef
+  , funcMap :: Map FuncRef IRFunc
   } deriving Show
 
 toplevel :: Map Ident Type -> Map Ident (CExpr FuncRef) -> Map FuncRef Func -> IR
 toplevel globals toplevelMap funcRefMap = IR { toplevelAllocations = st.allocations, .. }
   where
-    ((toplevelFuncs, toplevelStatements), st) = ST.runState (W.runWriterT gen) (AllocState { globalIdx = 0, funcRefIdx = 0, allocations = [] })
+    ((funcMap, toplevelStatements), st) = ST.runState (W.runWriterT gen) (AllocState { globalIdx = 0, funcRefIdx = 0, allocations = [] })
+    toplevelFuncs = M.fromList [ (n, fr) | (n, CAbs _ fr) <- M.toList toplevelMap ]
 
     gen = mdo
       refMap <- fmap M.fromList $ sequence $ mconcat
+        -- Gloabls
+        [ [ (n,) <$> allocGlobal t | (n, t) <- M.toList globals ]
+
         -- Toplevel bindings
-        [ [ case expr of
+        , [ case expr of
               CAbs _ fr -> pure (n, RFuncRef fr)
               _ -> do
                 ref <- allocGlobal (cexprType expr)
@@ -279,44 +286,32 @@ toplevel globals toplevelMap funcRefMap = IR { toplevelAllocations = st.allocati
                 pure (n, ref)
           | (n, expr) <- M.toList toplevelMap
           ]
-
-        -- Gloabls
-        , [ (n,) <$> allocGlobal t | (n, t) <- M.toList globals ]
         ]
 
-      funcMap <- M.fromList <$> sequence
+      M.fromList <$> sequence
         [ do
-           irf <- flip R.runReaderT (Env { bindings = refMap, ret = retRef, to = [], localIdx = 0, allocations = [] }) $ do
-              ((), statements) <- cextract $ func f
+           irf <- flip R.runReaderT (Env { bindings = refMap, ret = RRet, to = [], localIdx = 0, allocations = [] }) $ do
+              statements <- cextract $ func f
               allocations <- R.asks (.allocations)
               pure IRFunc {..}
            pure (fr, irf)
-        | (fr, f@(Func _ params _ _)) <- M.toList funcRefMap
-
-        -- Return ref is last param
-        , let retRef = RArg (length params)
+        | (fr, f) <- M.toList funcRefMap
         ]
-
-      pure $ M.fromList
-        [ (n, irf)
-        | (fr, irf) <- M.toList funcMap
-        , Just n <- [ M.lookup fr funcRefToIdent ]
-        ]
-
       where
-        funcRefToIdent = M.fromList [ (fr, n) | (n, CAbs _ fr) <- M.toList toplevelMap ]
-
         func (Func _ params bindings body) = mdo
           bindingRefs <- mconcat <$> sequenceA
+            -- Arguments
             [ pure $ M.fromList [ (p, RArg idx) | (idx, p) <- zip [0..] params ]
+
+            -- Bindings
             , M.fromList <$> sequenceA
                 [ case region of
                     ALocal -> (n,) . snd <$> R.local withBindingRefs (rhsvalue region bbody)
-                    AGlobal -> R.local withBindingRefs $ do
-                      -- Use global as return ref for rhs
-                      lhs <- R.asks ((M.! n) . (.bindings))
-                      R.local (\Env {..} -> Env { ret = lhs, .. }) (retvalue bbody)
-                      pure (n, lhs)
+                    AGlobal -> do
+                      -- Set global ref as return value for binding rhs
+                      gref <- R.asks ((M.! n) . (.bindings))
+                      R.local ((\Env {..} -> Env { ret = gref, .. }) . withBindingRefs) (retvalue bbody)
+                      pure (n, gref)
                 | (n, region, bbody) <- bindings
                 ]
             ]
@@ -325,6 +320,8 @@ toplevel globals toplevelMap funcRefMap = IR { toplevelAllocations = st.allocati
               withBindingRefs Env {..} = Env { bindings = bindingRefs <> bindings, .. }
 
           R.local withBindingRefs $ retvalue body
+
+-- TODO: topsort global statements
 
 -- TODO: use mtl constraints for allocLocal/Global?
 -- TODO: use lhs/rhs for clarity

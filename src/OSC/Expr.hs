@@ -54,7 +54,7 @@ shadowcheck = undefined
 
 treturnType :: E.MonadError TypeError m => Type -> m Type
 treturnType (TAbs _ t) = pure t
-treturnType t = E.throwError $ TypeError $ "returnType: not an abstraction: " <> show t
+treturnType t = E.throwError $ TypeError $ "returnType: not a function: " <> show t
 
 tpeelType :: E.MonadError TypeError m => Type -> m Type
 tpeelType (TArr t _) = pure t
@@ -62,7 +62,7 @@ tpeelType t = E.throwError $ TypeError $ "peelType: not an array: " <> show t
 
 tparamTypes :: E.MonadError TypeError m => Type -> m [Type]
 tparamTypes (TAbs params _) = pure params
-tparamTypes t = E.throwError $ TypeError $ "paramTypes: not an abstraction" <> show t
+tparamTypes t = E.throwError $ TypeError $ "paramTypes: not a function" <> show t
 
 typecheck :: Expr () -> GenM (Expr Type)
 typecheck (EConst n) = pure $ EConst n
@@ -121,10 +121,15 @@ typecheck (EVar () n) = fmap (M.lookup n) R.ask >>= \case
 
 typecheck (EAbs t params bindings body) = do
   ptypes <- tparamTypes t
+  rtype <- treturnType t
+
   let paramsEnv = M.fromList (zip params ptypes)
 
   bindings' <- R.local (\env -> paramsEnv <> env) $ typecheckBindings bindings
   body' <- R.local (\env -> M.fromList (fmap (fmap exprType) bindings') <> paramsEnv <> env) $ typecheck body
+  
+  when (exprType body' /= rtype) $ E.throwError $ TypeError $ "typecheck: function doesn't return the right type"
+  
   pure $ EAbs t params bindings' body'
 
 typecheck (EApp () f params) = do
@@ -133,6 +138,8 @@ typecheck (EApp () f params) = do
 
   ptypes <- tparamTypes (exprType f')
   rtype <- treturnType (exprType f')
+
+  when (length params > length ptypes) $ E.throwError $ TypeError $ "typecheck: too many arguments"
 
   sequence_
     [ when (fpt /= pt) $ E.throwError $ TypeError $ "typecheck: type mismatch in function application: " <> show fpt <> " <=> " <> show pt
@@ -162,7 +169,7 @@ typecheck (ERec t delay param bindings body) = do
   bindings' <- R.local (\env -> paramsEnv <> env) $ typecheckBindings bindings
   body' <- R.local (\env -> M.fromList (fmap (fmap exprType) bindings') <> paramsEnv <> env) $ typecheck body
   
-  when (typeContainsAbs t) $ E.throwError $ TypeError $ "typecheck: return type contains abstractions: " <> show t
+  when (typeContainsAbs t) $ E.throwError $ TypeError $ "typecheck: return type contains functions: " <> show t
 
   pure $ ERec t delay param bindings' body'
   where
@@ -248,8 +255,8 @@ es :: [(Ident, Expr ())]
 es = 
   [ ("x", i32 5)
   , ("n", f32 5)
-  , ("f", abs_ ["p" |: ti32] (tabs [ti32] ti32) [] $ abs_ ["o" |: ti32 ] ti32 [] $ op Add (var "x") (var "p"))
-  , ("z", app (var "f") [var "x"])
+  , ("f", abs_ ["p" |: ti32] (tabs [ti32] ti32) [] $ abs_ ["o" |: ti32 ] ti32 [] $ op Add (var "o") (var "p"))
+  , ("z", app (app (var "f") [var "x"]) [var "x"])
   ]
 
 t1 = ir
@@ -259,7 +266,7 @@ t1 = ir
     (identMap, funcRefMap, genv) = compile ces
     ir = toplevel genv.globals identMap funcRefMap
 
-t2 = compile2 ces
+t2 = fmap compile2 ces
   where
-    Right es' = infer es
-    ces = M.fromList $ fmap (fmap toCExpr) es'
+    es' = infer es
+    ces = fmap (M.fromList . fmap (fmap toCExpr)) es'
