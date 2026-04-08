@@ -84,14 +84,17 @@ data Expr t
 
   | EVar t Ident
 
+  -- NOTE: Bindings will be in topsort order after typechecking
   | EAbs Type {- params -} [Ident] {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
   | EApp t (Expr t) [Expr t]
 
   | ESelect t (Expr t) {- selector -} (Expr t)
 
-  -- NOTE: The (return) type of a recursive expression can not contain abstractions
+  -- NOTE: The (return) type of a recursive expression can not contain functions
   -- in order to simplify the logic and not require an initial value. It wouldn't make
   -- much sense generally anyway.
+
+  -- NOTE: Bindings will be in topsort order after typechecking
   | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
   deriving (Show, Data)
 
@@ -598,3 +601,15 @@ compile toplevelMap = runUnique $ do
   let optimize = id
 
   pure (toplevelMap', optimize funcRefMap, genv)
+
+compile3 :: CExpr Abs -> (CExpr FuncRef, Map FuncRef Func, GlobalsEnv)
+compile3 expr = runUnique $ do
+  let (expr', env) = flip ST.runState (AbsEnv mempty 0) $ gatherAbstractions expr
+  let freeVarMap = gatherFreeVars env.funcRefMap
+
+  (funcRefMap, genv) <- markCapturedBindings freeVarMap env.funcRefMap
+  
+  -- TODO
+  let optimize = id
+
+  pure (expr', optimize funcRefMap, genv)

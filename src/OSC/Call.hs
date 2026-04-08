@@ -266,6 +266,65 @@ data IR = IR
   , funcMap :: Map FuncRef IRFunc
   } deriving Show
 
+data IR2 = IR2
+  { allocations :: [(Type, Idx)]
+  , toplevelStatements :: [Statement]
+  , funcMap :: Map FuncRef IRFunc
+  , main :: Ref
+  } deriving Show
+
+toplevel2 :: Map Ident Type -> Map FuncRef Func -> CExpr FuncRef -> IR2
+toplevel2 globals funcRefMap expr = IR2 { allocations = st.allocations, .. }
+  where
+    (((main, funcMap), toplevelStatements), st) = ST.runState (W.runWriterT gen) (AllocState { globalIdx = 0, funcRefIdx = 0, allocations = [] })
+    -- toplevelFuncs = M.fromList [ (n, fr) | (n, CAbs _ fr) <- M.toList toplevelMap ]
+
+    gen = do
+      globalRefs <- M.fromList <$> sequence [ (n,) <$> allocGlobal t | (n, t) <- M.toList globals ]
+
+      main <- case expr of
+        CAbs _ fr -> pure $ RFuncRef fr
+        _ -> do
+          ref <- allocGlobal (cexprType expr)
+          R.runReaderT (retvalue expr) (Env { bindings = globalRefs, ret = ref, to = [], localIdx = 0, allocations = [] })
+          pure ref
+
+      funcMap <- M.fromList <$> sequence
+        [ do
+           irf <- flip R.runReaderT (Env { bindings = globalRefs, ret = RRet, to = [], localIdx = 0, allocations = [] }) $ do
+              statements <- cextract $ func f
+              allocations <- R.asks (.allocations)
+              pure IRFunc {..}
+           pure (fr, irf)
+        | (fr, f) <- M.toList funcRefMap
+        ]
+      
+      pure (main, funcMap)
+
+      where
+        func (Func _ params bindings body) = mdo
+          bindingRefs <- mconcat <$> sequenceA
+            -- Arguments
+            [ pure $ M.fromList [ (p, RArg idx) | (idx, p) <- zip [0..] params ]
+
+            -- Bindings
+            , M.fromList <$> sequenceA
+                [ case region of
+                    ALocal -> (n,) . snd <$> R.local withBindingRefs (rhsvalue region bbody)
+                    AGlobal -> do
+                      -- Set global ref as return value for binding rhs
+                      gref <- R.asks ((M.! n) . (.bindings))
+                      R.local ((\Env {..} -> Env { ret = gref, .. }) . withBindingRefs) (retvalue bbody)
+                      pure (n, gref)
+                | (n, region, bbody) <- bindings
+                ]
+            ]
+
+          let withBindingRefs :: Env -> Env
+              withBindingRefs Env {..} = Env { bindings = bindingRefs <> bindings, .. }
+
+          R.local withBindingRefs $ retvalue body
+
 toplevel :: Map Ident Type -> Map Ident (CExpr FuncRef) -> Map FuncRef Func -> IR
 toplevel globals toplevelMap funcRefMap = IR { toplevelAllocations = st.allocations, .. }
   where

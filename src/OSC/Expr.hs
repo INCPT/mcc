@@ -206,8 +206,11 @@ typecheckBindings bindings
             bs' <- R.local (\env -> M.singleton n (exprType expr') <> env) (go bs)
             return $ (n, expr'):bs'
 
-infer :: [(Ident, Expr ())] -> Either TypeError [(Ident, Expr Type)]
-infer = flip R.runReader mempty . E.runExceptT . typecheckBindings
+infer :: Expr () -> Either TypeError (Expr Type)
+infer = flip R.runReader mempty . E.runExceptT . typecheck
+
+inferMany :: [(Ident, Expr ())] -> Either TypeError [(Ident, Expr Type)]
+inferMany = flip R.runReader mempty . E.runExceptT . typecheckBindings
 
 --------------------------------------------------------------------------------
 
@@ -276,14 +279,31 @@ es =
   , ("rec", abs_ [] ti32 [] $ rec_ ti32 5 "cnt" [] (op Add (i32 1) (var "cnt")))
   ]
 
+et :: Expr ()
+et = abs_ [] ti32
+  [ ("x", i32 5)
+  , ("n", f32 5)
+  , ("f", abs_ ["p" |: ti32] (tabs [ti32] ti32) [] $ abs_ ["o" |: ti32 ] ti32 [] $ op Add (var "o") (var "p"))
+  , ("z", app (app (var "f") [var "x"]) [app (var "rec") []])
+  , ("rec", abs_ [] ti32 [] $ rec_ ti32 5 "cnt" [] (op Add (i32 1) (var "cnt")))
+  ]
+  (var "rec")
+
 t1 = ir
+  where
+    Right es' = inferMany es
+    ces = M.fromList $ fmap (fmap toCExpr) es'
+    (identMap, funcRefMap, genv) = compile ces
+    ir = toplevel genv.globals identMap funcRefMap
+
+t2 = ir
   where
     Right es' = infer es
     ces = M.fromList $ fmap (fmap toCExpr) es'
     (identMap, funcRefMap, genv) = compile ces
     ir = toplevel genv.globals identMap funcRefMap
 
-t2 = fmap compile2 ces
+t3 = fmap compile2 ces
   where
     es' = infer es
     ces = fmap (M.fromList . fmap (fmap toCExpr)) es'
