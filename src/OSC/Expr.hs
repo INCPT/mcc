@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeOperators #-}
 
@@ -251,12 +252,12 @@ es =
   , ("z", app (var "f") [var "x"])
   ]
 
-t1 = genv
+t1 = ir
   where
     Right es' = infer es
     ces = M.fromList $ fmap (fmap toCExpr) es'
     (identMap, funcRefMap, genv) = compile ces
-    ir = toplevel identMap funcRefMap
+    ir = toplevel genv.globals identMap funcRefMap
 
 t2 = compile2 ces
   where

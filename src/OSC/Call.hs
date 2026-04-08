@@ -17,7 +17,7 @@ import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State.Lazy as ST
-import qualified Control.Monad.Trans.Writer.CPS as W
+import qualified Control.Monad.Trans.Writer as W
 import Data.Functor.Product (Product (Pair))
 import Data.Map (Map)
 import qualified Data.Map as M
@@ -113,10 +113,10 @@ allocGlobal t = lift $ case t of
 
 --------------------------------------------------------------------------------
 
-cextract :: CallM () -> CallM [Statement]
+cextract :: CallM a -> CallM (a, [Statement])
 cextract m = do
   env <- R.ask
-  fmap snd $ lift $ lift $ W.runWriterT (R.runReaderT m env)
+  lift $ lift $ W.runWriterT (R.runReaderT m env)
 
 ccopyRef :: Type -> Ref -> Ref -> CallM ()
 ccopyRef t src dst = lift $ W.tell [SCopy t src dst]
@@ -129,13 +129,13 @@ ccall funcRef args ret = lift $ W.tell $ [SCall funcRef args ret]
 
 cif :: Ref -> CallM () -> CallM () -> CallM ()
 cif r t e = do
-  t' <- cextract t
-  e' <- cextract e
+  ((), t') <- cextract t
+  ((), e') <- cextract e
   lift $ W.tell [SIf r t' e']
 
 cfor :: Int -> Int -> Int -> (Ref -> CallM ()) -> CallM ()
 cfor initial steps step f = allocLocal (TNumber TI32) $ \i -> do
-  f' <- cextract (f i)
+  ((), f') <- cextract (f i)
   lift $ W.tell [SFor i initial steps step f']
 
 --------------------------------------------------------------------------------
@@ -177,7 +177,7 @@ rhsvalue _ (CIndexed [] (CVar t n)) = do
   env <- R.ask
   case M.lookup n env.bindings of
     Just ref -> pure (t, ref)
-    _ -> error "rhsvalue: unknown global (this is a bug)"
+    _ -> error $ "rhsvalue: unknown global (this is a bug): " <> show n
 rhsvalue region e@(CIndexed _ _) = allocAndStore region e
 
 --------------------------------------------------------------------------------
@@ -263,30 +263,36 @@ data IR = IR
   , toplevelFuncs :: Map Ident IRFunc
   } deriving Show
 
-toplevel :: Map Ident (CExpr FuncRef) -> Map FuncRef Func -> IR
-toplevel toplevelMap funcRefMap = IR { toplevelAllocations = st.allocations, .. }
+toplevel :: Map Ident Type -> Map Ident (CExpr FuncRef) -> Map FuncRef Func -> IR
+toplevel globals toplevelMap funcRefMap = IR { toplevelAllocations = st.allocations, .. }
   where
     ((toplevelFuncs, toplevelStatements), st) = ST.runState (W.runWriterT gen) (AllocState { globalIdx = 0, funcRefIdx = 0, allocations = [] })
 
     gen = mdo
-      refMap <- M.fromList <$> sequence
-        [ case expr of
-            CAbs _ fr -> pure (n, RFuncRef fr)
-            _ -> do
-              ref <- allocGlobal (cexprType expr)
-              R.runReaderT (retvalue expr) (Env { bindings = refMap, ret = ref, to = [], localIdx = 0, allocations = [] })
-              pure (n, ref)
-        | (n, expr) <- M.toList toplevelMap
+      refMap <- fmap M.fromList $ sequence $ mconcat
+        -- Toplevel bindings
+        [ [ case expr of
+              CAbs _ fr -> pure (n, RFuncRef fr)
+              _ -> do
+                ref <- allocGlobal (cexprType expr)
+                R.runReaderT (retvalue expr) (Env { bindings = refMap, ret = ref, to = [], localIdx = 0, allocations = [] })
+                pure (n, ref)
+          | (n, expr) <- M.toList toplevelMap
+          ]
+
+        -- Gloabls
+        , [ (n,) <$> allocGlobal t | (n, t) <- M.toList globals ]
         ]
 
       funcMap <- M.fromList <$> sequence
         [ do
            irf <- flip R.runReaderT (Env { bindings = refMap, ret = retRef, to = [], localIdx = 0, allocations = [] }) $ do
-              statements <- cextract $ func f
+              ((), statements) <- cextract $ func f
               allocations <- R.asks (.allocations)
               pure IRFunc {..}
            pure (fr, irf)
         | (fr, f@(Func _ params _ _)) <- M.toList funcRefMap
+
         -- Return ref is last param
         , let retRef = RArg (length params)
         ]
@@ -304,7 +310,13 @@ toplevel toplevelMap funcRefMap = IR { toplevelAllocations = st.allocations, .. 
           bindingRefs <- mconcat <$> sequenceA
             [ pure $ M.fromList [ (p, RArg idx) | (idx, p) <- zip [0..] params ]
             , M.fromList <$> sequenceA
-                [ (n,) . snd <$> R.local withBindingRefs (rhsvalue region bbody)
+                [ case region of
+                    ALocal -> (n,) . snd <$> R.local withBindingRefs (rhsvalue region bbody)
+                    AGlobal -> R.local withBindingRefs $ do
+                      -- Use global as return ref for rhs
+                      lhs <- R.asks ((M.! n) . (.bindings))
+                      R.local (\Env {..} -> Env { ret = lhs, .. }) (retvalue bbody)
+                      pure (n, lhs)
                 | (n, region, bbody) <- bindings
                 ]
             ]
@@ -315,6 +327,7 @@ toplevel toplevelMap funcRefMap = IR { toplevelAllocations = st.allocations, .. 
           R.local withBindingRefs $ retvalue body
 
 -- TODO: use mtl constraints for allocLocal/Global?
+-- TODO: use lhs/rhs for clarity
 
 -- TODO: oversampling just means that we insert some stateful code around the oversampled function (which we should always inline when generating code; this can happen directly in the codegen)
 -- TODO: zig std math: https://github.com/ziglang/zig/tree/master/lib/std/math

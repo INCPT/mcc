@@ -383,13 +383,12 @@ gatherAbstractions (COp t op a b) = do
   pure $ COp t op a' b'
 gatherAbstractions (CAbs t (Abs params bindings body)) = do
   fr <- FuncRef <$> ST.gets (.nextFuncRef)
+  ST.modify $ \st -> st { nextFuncRef = st.nextFuncRef + 1 }
+
   bindings' <- sequence [ (n, region,) <$> gatherAbstractions b | (n, region, b) <- bindings ]
   body' <- gatherAbstractions body
 
-  ST.modify $ \st -> st
-    { nextFuncRef = st.nextFuncRef + 1
-    , funcRefMap = M.insert fr (Func t params bindings' body') st.funcRefMap
-    }
+  ST.modify $ \st -> st { funcRefMap = M.insert fr (Func t params bindings' body') st.funcRefMap }
 
   pure $ CAbs t fr
 
@@ -446,8 +445,8 @@ topsort nodeEdges nodes
         isCycle (G.Node _ []) = False  -- single node SCC = no cycle
         isCycle (G.Node _ _) = True    -- multi-node SCC = cycle
 
-gatherFreeVars' :: Map FuncRef Func -> Map FuncRef (Set Ident)
-gatherFreeVars' funcRefMap = case topsort id funcDeps of
+gatherFreeVarsTopsort :: Map FuncRef Func -> Map FuncRef (Set Ident)
+gatherFreeVarsTopsort funcRefMap = case topsort id funcDeps of
   Left scc -> error $ "gatherFreeVars: no topsort (this is a bug): " <> show scc
   Right sortedFuncs -> go3 (fmap fst sortedFuncs) mempty
   where
@@ -673,7 +672,7 @@ compile2 toplevelMap = runUnique $ do
   satMap <- traverse abstractUnsaturatedApps toplevelMap
 
   let (toplevelMap', env) = flip ST.runState (AbsEnv mempty 0) $ traverse gatherAbstractions satMap
-  let freeVarMap = gatherFreeVars' env.funcRefMap
+  let freeVarMap = gatherFreeVars env.funcRefMap
 
   (funcRefMap, genv) <- markCapturedBindings freeVarMap env.funcRefMap
   
@@ -687,7 +686,7 @@ compile toplevelMap = runUnique $ do
   satMap <- traverse abstractUnsaturatedApps toplevelMap
 
   let (toplevelMap', env) = flip ST.runState (AbsEnv mempty 0) $ traverse gatherAbstractions satMap
-  let freeVarMap = gatherFreeVars' env.funcRefMap
+  let freeVarMap = gatherFreeVars env.funcRefMap
 
   (funcRefMap, genv) <- markCapturedBindings freeVarMap env.funcRefMap
   
