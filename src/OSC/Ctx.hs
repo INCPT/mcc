@@ -343,27 +343,6 @@ data AbsEnv = AbsEnv
   , nextFuncRef :: Int
   } deriving Show
 
-abstractUnsaturatedApps :: CExpr Abs -> Unique (CExpr Abs)
-abstractUnsaturatedApps = transformM go
-  where
-    go :: CExpr Abs -> Unique (CExpr Abs)
-    go e@(CIndexed [] (CApp t f args)) = case drop (length args) (paramTypes $ cexprType f) of
-      -- Saturated, keep as is
-      [] -> pure e
-      -- Unsaturated, create closure
-      remainingParams -> do
-        argNames <- sequence [ fresh | _ <- args ]
-        remainingParamNames <- sequence [ (,t) <$> fresh | t <- remainingParams ]
-
-        let argBindings = [ (n, ALocal, arg) | (n, arg) <- zip argNames args ]
-        let closureBody = CIndexed [] $ CApp t f $ mconcat
-              [ [ CIndexed [] (CVar (cexprType a) n) | (n, a) <- zip argNames args ]
-              , [ CIndexed [] (CVar pt mn) | (mn, pt) <- remainingParamNames ]
-              ]
-
-        pure $ CAbs (TAbs remainingParams t) $ Abs (map fst remainingParamNames) argBindings closureBody
-    go ch = pure ch
-
 gatherAbstractions :: CExpr Abs -> ST.State AbsEnv (CExpr FuncRef)
 gatherAbstractions (CSel t choices selector) = do
   choices' <- traverse gatherAbstractions choices
@@ -428,77 +407,6 @@ gatherAbstractionsExpr (CRec t delay param bindings body) = do
 --   - inner's free vars: {x, y, z}
 --   - middle's free vars: {x, y} (includes inner's free vars minus middle's params/bindings)
 --   - outer's free vars: {} (all variables are bound by outer)
-
-topsort :: Ord node => (a -> Set node) -> [(node, a)] -> Either [G.Tree G.Vertex] [(node, a)]
-topsort nodeEdges nodes
-  | hasCycles = Left (G.scc graph)
-  | otherwise = Right [ (n, nodesMap M.! n) | v <- reverse (G.topSort graph), let (_, n, _) = nodeFromVertex v ]
-  where
-    nodesMap = M.fromList nodes
-
-    edges = [ (node, node, S.toList (nodeEdges a)) | (node, a) <- nodes ]
-    (graph, nodeFromVertex, _) = G.graphFromEdges edges
-
-    hasCycles :: Bool
-    hasCycles = or [ isCycle node | node <- G.scc graph ]
-      where
-        isCycle (G.Node _ []) = False  -- single node SCC = no cycle
-        isCycle (G.Node _ _) = True    -- multi-node SCC = cycle
-
-gatherFreeVarsTopsort :: Map FuncRef Func -> Map FuncRef (Set Ident)
-gatherFreeVarsTopsort funcRefMap = case topsort id funcDeps of
-  Left scc -> error $ "gatherFreeVars: no topsort (this is a bug): " <> show scc
-  Right sortedFuncs -> go3 (fmap fst sortedFuncs) mempty
-  where
-    go3 :: [FuncRef] -> Map FuncRef (Set Ident) -> Map FuncRef (Set Ident)
-    go3 [] m = m
-    go3 (fr:frs) m = go3 frs (M.singleton fr (fvs <> tfvs) <> m)
-      where
-        Func _ _ bindings body = funcRefMap M.! fr
-        fvs = funcVars M.! fr
-        tfvs = mconcat $ mconcat
-          [ [ fvs | CAbs _ fr <- universeBi body, Just fvs <- [ M.lookup fr m ] ]
-          , [ fvs | (_, _, b) <- bindings, CAbs _ fr <- universeBi b, Just fvs <- [ M.lookup fr m ] ]
-          ]
-
-    funcVars :: Map FuncRef (Set Ident)
-    funcVars = fmap go2 funcRefMap
-
-    go2 :: Func -> Set Ident
-    go2 (Func _ params bindings body) = allVars2 bindings body \\ (S.fromList [ n | (n, _, _) <- bindings ] <> S.fromList params)
-
-    allVars2 :: [(Ident, AllocRegion, CExpr FuncRef)] -> CExpr FuncRef -> Set Ident
-    allVars2 bindings body = mconcat $ fmap mconcat
-      [ [ S.fromList [ n | CVar @FuncRef _ n <- universeBi body ] ]
-      , [ S.fromList [ n | (_, _, b) <- bindings, CVar @FuncRef _ n <- universeBi b ] ]
-      ]
-
-    funcDeps :: [(FuncRef, Set FuncRef)]
-    funcDeps =
-      [ ( fr
-        , S.fromList $ mconcat
-            [ [ fr | CAbs _ fr <- universeBi body ]
-            , [ fr | (_, _, b) <- bindings, CAbs _ fr <- universeBi b ]
-            ]
-        )
-      | (fr, Func _ _ bindings body) <- M.toList funcRefMap
-      ]
-
-    freeVarMap :: Map FuncRef (Set Ident)
-    freeVarMap = fmap go funcRefMap
-
-    go :: Func -> Set Ident
-    go (Func _ params bindings body) = allVars bindings body \\ (S.fromList [ n | (n, _, _) <- bindings ] <> S.fromList params)
-
-    allVars :: [(Ident, AllocRegion, CExpr FuncRef)] -> CExpr FuncRef -> Set Ident
-    allVars bindings body = mconcat $ fmap mconcat
-      [ [ S.fromList [ n | CVar @FuncRef _ n <- universeBi body ] ]
-      , [ S.fromList [ n | (_, _, b) <- bindings, CVar @FuncRef _ n <- universeBi b ] ]
-
-      -- Gather transient free vars (by lazily referencing freeVarMap; this works because no mutual recursion between bindings is allowed)
-      , [ fvs | CAbs _ fr <- universeBi body, Just fvs <- [ M.lookup fr freeVarMap ] ]
-      , [ fvs | (_, _, b) <- bindings, CAbs _ fr <- universeBi b, Just fvs <- [ M.lookup fr freeVarMap ] ]
-      ]
 
 gatherFreeVars :: Map FuncRef Func -> Map FuncRef (Set Ident)
 gatherFreeVars funcRefMap = freeVarMap
@@ -669,9 +577,7 @@ markPureExpressions = fmap go
 
 compile2 :: Map Ident (CExpr Abs) -> (Map FuncRef (Set Ident), Map Ident (CExpr FuncRef), Map FuncRef Func, GlobalsEnv)
 compile2 toplevelMap = runUnique $ do
-  satMap <- traverse abstractUnsaturatedApps toplevelMap
-
-  let (toplevelMap', env) = flip ST.runState (AbsEnv mempty 0) $ traverse gatherAbstractions satMap
+  let (toplevelMap', env) = flip ST.runState (AbsEnv mempty 0) $ traverse gatherAbstractions toplevelMap
   let freeVarMap = gatherFreeVars env.funcRefMap
 
   (funcRefMap, genv) <- markCapturedBindings freeVarMap env.funcRefMap
@@ -683,9 +589,7 @@ compile2 toplevelMap = runUnique $ do
 
 compile :: Map Ident (CExpr Abs) -> (Map Ident (CExpr FuncRef), Map FuncRef Func, GlobalsEnv)
 compile toplevelMap = runUnique $ do
-  satMap <- traverse abstractUnsaturatedApps toplevelMap
-
-  let (toplevelMap', env) = flip ST.runState (AbsEnv mempty 0) $ traverse gatherAbstractions satMap
+  let (toplevelMap', env) = flip ST.runState (AbsEnv mempty 0) $ traverse gatherAbstractions toplevelMap
   let freeVarMap = gatherFreeVars env.funcRefMap
 
   (funcRefMap, genv) <- markCapturedBindings freeVarMap env.funcRefMap
@@ -694,109 +598,3 @@ compile toplevelMap = runUnique $ do
   let optimize = id
 
   pure (toplevelMap', optimize funcRefMap, genv)
-
---------------------------------------------------------------------------------
--- Test expressions for markCapturedBindings
-
--- Test 1: Simple abstraction with no captures
-testCExpr1 :: CExpr Abs
-testCExpr1 = CAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
-  [Ident "x"]
-  [(Ident "x", ALocal, CConst (I32 0))]
-  (CIndexed [] (CVar (TNumber TI32) (Ident "x")))
-
--- Test 2: Abstraction that captures a parameter in a nested abstraction
-testCExpr2 :: CExpr Abs
-testCExpr2 = CAbs (TAbs [TNumber TI32, TNumber TI32] (TNumber TI32)) $ Abs
-  [Ident "x", Ident "y"]
-  [(Ident "z", ALocal, CConst (I32 0))]
-  (CAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
-    [Ident "a"]
-    [(Ident "b", ALocal, CConst (I32 1))]
-    (COp (TNumber TI32) Add (CIndexed [] (CVar (TNumber TI32) (Ident "x"))) (CIndexed [] (CVar (TNumber TI32) (Ident "z")))))
-
--- Test 3: Abstraction with a binding that references a parameter
-testCExpr3 :: CExpr Abs
-testCExpr3 = CAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
-  [Ident "x"]
-  [ (Ident "x", ALocal, CConst (I32 5))
-  , (Ident "y", ALocal, CIndexed [] (CVar (TNumber TI32) (Ident "x")))
-  ]
-  (CIndexed [] (CVar (TNumber TI32) (Ident "y")))
-
--- Test 4: Nested abstractions with multiple captures
-testCExpr4 :: CExpr Abs
-testCExpr4 = CAbs (TAbs [TNumber TI32, TNumber TI32] (TNumber TI32)) $ Abs
-  [Ident "a", Ident "b"]
-  [(Ident "bnd_a", ALocal, CConst (I32 1))]
-  (CAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
-    [Ident "c"]
-    [ (Ident "bnd_b", ALocal, CIndexed [] (CVar (TNumber TI32) (Ident "bnd_a")))
-    , (Ident "bnd_c", ALocal, CIndexed [] (CVar (TNumber TI32) (Ident "a")))
-    ]
-    (COp (TNumber TI32) Mul (CIndexed [] (CVar (TNumber TI32) (Ident "c"))) (CIndexed [] (CVar (TNumber TI32) (Ident "b")))))
-
--- Test 4: Nested abstractions with multiple captures
-testCExpr4_2 :: CExpr Abs
-testCExpr4_2 = CAbs (TAbs [TNumber TI32, TNumber TI32, TNumber TI32] (TNumber TI32)) $ Abs
-  [Ident "a", Ident "b", Ident "z"]
-  [(Ident "bnd_a", ALocal, CConst (I32 1))]
-  (CAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
-    [Ident "c"]
-    [ (Ident "bnd_b", ALocal, CIndexed [] (CVar (TNumber TI32) (Ident "a")))
-    , (Ident "bnd_c", ALocal, CIndexed [] (CVar (TNumber TI32) (Ident "z")))
-    ]
-    (CSel (TNumber TI32)
-      [ (COp (TNumber TI32) Mul (CIndexed [] (CVar (TNumber TI32) (Ident "c"))) (CIndexed [] (CVar (TNumber TI32) (Ident "b"))))
-      , (COp (TNumber TI32) Mul (CIndexed [] (CVar (TNumber TI32) (Ident "c"))) (CIndexed [] (CVar (TNumber TI32) (Ident "z"))))
-      ] (COp (TNumber TI32) Mul (CIndexed [] (CVar (TNumber TI32) (Ident "bnd_a"))) (CIndexed [] (CVar (TNumber TI32) (Ident "z"))))))
-
-testCExpr4_3 :: CExpr Abs
-testCExpr4_3 = CAbs (TAbs [TNumber TI32, TNumber TI32, TNumber TI32] (TNumber TI32)) $ Abs
-  [Ident "a", Ident "b", Ident "z"]
-  [(Ident "bnd_a", ALocal, CConst (I32 1))]
-  (CAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
-    [Ident "c"]
-    [ (Ident "bnd_b", ALocal, CIndexed [] (CVar (TNumber TI32) (Ident "a")))
-    , (Ident "bnd_c", ALocal, CIndexed [] (CVar (TNumber TI32) (Ident "z")))
-    ]
-    (CSel (TArr (TNumber TI32) 3)
-      [ (COp (TNumber TI32) Mul (CIndexed [] (CVar (TNumber TI32) (Ident "c"))) (CIndexed [] (CVar (TNumber TI32) (Ident "b"))))
-      , (COp (TNumber TI32) Mul (CIndexed [] (CVar (TNumber TI32) (Ident "c"))) (CIndexed [] (CVar (TNumber TI32) (Ident "z"))))
-      , (CSel (TArr (TNumber TI32) 3)
-          [ (COp (TNumber TI32) Mul (CIndexed [] (CVar (TNumber TI32) (Ident "c"))) (CIndexed [] (CVar (TNumber TI32) (Ident "b"))))
-          , (COp (TNumber TI32) Mul (CIndexed [] (CVar (TNumber TI32) (Ident "c"))) (CIndexed [] (CVar (TNumber TI32) (Ident "z"))))
-          ] (CSel (TArr (TNumber TI32) 3)
-                 [ (CConst $ I32 1)
-                 , (COp (TNumber TI32) Mul (CIndexed [] (CVar (TNumber TI32) (Ident "c"))) (CIndexed [] (CVar (TNumber TI32) (Ident "z"))))
-                 ] (CConst $ I32 0))) 
-      ] (CConst $ I32 2)))
-
--- Test 5: Abstraction with free variable (not captured, just free)
-testCExpr5 :: CExpr Abs
-testCExpr5 = CAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
-  [Ident "x"]
-  [(Ident "x", ALocal, CConst (I32 0))]
-  (COp (TNumber TI32) Add (CIndexed [] (CVar (TNumber TI32) (Ident "x"))) (CIndexed [] (CVar (TNumber TI32) (Ident "freeVar"))))
-
--- Test 6: Complex case with binding that captures and is itself captured
-testCExpr6 :: CExpr Abs
-testCExpr6 = CAbs (TAbs [TNumber TI32, TNumber TI32] (TNumber TI32)) $ Abs
-  [Ident "x", Ident "y"]
-  [ (Ident "x", ALocal, CConst (I32 10))
-  , (Ident "helper", ALocal, CAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
-      [Ident "z"]
-      [(Ident "z", ALocal, CConst (I32 0))]
-      (COp (TNumber TI32) Add (CIndexed [] (CVar (TNumber TI32) (Ident "x"))) (CIndexed [] (CVar (TNumber TI32) (Ident "z")))))
-  ]
-  (CAbs (TAbs [TNumber TI32] (TNumber TI32)) $ Abs
-    [Ident "y"]
-    [(Ident "y", ALocal, CConst (I32 20))]
-    (CIndexed [] $ CApp (TNumber TI32) (CIndexed [] (CVar (TNumber TI32) (Ident "helper"))) [CIndexed [] (CVar (TNumber TI32) (Ident "y"))]))
-
-testMark :: CExpr Abs -> (Map FuncRef Func, GlobalsEnv)
-testMark e = runUnique $ do
-  e' <- abstractUnsaturatedApps e
-  let (e'', env) = ST.runState (gatherAbstractions e') (AbsEnv mempty 0)
-  let freeVarMap = gatherFreeVars env.funcRefMap
-  markCapturedBindings freeVarMap env.funcRefMap

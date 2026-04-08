@@ -12,8 +12,10 @@ import qualified Control.Monad.Reader as R
 
 import Data.Generics.Uniplate.Data (universe)
 
+import qualified Data.Graph as G
 import Data.Map (Map)
 import qualified Data.Map as M
+import Data.Set (Set)
 import qualified Data.Set as S
 
 import OSC.Ctx
@@ -23,6 +25,22 @@ newtype TypeError = TypeError String
   deriving Show
 
 type GenM = E.ExceptT TypeError (R.Reader (Map Ident Type))
+
+topsort :: Ord node => (a -> Set node) -> [(node, a)] -> Either [G.Tree G.Vertex] [(node, a)]
+topsort nodeEdges nodes
+  | hasCycles = Left (G.scc graph)
+  | otherwise = Right [ (n, nodesMap M.! n) | v <- reverse (G.topSort graph), let (_, n, _) = nodeFromVertex v ]
+  where
+    nodesMap = M.fromList nodes
+
+    edges = [ (node, node, S.toList (nodeEdges a)) | (node, a) <- nodes ]
+    (graph, nodeFromVertex, _) = G.graphFromEdges edges
+
+    hasCycles :: Bool
+    hasCycles = or [ isCycle node | node <- G.scc graph ]
+      where
+        isCycle (G.Node _ []) = False  -- single node SCC = no cycle
+        isCycle (G.Node _ _) = True    -- multi-node SCC = cycle
 
 reccheck :: [(Ident, Expr ())] -> Either TypeError [(Ident, Expr ())]
 reccheck bindings = case topsort (\expr -> S.fromList [ n | EVar _ n <- universe expr ]) bindings of
@@ -139,16 +157,14 @@ typecheck (EApp () f params) = do
   ptypes <- tparamTypes (exprType f')
   rtype <- treturnType (exprType f')
 
-  when (length params > length ptypes) $ E.throwError $ TypeError $ "typecheck: too many arguments"
+  when (length ptypes /= length params') $ E.throwError $ TypeError $ "typecheck: argument count doesn't match function definition"
 
   sequence_
     [ when (fpt /= pt) $ E.throwError $ TypeError $ "typecheck: type mismatch in function application: " <> show fpt <> " <=> " <> show pt
     | (fpt, pt) <- zip ptypes (fmap exprType params')
     ]
 
-  case drop (length params) ptypes of
-    [] -> pure $ EApp rtype f' params'
-    remparams -> pure $ EApp (TAbs remparams rtype) f' params'
+  pure $ EApp rtype f' params'
 
 typecheck (ESelect () expr sel) = do
   expr' <- typecheck expr

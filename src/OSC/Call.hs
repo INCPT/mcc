@@ -323,6 +323,8 @@ toplevel globals toplevelMap funcRefMap = IR { toplevelAllocations = st.allocati
 
 -- TODO: topsort global statements
 
+-- TODO: HM type inference -> lambda specialization -> inline -> CSE -> float pure expressions out of CSel/etc
+
 -- TODO: use mtl constraints for allocLocal/Global?
 -- TODO: use lhs/rhs for clarity
 
