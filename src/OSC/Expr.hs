@@ -15,6 +15,10 @@ import qualified Control.Monad.State as ST
 import Data.Bits ((.&.), (.|.), xor, shiftL, shiftR, rotateL, rotateR)
 import Data.Generics.Uniplate.Data (universe)
 
+-- Helper function to copy the sign from one float to another
+copySign :: (RealFloat a) => a -> a -> a
+copySign x y = if signum y < 0 then negate (abs x) else abs x
+
 import qualified Data.Graph as G
 import Data.Map (Map)
 import qualified Data.Map as M
