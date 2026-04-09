@@ -223,3 +223,22 @@ instance Arbitrary (Expr Type) where
   shrink (EApp _ f args) = f : args
   shrink (EAbs _ _ bindings body) = body : map snd bindings
   shrink _ = []
+
+-- | Generate a random expression for testing in GHCi
+--
+-- Usage:
+--   > sample randomExpr
+--   > sample (randomExprOfType (TNumber TI32))
+--   > sample (randomExprWithDepth 3)
+randomExpr :: Gen (Expr Type)
+randomExpr = arbitrary
+
+-- | Generate a random expression of a specific type
+randomExprOfType :: Type -> Gen (Expr Type)
+randomExprOfType = genExprOfType emptyCtx
+
+-- | Generate a random expression with a specific maximum depth
+randomExprWithDepth :: Int -> Gen (Expr Type)
+randomExprWithDepth depth = do
+  targetType <- genType 2
+  genExprOfType (emptyCtx { maxDepth = depth }) targetType
