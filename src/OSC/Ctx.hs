@@ -96,7 +96,7 @@ data Expr t
 
   -- NOTE: Bindings will be in topsort order after typechecking
   | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
-  deriving (Show, Data)
+  deriving (Functor, Show, Data)
 
 exprType :: Expr Type -> Type
 exprType (EConst n) = numberType n

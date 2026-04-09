@@ -16,7 +16,7 @@ import Data.Map (Map)
 genIdent :: Gen Ident
 genIdent = do
   prefix <- elements ["x", "y", "z", "a", "b", "c", "f", "g"]
-  suffix <- choose (0, 99 :: Int)
+  suffix <- choose (0, 999 :: Int)
   return $ Ident (prefix ++ show suffix)
 
 -- | Generate a random type
@@ -230,6 +230,12 @@ instance Arbitrary (Expr Type) where
 --   > sample (randomExprWithDepth 3)
 randomExpr :: Gen (Either TypeError (Expr Type))
 randomExpr = fmap tc $ arbitrary
+  where
+    tc :: Expr Type -> Either TypeError (Expr Type)
+    tc = infer . fmap (const ())
+
+irandomExpr :: Gen (Either TypeError [Value])
+irandomExpr = fmap (fmap tinterpretToList . tc) $ arbitrary
   where
     tc :: Expr Type -> Either TypeError (Expr Type)
     tc = infer . fmap (const ())

@@ -15,10 +15,6 @@ import qualified Control.Monad.State as ST
 import Data.Bits ((.&.), (.|.), xor, shiftL, shiftR, rotateL, rotateR)
 import Data.Generics.Uniplate.Data (universe)
 
--- Helper function to copy the sign from one float to another
-copySign :: (RealFloat a) => a -> a -> a
-copySign x y = if signum y < 0 then negate (abs x) else abs x
-
 import qualified Data.Graph as G
 import Data.Map (Map)
 import qualified Data.Map as M
@@ -32,6 +28,10 @@ newtype TypeError = TypeError String
   deriving Show
 
 type GenM = E.ExceptT TypeError (R.Reader (Map Ident Type))
+
+-- Helper function to copy the sign from one float to another
+copySign :: (RealFloat a) => a -> a -> a
+copySign x y = if signum y < 0 then negate (abs x) else abs x
 
 topsort :: Ord node => (a -> Set node) -> [(node, a)] -> Either [G.Tree G.Vertex] [(node, a)]
 topsort nodeEdges nodes
@@ -465,6 +465,20 @@ interpret _ (ERec t delay param bindings body) = mdo
     alloc (TNumber TF64) = VNumber (F64 0)
     alloc (TArr t n) = VArr $ take n $ repeat (alloc t)
     alloc (TAbs _ _) = error "interpret: ERec: function in return type"
+
+tinterpretToList :: Expr Type -> [Value]
+tinterpretToList texpr = take 10 (go st.initialMem st.tick sim)
+  where
+    go mem tick sim = R.runReader sim mem:go (tick mem) tick sim
+    (sim, st) = ST.runState (R.runReaderT (interpret [] texpr) mempty) (GenState { nextCell = 0, initialMem = mempty, tick = id })
+
+interpretToList :: Expr () -> [Value]
+interpretToList expr = take 10 (go st.initialMem st.tick sim)
+  where
+    go mem tick sim = R.runReader sim mem:go (tick mem) tick sim
+
+    Right texpr = infer expr
+    (sim, st) = ST.runState (R.runReaderT (interpret [] texpr) mempty) (GenState { nextCell = 0, initialMem = mempty, tick = id })
 
 --------------------------------------------------------------------------------
 
