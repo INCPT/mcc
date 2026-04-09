@@ -68,35 +68,32 @@ genExprOfType ctx targetType = sized $ \size ->
 
 -- | Generate leaf expressions (constants and variables)
 genLeaf :: GenCtx -> Type -> Gen (Expr Type)
-genLeaf ctx (TNumber TI32) = frequency
-  [ (3, EConst . I32 <$> arbitrary)
-  , (1, genVarOfType ctx (TNumber TI32))
-  ]
-genLeaf ctx (TNumber TF32) = frequency
-  [ (3, EConst . F32 <$> arbitrary)
-  , (1, genVarOfType ctx (TNumber TF32))
-  ]
-genLeaf ctx (TNumber TI64) = frequency
-  [ (3, EConst . I64 <$> arbitrary)
-  , (1, genVarOfType ctx (TNumber TI64))
-  ]
-genLeaf ctx (TNumber TF64) = frequency
-  [ (3, EConst . F64 <$> arbitrary)
-  , (1, genVarOfType ctx (TNumber TF64))
-  ]
-genLeaf ctx t@(TArr elemType len) = frequency
-  [ (3, genArray ctx elemType len)
-  , (1, genVarOfType ctx t)
-  ]
-genLeaf ctx t@(TAbs _ _) = genVarOfType ctx t
+genLeaf ctx (TNumber TI32) = case genVarOfType ctx (TNumber TI32) of
+  Just varGen -> frequency [(3, EConst . I32 <$> arbitrary), (1, varGen)]
+  Nothing -> EConst . I32 <$> arbitrary
+genLeaf ctx (TNumber TF32) = case genVarOfType ctx (TNumber TF32) of
+  Just varGen -> frequency [(3, EConst . F32 <$> arbitrary), (1, varGen)]
+  Nothing -> EConst . F32 <$> arbitrary
+genLeaf ctx (TNumber TI64) = case genVarOfType ctx (TNumber TI64) of
+  Just varGen -> frequency [(3, EConst . I64 <$> arbitrary), (1, varGen)]
+  Nothing -> EConst . I64 <$> arbitrary
+genLeaf ctx (TNumber TF64) = case genVarOfType ctx (TNumber TF64) of
+  Just varGen -> frequency [(3, EConst . F64 <$> arbitrary), (1, varGen)]
+  Nothing -> EConst . F64 <$> arbitrary
+genLeaf ctx t@(TArr elemType len) = case genVarOfType ctx t of
+  Just varGen -> frequency [(3, genArray ctx elemType len), (1, varGen)]
+  Nothing -> genArray ctx elemType len
+genLeaf ctx t@(TAbs _ _) = case genVarOfType ctx t of
+  Just varGen -> varGen
+  Nothing -> genAbs ctx (paramTypes t) (returnType t)
 
--- | Generate a variable reference of a specific type
-genVarOfType :: GenCtx -> Type -> Gen (Expr Type)
+-- | Generate a variable reference of a specific type (returns Nothing if no vars available)
+genVarOfType :: GenCtx -> Type -> Maybe (Gen (Expr Type))
 genVarOfType ctx targetType = do
   let varsOfType = M.toList $ M.filter (== targetType) (availableVars ctx)
   if null varsOfType
-  then genLeaf (ctx { availableVars = M.empty }) targetType
-  else do
+  then Nothing
+  else Just $ do
     (ident, t) <- elements varsOfType
     return $ EVar t ident
 
