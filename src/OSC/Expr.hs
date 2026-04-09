@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeOperators #-}
 
@@ -9,6 +10,7 @@ module OSC.Expr where
 import Control.Monad (when)
 import qualified Control.Monad.Except as E
 import qualified Control.Monad.Reader as R
+import qualified Control.Monad.State as ST
 
 import Data.Generics.Uniplate.Data (universe)
 
@@ -269,6 +271,68 @@ tarr = TArr
 
 (|:) :: Ident -> Type -> (Ident, Type)
 (|:) = (,)
+
+--------------------------------------------------------------------------------
+
+data Value = VNumber Number | VArr [Value]
+  deriving Show
+
+type Mem = Map Int Value
+
+data GenState = GenState
+  { initialMem :: Mem
+  , nextCell :: Int
+  }
+
+type SimM = ST.State Mem Value
+type CircuitM = R.ReaderT (Map Ident SimM) (ST.State GenState)
+
+interpret :: [SimM] -> Expr Type -> CircuitM SimM
+interpret _ (EConst n) = pure (pure $ VNumber n)
+interpret _ (EOp _ op a b) = do
+  sima <- interpret [] a
+  simb <- interpret [] b
+  pure $ do
+    a <- sima
+    b <- simb
+    case (op, a, b) of
+      (Add, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (a + b)
+      _ -> undefined
+interpret _ (EArr _ as) = do
+  simas <- traverse (interpret []) as
+  pure $ do
+    as <- sequence simas
+    pure $ VArr as
+interpret _ (EVar _ n) = do
+  env <- R.ask
+  pure (env M.! n) 
+interpret args (EAbs _ params bindings body) = mdo
+  simbindings <- fmap M.fromList $ sequence $ mconcat
+    [ fmap pure (zip params args)
+    , [ fmap (n,) $ R.local (\env -> simbindings <> env) $ interpret [] bbody
+      | (n, bbody) <- bindings
+      ]
+    ]
+  simbody <- R.local (\env -> simbindings <> env) $ interpret [] body
+  pure simbody
+interpret _ (ESelect _ expr idx) = do
+  simexpr <- interpret [] expr
+  simidx <- interpret [] idx
+  pure $ do
+    e <- simexpr
+    i <- simidx
+    case (e, i) of
+      (VArr as, VNumber (I32 i')) -> pure (as !! i')
+      (VArr as, VNumber (I64 i')) -> pure (as !! i')
+      (e', i') -> error $ "ESelect: " <> show e' <> ", " <> show i'
+interpret _ (EApp _ f params) = do
+  simparams <- traverse (interpret []) params
+  simf <- interpret simparams f
+  pure simf
+interpret _ (ERec t delay param bindings body) = do
+  undefined
+
+--------------------------------------------------------------------------------
 
 es :: [(Ident, Expr ())]
 es = 
