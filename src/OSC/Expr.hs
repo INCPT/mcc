@@ -296,15 +296,17 @@ t1 = ir
     (identMap, funcRefMap, genv) = compile ces
     ir = toplevel genv.globals identMap funcRefMap
 
-t2 = sequence
-  [ do
-      print fr
-      putStrLn "---"
-      putStrLn $ showBlock f.statements
-      putStrLn ""
-      putStrLn ""
-  | (FuncRef fr, f) <- M.toList ir.funcMap
-  ]
+t2 = do
+  sequence
+    [ do
+        print fr
+        putStrLn "---"
+        putStrLn $ showBlock f.statements
+        putStrLn ""
+        print f.allocations
+        putStrLn ""
+    | (FuncRef fr, f) <- M.toList ir.funcMap
+    ]
   where
     Right et' = infer et
     ces = toCExpr et'

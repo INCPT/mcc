@@ -7,6 +7,7 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 
 module OSC.Call where
@@ -16,7 +17,9 @@ import Control.Monad (when)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
+import Control.Monad.Reader (ReaderT, local)
 import qualified Control.Monad.State.Lazy as ST
+import Control.Monad.State.Lazy (StateT, State)
 import qualified Control.Monad.Trans.Writer as W
 import Data.Functor.Product (Product (Pair))
 import Data.Map (Map)
@@ -115,36 +118,33 @@ data Env = Env
 focusTo :: Ref -> Env -> Env
 focusTo idx (Env {..}) = Env { to = idx:to, .. }
 
-data Allocation = Allocation Type Idx
-
-data AllocState = AllocState
-  { globalIdx :: Int
-  , funcRefIdx :: Int
+data LocalState = LocalState
+  { nextVarIdx :: Int
   , allocations :: [(Type, Idx)]
   }
 
-type CallMBase = W.WriterT [Statement] (ST.State AllocState)
+data GlobalState = GlobalState
+  { nextVarIdx :: Int
+  , nextFuncRefIdx :: Int
+  , allocations :: [(Type, Idx)]
+  }
+
+type CallMBase = W.WriterT [Statement] (ST.StateT LocalState (ST.State GlobalState))
 type CallM = R.ReaderT Env CallMBase
 
-allocLocal :: Type -> (Ref -> CallM a) -> CallM a
-allocLocal t k = case t of
+allocBase :: Monad m => ((Idx -> Ref) -> ST.StateT st m Ref) -> Type -> ST.StateT st m Ref
+allocBase alloc t = case t of
   TNumber _ -> alloc RVar
   TArr _ _ -> alloc (RArr t)
   TAbs _ _ -> alloc RFuncRefRef
-  where
-    alloc mkRef = do
-      env <- R.ask
-      R.local (\Env {..} -> Env { localIdx = localIdx + 1, allocations = (t, Local localIdx):allocations, .. }) $ k (mkRef $ Local env.localIdx)
 
-allocGlobal :: Type -> CallMBase Ref
-allocGlobal t = lift $ case t of
-  TNumber _ -> alloc RVar
-  TArr _ _ -> alloc (RArr t)
-  TAbs _ _ -> alloc RFuncRefRef
-  where
-    alloc :: (Idx -> Ref) -> ST.State AllocState Ref
-    alloc mkRef = fmap mkRef $ ST.state $ \AllocState {..} ->
-      (Global globalIdx, AllocState { globalIdx = globalIdx + 1, allocations = (t, Global globalIdx):allocations, .. })
+allocLocal :: forall m. Monad m => Type -> ST.StateT LocalState m Ref
+allocLocal t = flip allocBase t $ \mkRef -> fmap mkRef $ ST.state $ \LocalState {..} ->
+  (Local nextVarIdx, LocalState { nextVarIdx = nextVarIdx + 1, allocations = (t, Local nextVarIdx):allocations, .. })
+
+allocGlobal :: Type -> ST.State GlobalState Ref
+allocGlobal t = flip allocBase t $ \mkRef -> fmap mkRef $ ST.state $ \GlobalState {..} ->
+  (Global nextVarIdx, GlobalState { nextVarIdx = nextVarIdx + 1, allocations = (t, Global nextVarIdx):allocations, .. })
 
 --------------------------------------------------------------------------------
 
@@ -169,20 +169,22 @@ cif r t e = do
   lift $ W.tell [SIf r t' e']
 
 cfor :: Int -> Int -> Int -> (Ref -> CallM ()) -> CallM ()
-cfor initial steps step f = allocLocal (TNumber TI32) $ \i -> do
+cfor initial steps step f = do
+  i <- lift $ lift $ allocLocal (TNumber TI32)
   f' <- cextract (f i)
   lift $ W.tell [SFor i initial steps step f']
 
 --------------------------------------------------------------------------------
 
 allocAndStore :: AllocRegion -> CExpr FuncRef -> CallM (Type, Ref)
-allocAndStore ALocal e = allocLocal t $ \ref -> do
+allocAndStore ALocal e = do
+  ref <- lift $ lift $ allocLocal t
   R.local (\Env {..} -> Env { ret = ref, to = [], .. }) (retvalue e)
   pure (t, ref)
   where
     t = cexprType e
 allocAndStore AGlobal e = do
-  ref <- lift $ allocGlobal t
+  ref <- lift $ lift $ lift $ allocGlobal t
   R.local (\Env {..} -> Env { ret = ref, to = [], .. }) (retvalue e)
   pure (t, ref)
   where
@@ -243,8 +245,8 @@ retvalue (CIndexed [] (CRec t delay param bindings body))
   | typeContainsAbs t = error "retvalue: CRec: type contains abstraction"
   | otherwise = mdo
       -- Alloc delay number of samples of type t[]
-      delayRef <- lift $ allocGlobal (TArr t delay)
-      delayIdx <- lift $ allocGlobal (TNumber TI32)
+      delayRef <- lift $ lift $ lift $ allocGlobal (TArr t delay)
+      delayIdx <- lift $ lift $ lift $ allocGlobal (TNumber TI32)
 
       bindingRefs <- mconcat <$> sequenceA
         [ pure $ M.singleton param (proj delayRef [delayIdx])
@@ -281,7 +283,8 @@ retvalue (CSel _ chs sel) = do
     -- TODO: binary tree if
     recif _ [] _ _ = error "recif: no choice (this is a bug)"
     recif _ [ch] _ _ = retvalue ch
-    recif env (ch:chs) sref idx = allocLocal (TNumber TI32) $ \cond -> do
+    recif env (ch:chs) sref idx = do
+      cond <- lift $ lift $ allocLocal (TNumber TI32)
       cbinOp Eq sref (RConst (I32 idx)) cond
       cif cond (retvalue ch) (recif env chs sref (idx + 1))
 
@@ -309,30 +312,26 @@ data IR2 = IR2
 toplevel2 :: Map Ident Type -> Map FuncRef Func -> CExpr FuncRef -> IR2
 toplevel2 globals funcRefMap expr = IR2 { allocations = st.allocations, .. }
   where
-    (((main, funcMap), toplevelStatements), st) = ST.runState (W.runWriterT gen) (AllocState { globalIdx = 0, funcRefIdx = 0, allocations = [] })
+    (bla, st) = ST.runState gen (GlobalState { nextVarIdx = 0, nextFuncRefIdx = 0, allocations = [] })
     -- toplevelFuncs = M.fromList [ (n, fr) | (n, CAbs _ fr) <- M.toList toplevelMap ]
 
+    gen :: ST.State GlobalState Ref
     gen = do
       globalRefs <- M.fromList <$> sequence [ (n,) <$> allocGlobal t | (n, t) <- M.toList globals ]
 
       main <- case expr of
         CAbs _ fr -> pure $ RFuncRef fr
-        _ -> do
-          ref <- allocGlobal (cexprType expr)
-          R.runReaderT (retvalue expr) (Env { bindings = globalRefs, ret = ref, to = [], localIdx = 0, allocations = [] })
-          pure ref
+        _ -> error "toplevel: definition is not a function"
 
       funcMap <- M.fromList <$> sequence
         [ do
-           irf <- flip R.runReaderT (Env { bindings = globalRefs, ret = RRet, to = [], localIdx = 0, allocations = [] }) $ do
-              statements <- cextract $ func f
-              allocations <- R.asks (.allocations)
-              pure IRFunc {..}
-           pure (fr, irf)
+           (((), sts), lst) <-
+              (flip ST.runStateT undefined . W.runWriterT . flip R.runReaderT (Env { bindings = globalRefs, ret = RRet, to = [], localIdx = 0, allocations = [] })) $ func f
+           pure (fr, undefined)
         | (fr, f) <- M.toList funcRefMap
         ]
       
-      pure (main, funcMap)
+      pure undefined
 
       where
         func (Func _ params bindings body) = mdo
@@ -358,10 +357,11 @@ toplevel2 globals funcRefMap expr = IR2 { allocations = st.allocations, .. }
 
           R.local withBindingRefs $ retvalue body
 
+{-
 toplevel :: Map Ident Type -> Map Ident (CExpr FuncRef) -> Map FuncRef Func -> IR
 toplevel globals toplevelMap funcRefMap = IR { toplevelAllocations = st.allocations, .. }
   where
-    ((funcMap, toplevelStatements), st) = ST.runState (W.runWriterT gen) (AllocState { globalIdx = 0, funcRefIdx = 0, allocations = [] })
+    ((funcMap, toplevelStatements), st) = ST.runState (W.runWriterT gen) (GlobalState { nextVarIdx = 0, nextFuncRefIdx = 0, allocations = [] })
     toplevelFuncs = M.fromList [ (n, fr) | (n, CAbs _ fr) <- M.toList toplevelMap ]
 
     gen = mdo
@@ -412,6 +412,7 @@ toplevel globals toplevelMap funcRefMap = IR { toplevelAllocations = st.allocati
               withBindingRefs Env {..} = Env { bindings = bindingRefs <> bindings, .. }
 
           R.local withBindingRefs $ retvalue body
+-}
 
 -- TODO: dead code elimination
 
