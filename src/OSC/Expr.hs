@@ -292,18 +292,19 @@ et = abs_ [] ti32
 
 t2 = do
   putStrLn "ALLOCS"
-  print ir.allocations
+  print ir.globalAllocations
   putStrLn "---"
 
   putStrLn "TICK"
-  putStrLn $ showBlock ir.tickStatements
+  print ir.tickFunc.allocations
+  putStrLn $ showBlock ir.tickFunc.instructions
   putStrLn "---"
 
   sequence_
     [ do
         print fr
         putStrLn "---"
-        putStrLn $ showBlock f.statements
+        putStrLn $ showBlock f.instructions
         putStrLn ""
         print f.allocations
         putStrLn ""

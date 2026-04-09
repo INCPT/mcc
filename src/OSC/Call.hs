@@ -62,14 +62,14 @@ instance Show Ref where
   show (RFuncRef (FuncRef i)) = "f" <> show i
   show (RFuncRefRef idx) = show idx <> ":funcref"
 
-data Statement
+data Instruction
   = SCopy Type {- source -} Ref {- dest -} Ref
-  | SIf Ref [Statement] [Statement]
+  | SIf Ref [Instruction] [Instruction]
   | SCall {- funcref -} Ref {- args -} [Ref] {- return ref -} Ref
   | SBinOp Op {- a -} Ref {- b -} Ref {- result -} Ref
-  | SFor {- counter -} Ref {- initial -} Int {- steps -} Int {- step -} Int [Statement]
+  | SFor {- counter -} Ref {- initial -} Int {- steps -} Int {- step -} Int [Instruction]
 
-instance Show Statement where
+instance Show Instruction where
   show (SCopy t src dst) = show dst <> " := " <> show src
   show (SIf cond thn els) = mconcat
     [ "if " <> show cond <> " {\n"
@@ -86,7 +86,7 @@ instance Show Statement where
     , "}"
     ]
 
-showBlock :: [Statement] -> String
+showBlock :: [Instruction] -> String
 showBlock stmts = mconcat [ "  " <> line <> "\n" | stmt <- stmts, line <- lines (show stmt) ]
 
 --------------------------------------------------------------------------------
@@ -114,7 +114,7 @@ data Env = Env
   , ret :: Ref
   , to :: [Ref]
 
-  , emit :: [Statement] -> CallM ()
+  , emit :: [Instruction] -> CallM ()
   , allocLocal :: Type -> CallM Ref
   }
 
@@ -134,18 +134,18 @@ data GlobalState = GlobalState
 
   , nextTickVarIdx :: Int
   , tickAllocations :: [(Type, Idx)]
-  , tickStatements :: [Statement]
+  , tickInstructions :: [Instruction]
   }
 
-type CallM = WriterT [Statement] (ReaderT Env (StateT LocalState (State GlobalState)))
+type CallM = WriterT [Instruction] (ReaderT Env (StateT LocalState (State GlobalState)))
 
-cemitLocal :: [Statement] -> CallM ()
+cemitLocal :: [Instruction] -> CallM ()
 cemitLocal = tell
 
-cemitGlobal :: [Statement] -> CallM ()
-cemitGlobal sts = lift $ lift $ lift $ state $ \GlobalState {..} -> ((), GlobalState { tickStatements = tickStatements <> sts, .. })
+cemitGlobal :: [Instruction] -> CallM ()
+cemitGlobal sts = lift $ lift $ lift $ state $ \GlobalState {..} -> ((), GlobalState { tickInstructions = tickInstructions <> sts, .. })
 
-emit :: [Statement] -> CallM ()
+emit :: [Instruction] -> CallM ()
 emit sts = do
   env <- lift ask
   env.emit sts
@@ -275,7 +275,7 @@ retvalue (CIndexed [] (CRec t delay param bindings body))
       delayRef <- lift $ lift $ lift $ allocGlobal (TArr t delay)
       delayIdx <- lift $ lift $ lift $ allocGlobal (TNumber TI32)
 
-      -- Emit global tick statements and store result in delay line
+      -- Emit global tick instructions and store result in delay line
       local (\Env {..} -> Env { emit = cemitGlobal, allocLocal = callocTick, ret = proj delayRef [delayIdx], .. }) $ mdo
         bindingRefs <- mconcat <$> sequenceA
           [ pure $ M.singleton param (proj delayRef [delayIdx])
@@ -322,7 +322,7 @@ retvalue (CSel _ chs sel) = do
 
 data IRFunc = IRFunc
   { allocations :: [(Type, Idx)]
-  , statements :: [Statement]
+  , instructions :: [Instruction]
   } deriving Show
 
 data IR = IR
@@ -337,7 +337,7 @@ toplevel globals funcRefMap fr = IR
   { globalAllocations = st.globalAllocations
   , tickFunc = IRFunc
       { allocations = st.tickAllocations
-      , statements = st.tickStatements
+      , instructions = st.tickInstructions
       }
   , main = RFuncRef fr
   , .. }
@@ -348,7 +348,7 @@ toplevel globals funcRefMap fr = IR
       , globalAllocations = []
       , nextTickVarIdx = 0
       , tickAllocations = []
-      , tickStatements = []
+      , tickInstructions = []
       }
 
     gen :: State GlobalState (Map FuncRef IRFunc)
@@ -357,7 +357,7 @@ toplevel globals funcRefMap fr = IR
 
       M.fromList <$> sequence
         [ do
-           (((), statements), lst) <-
+           (((), instructions), lst) <-
                flip runStateT (LocalState { nextVarIdx = 0, allocations = [] })
              $ flip runReaderT (Env { bindings = globalRefs, ret = RRet, to = [], emit = cemitLocal, allocLocal = callocLocal })
              $ runWriterT
@@ -392,7 +392,7 @@ toplevel globals funcRefMap fr = IR
 
 -- TODO: dead code elimination
 
--- RJCT: topsort global statements
+-- RJCT: topsort global instructions
 
 -- DONE: no toplevel definitions, everything is a function
 -- DONE: topsort bindings when generating a function
