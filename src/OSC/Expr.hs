@@ -12,6 +12,7 @@ import qualified Control.Monad.Except as E
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
 
+import Data.Bits ((.&.), (.|.), xor, shiftL, shiftR, rotateL, rotateR)
 import Data.Generics.Uniplate.Data (universe)
 
 import qualified Data.Graph as G
@@ -299,8 +300,83 @@ interpret _ (EOp _ op a b) = do
     a <- sima
     b <- simb
     case (op, a, b) of
+      -- I32 operations
       (Add, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (a + b)
-      _ -> undefined
+      (Sub, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (a - b)
+      (Mul, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (a * b)
+      (Div, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (a `div` b)
+      (Mod, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (a `mod` b)
+      (Rem, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (a `rem` b)
+      (And, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (a .&. b)
+      (Or, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (a .|. b)
+      (Xor, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (a `xor` b)
+      (Shl, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (a `shiftL` b)
+      (Shr, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (a `shiftR` b)
+      (Rotl, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (a `rotateL` b)
+      (Rotr, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (a `rotateR` b)
+      (Eq, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (if a == b then 1 else 0)
+      (Ne, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (if a /= b then 1 else 0)
+      (Gt, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (if a > b then 1 else 0)
+      (Lt, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (if a < b then 1 else 0)
+      (GEt, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (if a >= b then 1 else 0)
+      (LEt, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (if a <= b then 1 else 0)
+      (Min, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (min a b)
+      (Max, VNumber (I32 a), VNumber (I32 b)) -> pure $ VNumber $ I32 (max a b)
+      
+      -- I64 operations
+      (Add, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I64 (a + b)
+      (Sub, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I64 (a - b)
+      (Mul, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I64 (a * b)
+      (Div, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I64 (a `div` b)
+      (Mod, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I64 (a `mod` b)
+      (Rem, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I64 (a `rem` b)
+      (And, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I64 (a .&. b)
+      (Or, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I64 (a .|. b)
+      (Xor, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I64 (a `xor` b)
+      (Shl, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I64 (a `shiftL` b)
+      (Shr, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I64 (a `shiftR` b)
+      (Rotl, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I64 (a `rotateL` b)
+      (Rotr, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I64 (a `rotateR` b)
+      (Eq, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I32 (if a == b then 1 else 0)
+      (Ne, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I32 (if a /= b then 1 else 0)
+      (Gt, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I32 (if a > b then 1 else 0)
+      (Lt, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I32 (if a < b then 1 else 0)
+      (GEt, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I32 (if a >= b then 1 else 0)
+      (LEt, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I32 (if a <= b then 1 else 0)
+      (Min, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I64 (min a b)
+      (Max, VNumber (I64 a), VNumber (I64 b)) -> pure $ VNumber $ I64 (max a b)
+      
+      -- F32 operations
+      (Add, VNumber (F32 a), VNumber (F32 b)) -> pure $ VNumber $ F32 (a + b)
+      (Sub, VNumber (F32 a), VNumber (F32 b)) -> pure $ VNumber $ F32 (a - b)
+      (Mul, VNumber (F32 a), VNumber (F32 b)) -> pure $ VNumber $ F32 (a * b)
+      (Div, VNumber (F32 a), VNumber (F32 b)) -> pure $ VNumber $ F32 (a / b)
+      (Eq, VNumber (F32 a), VNumber (F32 b)) -> pure $ VNumber $ I32 (if a == b then 1 else 0)
+      (Ne, VNumber (F32 a), VNumber (F32 b)) -> pure $ VNumber $ I32 (if a /= b then 1 else 0)
+      (Gt, VNumber (F32 a), VNumber (F32 b)) -> pure $ VNumber $ I32 (if a > b then 1 else 0)
+      (Lt, VNumber (F32 a), VNumber (F32 b)) -> pure $ VNumber $ I32 (if a < b then 1 else 0)
+      (GEt, VNumber (F32 a), VNumber (F32 b)) -> pure $ VNumber $ I32 (if a >= b then 1 else 0)
+      (LEt, VNumber (F32 a), VNumber (F32 b)) -> pure $ VNumber $ I32 (if a <= b then 1 else 0)
+      (Min, VNumber (F32 a), VNumber (F32 b)) -> pure $ VNumber $ F32 (min a b)
+      (Max, VNumber (F32 a), VNumber (F32 b)) -> pure $ VNumber $ F32 (max a b)
+      (CopySign, VNumber (F32 a), VNumber (F32 b)) -> pure $ VNumber $ F32 (copySign a b)
+      
+      -- F64 operations
+      (Add, VNumber (F64 a), VNumber (F64 b)) -> pure $ VNumber $ F64 (a + b)
+      (Sub, VNumber (F64 a), VNumber (F64 b)) -> pure $ VNumber $ F64 (a - b)
+      (Mul, VNumber (F64 a), VNumber (F64 b)) -> pure $ VNumber $ F64 (a * b)
+      (Div, VNumber (F64 a), VNumber (F64 b)) -> pure $ VNumber $ F64 (a / b)
+      (Eq, VNumber (F64 a), VNumber (F64 b)) -> pure $ VNumber $ I32 (if a == b then 1 else 0)
+      (Ne, VNumber (F64 a), VNumber (F64 b)) -> pure $ VNumber $ I32 (if a /= b then 1 else 0)
+      (Gt, VNumber (F64 a), VNumber (F64 b)) -> pure $ VNumber $ I32 (if a > b then 1 else 0)
+      (Lt, VNumber (F64 a), VNumber (F64 b)) -> pure $ VNumber $ I32 (if a < b then 1 else 0)
+      (GEt, VNumber (F64 a), VNumber (F64 b)) -> pure $ VNumber $ I32 (if a >= b then 1 else 0)
+      (LEt, VNumber (F64 a), VNumber (F64 b)) -> pure $ VNumber $ I32 (if a <= b then 1 else 0)
+      (Min, VNumber (F64 a), VNumber (F64 b)) -> pure $ VNumber $ F64 (min a b)
+      (Max, VNumber (F64 a), VNumber (F64 b)) -> pure $ VNumber $ F64 (max a b)
+      (CopySign, VNumber (F64 a), VNumber (F64 b)) -> pure $ VNumber $ F64 (copySign a b)
+      
+      _ -> error $ "interpret EOp: unsupported operation: " ++ show (op, a, b)
 interpret _ (EArr _ as) = do
   simas <- traverse (interpret []) as
   pure $ do
