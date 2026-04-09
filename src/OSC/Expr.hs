@@ -282,15 +282,23 @@ es =
 et :: Expr ()
 et = abs_ [] ti32
   [ ("x", i32 666)
-  , ("n", f32 777)
+  , ("n", i32 777)
   , ("f", abs_ ["p" |: ti32] ([ti32] --> ti32) [] $ abs_ ["o" |: ti32 ] ti32 [] $ op Add (var "o") (var "p"))
   , ("z", app (app (var "f") [var "x"]) [var "rec"])
-  , ("rec", rec_ ti32 5 "cnt" [] (op Add (i32 1) (var "cnt")))
+  , ("rec", rec_ ti32 5 "cnt" [] (op Add (var "n") (var "cnt")))
   ]
   (var "rec")
 
 t2 = do
-  sequence
+  putStrLn "ALLOCS"
+  print ir.allocations
+  putStrLn "---"
+
+  putStrLn "TICK"
+  putStrLn $ showBlock ir.tickStatements
+  putStrLn "---"
+
+  sequence_
     [ do
         print fr
         putStrLn "---"
