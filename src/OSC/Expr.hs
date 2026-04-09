@@ -289,13 +289,6 @@ et = abs_ [] ti32
   ]
   (var "rec")
 
-t1 = ir
-  where
-    Right es' = inferMany es
-    ces = M.fromList $ fmap (fmap toCExpr) es'
-    (identMap, funcRefMap, genv) = compile ces
-    ir = toplevel genv.globals identMap funcRefMap
-
 t2 = do
   sequence
     [ do
@@ -310,8 +303,8 @@ t2 = do
   where
     Right et' = infer et
     ces = toCExpr et'
-    (expr, funcRefMap, genv) = compile3 ces
-    ir = toplevel2 genv.globals funcRefMap expr
+    (CAbs _ fr, funcRefMap, genv) = compile3 ces
+    ir = toplevel genv.globals funcRefMap fr
 
 t3 = fmap compile2 ces
   where
