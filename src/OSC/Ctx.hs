@@ -300,6 +300,7 @@ choiceTree (ESelect t e idx) = do
 
 --------------------------------------------------------------------------------
 
+-- TODO: this must happen after inlining / CSE (otherwise things like let a = [1, 2, 3] in a[0] won't be optimized)
 elimConstIndices :: CExpr Abs -> CExpr Abs
 elimConstIndices = transform go
   where
@@ -501,9 +502,16 @@ markCapturedBindings freeVarMap funcRefMap = do
       -- Build substitution map: original param name -> fresh global name
       let paramSubsts = M.fromList [ (n, subst) | (_, n, subst) <- capturedParams ]
       
+      -- Find all variables referenced from recursive blocks
+      let recVars = S.fromList
+            [ n
+            | crec@(CRec @FuncRef _ _ _ _ _) <- childrenBi abs
+            , CVar @FuncRef _ n <- universeBi crec
+            ]
+      
       -- Update bindings: mark captured bindings as global, add new global bindings for captured params
       let bindings' = mconcat
-            [ [ if S.member n freeVars then (n, AGlobal, body) else (n, r, body)
+            [ [ if S.member n freeVars || S.member n recVars then (n, AGlobal, body) else (n, r, body)
               | (n, r, body) <- bindings
               ]
             , [ (subst, AGlobal, CIndexed [] (CVar t n)) | (t, n, subst) <- capturedParams ]

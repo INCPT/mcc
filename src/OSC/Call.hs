@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NoFieldSelectors #-}
@@ -19,7 +20,7 @@ import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
 import Control.Monad.Reader (ReaderT, asks, ask, runReaderT)
 import qualified Control.Monad.State.Lazy as ST
-import Control.Monad.State.Lazy (StateT, State, state, runState, runStateT)
+import Control.Monad.State.Lazy (MonadState, StateT, State, state, runState, runStateT)
 import Control.Monad.Trans.Writer (WriterT, runWriterT, tell)
 import qualified Control.Monad.Trans.Writer as W
 import Data.Functor.Product (Product (Pair))
@@ -112,7 +113,9 @@ data Env = Env
   { bindings :: Map Ident Ref
   , ret :: Ref
   , to :: [Ref]
+
   , emit :: [Statement] -> CallM ()
+  , allocLocal :: Type -> CallM Ref
   }
 
 focusTo :: Ref -> Env -> Env
@@ -124,19 +127,23 @@ data LocalState = LocalState
   }
 
 data GlobalState = GlobalState
-  { nextVarIdx :: Int
-  , nextFuncRefIdx :: Int
-  , allocations :: [(Type, Idx)]
+  { nextFuncRefIdx :: Int
+
+  , nextGlobalVarIdx :: Int
+  , globalAllocations :: [(Type, Idx)]
+
+  , nextTickVarIdx :: Int
+  , tickAllocations :: [(Type, Idx)]
   , tickStatements :: [Statement]
   }
 
 type CallM = WriterT [Statement] (ReaderT Env (StateT LocalState (State GlobalState)))
 
-emitLocal :: [Statement] -> CallM ()
-emitLocal = tell
+cemitLocal :: [Statement] -> CallM ()
+cemitLocal = tell
 
-emitGlobal :: [Statement] -> CallM ()
-emitGlobal sts = lift $ lift $ lift $ state $ \GlobalState {..} -> ((), GlobalState { tickStatements = tickStatements <> sts, .. })
+cemitGlobal :: [Statement] -> CallM ()
+cemitGlobal sts = lift $ lift $ lift $ state $ \GlobalState {..} -> ((), GlobalState { tickStatements = tickStatements <> sts, .. })
 
 emit :: [Statement] -> CallM ()
 emit sts = do
@@ -149,19 +156,28 @@ local f m = do
   tell r
   pure a
 
-allocBase :: Monad m => ((Idx -> Ref) -> StateT st m Ref) -> Type -> StateT st m Ref
+allocBase :: ((Idx -> Ref) -> m Ref) -> Type -> m Ref
 allocBase alloc t = case t of
   TNumber _ -> alloc RVar
   TArr _ _ -> alloc (RArr t)
   TAbs _ _ -> alloc RFuncRefRef
 
-allocLocal :: Monad m => Type -> StateT LocalState m Ref
-allocLocal t = flip allocBase t $ \mkRef -> fmap mkRef $ state $ \LocalState {..} ->
+callocLocal :: Type -> CallM Ref
+callocLocal t = lift $ lift $ flip allocBase t $ \mkRef -> fmap mkRef $ state $ \LocalState {..} ->
   (Local nextVarIdx, LocalState { nextVarIdx = nextVarIdx + 1, allocations = (t, Local nextVarIdx):allocations, .. })
+
+callocTick :: Type -> CallM Ref
+callocTick t = lift $ lift $ lift $ flip allocBase t $ \mkRef -> fmap mkRef $ state $ \GlobalState {..} ->
+  (Local nextTickVarIdx, GlobalState { nextTickVarIdx = nextTickVarIdx + 1, tickAllocations = (t, Local nextTickVarIdx):tickAllocations, .. })
+
+allocLocal :: Type -> CallM Ref
+allocLocal t = do
+  env <- lift ask
+  env.allocLocal t
 
 allocGlobal :: Type -> State GlobalState Ref
 allocGlobal t = flip allocBase t $ \mkRef -> fmap mkRef $ state $ \GlobalState {..} ->
-  (Global nextVarIdx, GlobalState { nextVarIdx = nextVarIdx + 1, allocations = (t, Global nextVarIdx):allocations, .. })
+  (Global nextGlobalVarIdx, GlobalState { nextGlobalVarIdx = nextGlobalVarIdx + 1, globalAllocations = (t, Global nextGlobalVarIdx):globalAllocations, .. })
 
 --------------------------------------------------------------------------------
 
@@ -185,21 +201,17 @@ cif r t e = do
 
 cfor :: Int -> Int -> Int -> (Ref -> CallM ()) -> CallM ()
 cfor initial steps step f = do
-  i <- lift $ lift $ allocLocal (TNumber TI32)
+  i <- allocLocal (TNumber TI32)
   f' <- lift $ cextract (f i)
   emit [SFor i initial steps step f']
 
 --------------------------------------------------------------------------------
 
 allocAndStore :: AllocRegion -> CExpr FuncRef -> CallM (Type, Ref)
-allocAndStore ALocal e = do
-  ref <- lift $ lift $ allocLocal t
-  local (\Env {..} -> Env { ret = ref, to = [], .. }) (retvalue e)
-  pure (t, ref)
-  where
-    t = cexprType e
-allocAndStore AGlobal e = do
-  ref <- lift $ lift $ lift $ allocGlobal t
+allocAndStore region e = do
+  ref <- case region of
+    ALocal -> allocLocal t
+    AGlobal -> lift $ lift $ lift $ allocGlobal t
   local (\Env {..} -> Env { ret = ref, to = [], .. }) (retvalue e)
   pure (t, ref)
   where
@@ -263,8 +275,8 @@ retvalue (CIndexed [] (CRec t delay param bindings body))
       delayRef <- lift $ lift $ lift $ allocGlobal (TArr t delay)
       delayIdx <- lift $ lift $ lift $ allocGlobal (TNumber TI32)
 
-      -- Emit global tick statements and store result in dealy line
-      local (\Env {..} -> Env { emit = emitGlobal, ret = proj delayRef [delayIdx], .. }) $ mdo
+      -- Emit global tick statements and store result in delay line
+      local (\Env {..} -> Env { emit = cemitGlobal, allocLocal = callocTick, ret = proj delayRef [delayIdx], .. }) $ mdo
         bindingRefs <- mconcat <$> sequenceA
           [ pure $ M.singleton param (proj delayRef [delayIdx])
           , M.fromList <$> sequenceA [ (n,) . snd <$> local withBindingRefs (rhsvalue region bbody) | (n, region, bbody) <- bindings ]
@@ -302,7 +314,7 @@ retvalue (CSel _ chs sel) = do
     recif _ [] _ _ = error "recif: no choice (this is a bug)"
     recif _ [ch] _ _ = retvalue ch
     recif env (ch:chs) sref idx = do
-      cond <- lift $ lift $ allocLocal (TNumber TI32)
+      cond <- allocLocal (TNumber TI32)
       cbinOp Eq sref (RConst (I32 idx)) cond
       cif cond (retvalue ch) (recif env chs sref (idx + 1))
 
@@ -314,16 +326,30 @@ data IRFunc = IRFunc
   } deriving Show
 
 data IR = IR
-  { allocations :: [(Type, Idx)]
-  , tickStatements :: [Statement]
+  { globalAllocations :: [(Type, Idx)]
   , funcMap :: Map FuncRef IRFunc
+  , tickFunc :: IRFunc
   , main :: Ref
   } deriving Show
 
 toplevel :: Map Ident Type -> Map FuncRef Func -> FuncRef -> IR
-toplevel globals funcRefMap fr = IR { main = RFuncRef fr, allocations = st.allocations, tickStatements = st.tickStatements, .. }
+toplevel globals funcRefMap fr = IR
+  { globalAllocations = st.globalAllocations
+  , tickFunc = IRFunc
+      { allocations = st.tickAllocations
+      , statements = st.tickStatements
+      }
+  , main = RFuncRef fr
+  , .. }
   where
-    (funcMap, st) = runState gen (GlobalState { nextVarIdx = 0, nextFuncRefIdx = 0, allocations = [], tickStatements = [] })
+    (funcMap, st) = runState gen $ GlobalState
+      { nextFuncRefIdx = 0
+      , nextGlobalVarIdx = 0
+      , globalAllocations = []
+      , nextTickVarIdx = 0
+      , tickAllocations = []
+      , tickStatements = []
+      }
 
     gen :: State GlobalState (Map FuncRef IRFunc)
     gen = do
@@ -333,7 +359,7 @@ toplevel globals funcRefMap fr = IR { main = RFuncRef fr, allocations = st.alloc
         [ do
            (((), statements), lst) <-
                flip runStateT (LocalState { nextVarIdx = 0, allocations = [] })
-             $ flip runReaderT (Env { bindings = globalRefs, ret = RRet, to = [], emit = emitLocal })
+             $ flip runReaderT (Env { bindings = globalRefs, ret = RRet, to = [], emit = cemitLocal, allocLocal = callocLocal })
              $ runWriterT
              $ func f
            pure (fr, IRFunc { allocations = lst.allocations, .. })

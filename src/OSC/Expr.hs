@@ -241,8 +241,8 @@ abs_ params rtype = EAbs (TAbs (fmap snd params) rtype) (fmap fst params)
 app :: Expr () -> [Expr ()] -> Expr ()
 app = EApp ()
 
-select :: Expr () -> Expr () -> Expr ()
-select = ESelect ()
+sel :: Expr () -> Expr () -> Expr ()
+sel = ESelect ()
 
 rec_ :: Type -> Int -> Ident -> [(Ident, Expr ())] -> Expr () -> Expr ()
 rec_ = ERec
@@ -283,9 +283,10 @@ et :: Expr ()
 et = abs_ [] ti32
   [ ("x", i32 666)
   , ("n", i32 777)
+  , ("arr", arr [i32 0, i32 1, i32 2])
   , ("f", abs_ ["p" |: ti32] ([ti32] --> ti32) [] $ abs_ ["o" |: ti32 ] ti32 [] $ op Add (var "o") (var "p"))
   , ("z", app (app (var "f") [var "x"]) [var "rec"])
-  , ("rec", rec_ ti32 5 "cnt" [] (op Add (var "n") (var "cnt")))
+  , ("rec", rec_ ti32 5 "cnt" [] (op Add (sel (var "arr") (i32 2)) (var "cnt")))
   ]
   (var "rec")
 
