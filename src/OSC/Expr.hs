@@ -280,11 +280,12 @@ data Value = VNumber Number | VArr [Value]
 type Mem = Map Int Value
 
 data GenState = GenState
-  { initialMem :: Mem
-  , nextCell :: Int
+  { nextCell :: Int
+  , initialMem :: Mem
+  , tick :: Mem -> Mem
   }
 
-type SimM = ST.State Mem Value
+type SimM = R.Reader Mem Value
 type CircuitM = R.ReaderT (Map Ident SimM) (ST.State GenState)
 
 interpret :: [SimM] -> Expr Type -> CircuitM SimM
@@ -329,8 +330,59 @@ interpret _ (EApp _ f params) = do
   simparams <- traverse (interpret []) params
   simf <- interpret simparams f
   pure simf
-interpret _ (ERec t delay param bindings body) = do
-  undefined
+interpret _ (ERec t delay param bindings body) = mdo
+  st <- ST.get
+
+  let delayBufferIdx = st.nextCell
+  let delayIndexIdx = st.nextCell + 1
+
+  let initialValue = alloc (TArr t delay)
+
+  let delayLine offset = R.ask >>= \mem -> do
+        let delayBuffer = mem M.! delayBufferIdx
+        let delayIdx = mem M.! delayIndexIdx
+        case (delayBuffer, delayIdx) of
+          (VArr ds, VNumber (I32 i)) -> pure (ds !! ((i - offset) `mod` delay))
+          _ -> error "delayLine (this is a bug)"
+
+  simbindings <- fmap M.fromList $ sequence $ mconcat
+    [ [ pure (param, delayLine 1) ]
+    , [ fmap (n,) $ R.local (\env -> simbindings <> env) $ interpret [] bbody
+      | (n, bbody) <- bindings
+      ]
+    ]
+
+  simbody <- R.local (\env -> simbindings <> env) $ interpret [] body
+
+  ST.put $ st
+    { nextCell = st.nextCell + 2
+    , initialMem = M.fromList [(delayBufferIdx, initialValue), (delayIndexIdx, VNumber (I32 0))] <> st.initialMem
+    , tick = \mem -> let
+        mem' = st.tick mem
+        nextValue = R.runReader simbody mem'
+
+        delayBuffer = mem' M.! delayBufferIdx
+        delayIndex = mem' M.! delayIndexIdx
+
+        in case (delayBuffer, delayIndex) of
+          (VArr ds, VNumber (I32 i)) -> M.fromList
+            [ (delayBufferIdx, VArr $ replace i nextValue ds)
+            , (delayIndexIdx, VNumber (I32 ((i + 1) `mod` delay)))
+            ]
+            <> mem'
+          _ -> error "delayLine (this is a bug)"
+    }
+
+  pure (delayLine delay)
+  where
+    replace i a as = take i as <> [a] <> drop (i + 1) as
+
+    alloc (TNumber TI32) = VNumber (I32 0)
+    alloc (TNumber TF32) = VNumber (F32 0)
+    alloc (TNumber TI64) = VNumber (I64 0)
+    alloc (TNumber TF64) = VNumber (F64 0)
+    alloc (TArr t n) = VArr $ take n $ repeat (alloc t)
+    alloc (TAbs _ _) = error "interpret: ERec: function in return type"
 
 --------------------------------------------------------------------------------
 
@@ -389,3 +441,11 @@ t4 = fmap compile3 ces
   where
     et' = infer et
     ces = fmap toCExpr et'
+
+i1 = do
+  print $ take 10 (go st.initialMem st.tick sim)
+  where
+    go mem tick sim = R.runReader sim mem:go (tick mem) tick sim
+
+    Right et' = infer et
+    (sim, st) = ST.runState (R.runReaderT (interpret [] et') mempty) (GenState { nextCell = 0, initialMem = mempty, tick = id })
