@@ -112,6 +112,7 @@ data Env = Env
   { bindings :: Map Ident Ref
   , ret :: Ref
   , to :: [Ref]
+  , emit :: [Statement] -> CallM ()
   }
 
 focusTo :: Ref -> Env -> Env
@@ -126,14 +127,26 @@ data GlobalState = GlobalState
   { nextVarIdx :: Int
   , nextFuncRefIdx :: Int
   , allocations :: [(Type, Idx)]
+  , tickStatements :: [Statement]
   }
 
-type CallM = W.WriterT [Statement] (ReaderT Env (StateT LocalState (State GlobalState)))
+type CallM = WriterT [Statement] (ReaderT Env (StateT LocalState (State GlobalState)))
 
-local :: Monoid w => Monad m => (env -> env) -> W.WriterT w (ReaderT env m) a -> W.WriterT w (ReaderT env m) a
+emitLocal :: [Statement] -> CallM ()
+emitLocal = tell
+
+emitGlobal :: [Statement] -> CallM ()
+emitGlobal sts = lift $ lift $ lift $ state $ \GlobalState {..} -> ((), GlobalState { tickStatements = tickStatements <> sts, .. })
+
+emit :: [Statement] -> CallM ()
+emit sts = do
+  env <- lift ask
+  env.emit sts
+
+local :: Monoid w => Monad m => (env -> env) -> WriterT w (ReaderT env m) a -> WriterT w (ReaderT env m) a
 local f m = do
-  (a, r) <- lift $ R.local f $ W.runWriterT m
-  W.tell r
+  (a, r) <- lift $ R.local f $ runWriterT m
+  tell r
   pure a
 
 allocBase :: Monad m => ((Idx -> Ref) -> StateT st m Ref) -> Type -> StateT st m Ref
@@ -152,29 +165,29 @@ allocGlobal t = flip allocBase t $ \mkRef -> fmap mkRef $ state $ \GlobalState {
 
 --------------------------------------------------------------------------------
 
-cextract :: Monoid w => Monad m => W.WriterT w (ReaderT env m) () -> ReaderT env m w
-cextract = fmap snd . W.runWriterT
+cextract :: Monoid w => Monad m => WriterT w (ReaderT env m) () -> ReaderT env m w
+cextract = fmap snd . runWriterT
 
 ccopyRef :: Type -> Ref -> Ref -> CallM ()
-ccopyRef t src dst = W.tell [SCopy t src dst]
+ccopyRef t src dst = emit [SCopy t src dst]
 
 cbinOp :: Op -> Ref -> Ref -> Ref -> CallM ()
-cbinOp op r1 r2 r3 = W.tell [SBinOp op r1 r2 r3]
+cbinOp op r1 r2 r3 = emit [SBinOp op r1 r2 r3]
 
 ccall :: Ref -> [Ref] -> Ref -> CallM ()
-ccall funcRef args ret = W.tell $ [SCall funcRef args ret]
+ccall funcRef args ret = emit [SCall funcRef args ret]
 
 cif :: Ref -> CallM () -> CallM () -> CallM ()
 cif r t e = do
   t' <- lift $ cextract t
   e' <- lift $ cextract e
-  W.tell [SIf r t' e']
+  emit [SIf r t' e']
 
 cfor :: Int -> Int -> Int -> (Ref -> CallM ()) -> CallM ()
 cfor initial steps step f = do
   i <- lift $ lift $ allocLocal (TNumber TI32)
   f' <- lift $ cextract (f i)
-  W.tell [SFor i initial steps step f']
+  emit [SFor i initial steps step f']
 
 --------------------------------------------------------------------------------
 
@@ -245,26 +258,29 @@ retvalue (CIndexed [] (CApp _ f as)) = do
 
 retvalue (CIndexed [] (CRec t delay param bindings body))
   | typeContainsAbs t = error "retvalue: CRec: type contains abstraction"
-  | otherwise = mdo
-      -- Alloc delay number of samples of type t[]
+  | otherwise = do
+      -- Alloc delay index and delay number of samples of type t[]
       delayRef <- lift $ lift $ lift $ allocGlobal (TArr t delay)
       delayIdx <- lift $ lift $ lift $ allocGlobal (TNumber TI32)
 
-      bindingRefs <- mconcat <$> sequenceA
-        [ pure $ M.singleton param (proj delayRef [delayIdx])
-        , M.fromList <$> sequenceA [ (n,) . snd <$> local withBindingRefs (rhsvalue region bbody) | (n, region, bbody) <- bindings ]
-        ]
+      -- Emit global tick statements and store result in dealy line
+      local (\Env {..} -> Env { emit = emitGlobal, ret = proj delayRef [delayIdx], .. }) $ mdo
+        bindingRefs <- mconcat <$> sequenceA
+          [ pure $ M.singleton param (proj delayRef [delayIdx])
+          , M.fromList <$> sequenceA [ (n,) . snd <$> local withBindingRefs (rhsvalue region bbody) | (n, region, bbody) <- bindings ]
+          ]
 
-      let withBindingRefs :: Env -> Env
-          withBindingRefs Env {..} = Env { bindings = bindingRefs <> bindings, .. }
+        let withBindingRefs :: Env -> Env
+            withBindingRefs Env {..} = Env { bindings = bindingRefs <> bindings, .. }
 
-      local withBindingRefs $ retvalue body
+        local withBindingRefs $ retvalue body
+
+        -- Increment delay index
+        cbinOp Add delayIdx (RConst $ I32 1) delayIdx
+        cbinOp Mod delayIdx (RConst $ I32 delay) delayIdx
       
-      -- Copy result to delay line
-      ask >>= \env -> ccopyRef t env.ret (proj delayRef [delayIdx])
-
-      cbinOp Add delayIdx (RConst $ I32 1) delayIdx
-      cbinOp Mod delayIdx (RConst $ I32 delay) delayIdx
+      -- Copy result from delay line
+      ret t (proj delayRef [delayIdx])
   where
     typeContainsAbs (TNumber _) = False
     typeContainsAbs (TArr t _) = typeContainsAbs t
@@ -299,14 +315,15 @@ data IRFunc = IRFunc
 
 data IR = IR
   { allocations :: [(Type, Idx)]
+  , tickStatements :: [Statement]
   , funcMap :: Map FuncRef IRFunc
   , main :: Ref
   } deriving Show
 
 toplevel :: Map Ident Type -> Map FuncRef Func -> FuncRef -> IR
-toplevel globals funcRefMap fr = IR { main = RFuncRef fr, allocations = st.allocations, .. }
+toplevel globals funcRefMap fr = IR { main = RFuncRef fr, allocations = st.allocations, tickStatements = st.tickStatements, .. }
   where
-    (funcMap, st) = runState gen (GlobalState { nextVarIdx = 0, nextFuncRefIdx = 0, allocations = [] })
+    (funcMap, st) = runState gen (GlobalState { nextVarIdx = 0, nextFuncRefIdx = 0, allocations = [], tickStatements = [] })
 
     gen :: State GlobalState (Map FuncRef IRFunc)
     gen = do
@@ -316,8 +333,8 @@ toplevel globals funcRefMap fr = IR { main = RFuncRef fr, allocations = st.alloc
         [ do
            (((), statements), lst) <-
                flip runStateT (LocalState { nextVarIdx = 0, allocations = [] })
-             $ flip runReaderT (Env { bindings = globalRefs, ret = RRet, to = [] })
-             $ W.runWriterT
+             $ flip runReaderT (Env { bindings = globalRefs, ret = RRet, to = [], emit = emitLocal })
+             $ runWriterT
              $ func f
            pure (fr, IRFunc { allocations = lst.allocations, .. })
         | (fr, f) <- M.toList funcRefMap
