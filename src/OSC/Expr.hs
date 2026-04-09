@@ -399,7 +399,7 @@ et :: Expr ()
 et = abs_ [] ti32
   [ ("x", i32 666)
   , ("n", i32 777)
-  , ("arr", arr [i32 0, i32 1, i32 2])
+  , ("arr", arr [i32 0, i32 1, i32 3])
   , ("f", abs_ ["p" |: ti32] ([ti32] --> ti32) [] $ abs_ ["o" |: ti32 ] ti32 [] $ op Add (var "o") (var "p"))
   , ("z", app (app (var "f") [var "x"]) [sel (arr [i32 89, i32 99, i32 101]) (var "rec")])
   , ("rec", rec_ ti32 5 "cnt" [] (op Add (sel (var "arr") (i32 2)) (var "cnt")))
