@@ -4,6 +4,7 @@
 module OSC.Expr.Gen where
 
 import OSC.Ctx
+import OSC.Expr
 
 import Test.QuickCheck
 import Control.Monad (replicateM)
@@ -207,8 +208,8 @@ genBindings ctx n = do
 -- | Arbitrary instance for Expr Type
 instance Arbitrary (Expr Type) where
   arbitrary = do
-    targetType <- genType 2
-    genExprOfType emptyCtx targetType
+    returnType <- genType 2
+    genExprOfType emptyCtx (TAbs [] returnType)
   
   shrink (EConst (I32 n)) = [EConst (I32 n') | n' <- shrink n]
   shrink (EConst (I64 n)) = [EConst (I64 n') | n' <- shrink n]
@@ -227,8 +228,11 @@ instance Arbitrary (Expr Type) where
 --   > sample randomExpr
 --   > sample (randomExprOfType (TNumber TI32))
 --   > sample (randomExprWithDepth 3)
-randomExpr :: Gen (Expr Type)
-randomExpr = arbitrary
+randomExpr :: Gen (Either TypeError (Expr Type))
+randomExpr = fmap tc $ arbitrary
+  where
+    tc :: Expr Type -> Either TypeError (Expr Type)
+    tc = infer . fmap (const ())
 
 -- | Generate a random expression of a specific type
 randomExprOfType :: Type -> Gen (Expr Type)
