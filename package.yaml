@@ -27,6 +27,7 @@ dependencies:
     - deepseq
     - directory
     - process
+    - QuickCheck
     - unix
     - uniplate
     - filepath
