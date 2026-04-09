@@ -305,18 +305,16 @@ retvalue (CIndexed idxs indexable) = do
   ret t $ proj ref (fmap snd idxRefs)
 
 retvalue (CSel _ chs sel) = do
-  env <- ask
-
   (_, sref) <- rhsvalue ALocal sel
-  recif env chs sref 0
+  cond <- allocLocal (TNumber TI32)
+  recif cond chs sref 0
   where
     -- TODO: binary tree if
     recif _ [] _ _ = error "recif: no choice (this is a bug)"
     recif _ [ch] _ _ = retvalue ch
-    recif env (ch:chs) sref idx = do
-      cond <- allocLocal (TNumber TI32)
+    recif cond (ch:chs) sref idx = do
       cbinOp Eq sref (RConst (I32 idx)) cond
-      cif cond (retvalue ch) (recif env chs sref (idx + 1))
+      cif cond (retvalue ch) (recif cond chs sref (idx + 1))
 
 --------------------------------------------------------------------------------
 
