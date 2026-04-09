@@ -17,9 +17,10 @@ import Control.Monad (when)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
-import Control.Monad.Reader (ReaderT, local, asks, ask, runReaderT)
+import Control.Monad.Reader (ReaderT, asks, ask, runReaderT)
 import qualified Control.Monad.State.Lazy as ST
 import Control.Monad.State.Lazy (StateT, State, state, runState, runStateT)
+import Control.Monad.Trans.Writer (WriterT, runWriterT, tell)
 import qualified Control.Monad.Trans.Writer as W
 import Data.Functor.Product (Product (Pair))
 import Data.Map (Map)
@@ -127,8 +128,13 @@ data GlobalState = GlobalState
   , allocations :: [(Type, Idx)]
   }
 
-type CallMBase = W.WriterT [Statement] (StateT LocalState (State GlobalState))
-type CallM = ReaderT Env CallMBase
+type CallM = W.WriterT [Statement] (ReaderT Env (StateT LocalState (State GlobalState)))
+
+local :: Monoid w => Monad m => (env -> env) -> W.WriterT w (ReaderT env m) a -> W.WriterT w (ReaderT env m) a
+local f m = do
+  (a, r) <- lift $ R.local f $ W.runWriterT m
+  W.tell r
+  pure a
 
 allocBase :: Monad m => ((Idx -> Ref) -> StateT st m Ref) -> Type -> StateT st m Ref
 allocBase alloc t = case t of
@@ -146,31 +152,29 @@ allocGlobal t = flip allocBase t $ \mkRef -> fmap mkRef $ state $ \GlobalState {
 
 --------------------------------------------------------------------------------
 
-cextract :: CallM () -> CallM [Statement]
-cextract m = do
-  env <- ask
-  fmap snd $ lift $ lift $ W.runWriterT (runReaderT m env)
+cextract :: Monoid w => Monad m => W.WriterT w (ReaderT env m) () -> ReaderT env m w
+cextract = fmap snd . W.runWriterT
 
 ccopyRef :: Type -> Ref -> Ref -> CallM ()
-ccopyRef t src dst = lift $ W.tell [SCopy t src dst]
+ccopyRef t src dst = W.tell [SCopy t src dst]
 
 cbinOp :: Op -> Ref -> Ref -> Ref -> CallM ()
-cbinOp op r1 r2 r3 = lift $ W.tell [SBinOp op r1 r2 r3]
+cbinOp op r1 r2 r3 = W.tell [SBinOp op r1 r2 r3]
 
 ccall :: Ref -> [Ref] -> Ref -> CallM ()
-ccall funcRef args ret = lift $ W.tell $ [SCall funcRef args ret]
+ccall funcRef args ret = W.tell $ [SCall funcRef args ret]
 
 cif :: Ref -> CallM () -> CallM () -> CallM ()
 cif r t e = do
-  t' <- cextract t
-  e' <- cextract e
-  lift $ W.tell [SIf r t' e']
+  t' <- lift $ cextract t
+  e' <- lift $ cextract e
+  W.tell [SIf r t' e']
 
 cfor :: Int -> Int -> Int -> (Ref -> CallM ()) -> CallM ()
 cfor initial steps step f = do
   i <- lift $ lift $ allocLocal (TNumber TI32)
-  f' <- cextract (f i)
-  lift $ W.tell [SFor i initial steps step f']
+  f' <- lift $ cextract (f i)
+  W.tell [SFor i initial steps step f']
 
 --------------------------------------------------------------------------------
 
@@ -312,8 +316,8 @@ toplevel globals funcRefMap fr = IR { main = RFuncRef fr, allocations = st.alloc
         [ do
            (((), statements), lst) <-
                flip runStateT (LocalState { nextVarIdx = 0, allocations = [] })
-             $ W.runWriterT
              $ flip runReaderT (Env { bindings = globalRefs, ret = RRet, to = [] })
+             $ W.runWriterT
              $ func f
            pure (fr, IRFunc { allocations = lst.allocations, .. })
         | (fr, f) <- M.toList funcRefMap
