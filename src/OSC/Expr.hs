@@ -182,6 +182,8 @@ typecheck (ESelect () expr sel) = do
   pure $ ESelect t expr' sel'
 
 typecheck (ERec t delay param bindings body) = do
+  when (delay <= 0) $ E.throwError $ TypeError $ "typecheck: delay must be > 0: " <> show delay
+
   let paramsEnv = M.singleton param t
 
   bindings' <- R.local (\env -> paramsEnv <> env) $ typecheckBindings bindings
@@ -336,7 +338,7 @@ interpret _ (ERec t delay param bindings body) = mdo
   let delayBufferIdx = st.nextCell
   let delayIndexIdx = st.nextCell + 1
 
-  let initialValue = alloc (TArr t delay)
+  let initialValue = alloc (TArr t (delay + 1))
 
   let delayLine offset = R.ask >>= \mem -> do
         let delayBuffer = mem M.! delayBufferIdx
@@ -346,7 +348,7 @@ interpret _ (ERec t delay param bindings body) = mdo
           _ -> error "delayLine (this is a bug)"
 
   simbindings <- fmap M.fromList $ sequence $ mconcat
-    [ [ pure (param, delayLine 1) ]
+    [ [ pure (param, delayLine delay) ]
     , [ fmap (n,) $ R.local (\env -> simbindings <> env) $ interpret [] bbody
       | (n, bbody) <- bindings
       ]
@@ -356,7 +358,7 @@ interpret _ (ERec t delay param bindings body) = mdo
 
   ST.put $ st
     { nextCell = st.nextCell + 2
-    , initialMem = M.fromList [(delayBufferIdx, initialValue), (delayIndexIdx, VNumber (I32 0))] <> st.initialMem
+    , initialMem = M.fromList [(delayBufferIdx, initialValue), (delayIndexIdx, VNumber (I32 (delay - 1)))] <> st.initialMem
     , tick = \mem -> let
         mem' = st.tick mem
         nextValue = R.runReader simbody mem'
@@ -373,7 +375,7 @@ interpret _ (ERec t delay param bindings body) = mdo
           _ -> error "delayLine (this is a bug)"
     }
 
-  pure (delayLine delay)
+  pure (delayLine 0)
   where
     replace i a as = take i as <> [a] <> drop (i + 1) as
 
@@ -402,7 +404,7 @@ et = abs_ [] ti32
   , ("arr", arr [i32 0, i32 1, i32 3])
   , ("f", abs_ ["p" |: ti32] ([ti32] --> ti32) [] $ abs_ ["o" |: ti32 ] ti32 [] $ op Add (var "o") (var "p"))
   , ("z", app (app (var "f") [var "x"]) [sel (arr [i32 89, i32 99, i32 101]) (var "rec")])
-  , ("rec", rec_ ti32 5 "cnt" [] (op Add (sel (var "arr") (i32 2)) (var "cnt")))
+  , ("rec", rec_ ti32 2 "cnt" [] (op Add (sel (var "arr") (i32 2)) (var "cnt")))
   ]
   (var "rec")
 

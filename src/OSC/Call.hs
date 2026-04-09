@@ -273,12 +273,17 @@ retvalue (CIndexed [] (CRec t delay param bindings body))
   | otherwise = do
       -- Alloc delay index and delay number of samples of type t[]
       delayRef <- lift $ lift $ lift $ allocGlobal (TArr t delay)
-      delayIdx <- lift $ lift $ lift $ allocGlobal (TNumber TI32)
+
+      writeIdx <- lift $ lift $ lift $ allocGlobal (TNumber TI32)
+      ccopyRef (TNumber TI32) (RConst (I32 (delay - 1))) writeIdx
+
+      readIdx <- lift $ lift $ lift $ allocGlobal (TNumber TI32)
+      ccopyRef (TNumber TI32) (RConst (I32 0)) readIdx
 
       -- Emit global tick instructions and store result in delay line
-      local (\Env {..} -> Env { emit = cemitGlobal, allocLocal = callocTick, ret = proj delayRef [delayIdx], .. }) $ mdo
+      local (\Env {..} -> Env { emit = cemitGlobal, allocLocal = callocTick, ret = proj delayRef [writeIdx], .. }) $ mdo
         bindingRefs <- mconcat <$> sequenceA
-          [ pure $ M.singleton param (proj delayRef [delayIdx])
+          [ pure $ M.singleton param (proj delayRef [readIdx])
           , M.fromList <$> sequenceA [ (n,) . snd <$> local withBindingRefs (rhsvalue region bbody) | (n, region, bbody) <- bindings ]
           ]
 
@@ -287,12 +292,16 @@ retvalue (CIndexed [] (CRec t delay param bindings body))
 
         local withBindingRefs $ retvalue body
 
-        -- Increment delay index
-        cbinOp Add delayIdx (RConst $ I32 1) delayIdx
-        cbinOp Mod delayIdx (RConst $ I32 delay) delayIdx
+        -- Increment read & write index
+        cbinOp Add writeIdx (RConst $ I32 1) writeIdx
+        cbinOp Mod writeIdx (RConst $ I32 delay) writeIdx
       
+        -- TODO: variable delay
+        cbinOp Add readIdx (RConst $ I32 1) readIdx
+        cbinOp Mod readIdx (RConst $ I32 delay) readIdx
+
       -- Copy result from delay line
-      ret t (proj delayRef [delayIdx])
+      ret t $ proj delayRef [writeIdx]
   where
     typeContainsAbs (TNumber _) = False
     typeContainsAbs (TArr t _) = typeContainsAbs t
@@ -389,6 +398,7 @@ toplevel globals funcRefMap fr = IR
           local withBindingRefs $ retvalue body
 
 -- TODO: dead code elimination
+-- TODO: array interval OOB detection
 
 -- RJCT: topsort global instructions
 
