@@ -117,27 +117,33 @@ showExpr (EOp _ op a b) = "(" <> showExpr a <> " " <> showOp op <> " " <> showEx
 showExpr (EArr _ es) = "[" <> intercalate ", " (map showExpr es) <> "]"
 showExpr (EVar _ (Ident n)) = n
 showExpr (EAbs t params bs body) = 
-  "λ" <> showParams params <> " : " <> showType t <> " -> " <> showExprBindings bs <> " = " <> showExpr body
+  "λ" <> showParams params <> " : " <> showType t <> " -> {\n" <> showExprBindings bs <> "\n  return " <> showExpr body <> ";\n}"
   where
     showParams [] = "()"
     showParams ps = "(" <> intercalate ", " (map (\(Ident n) -> n) ps) <> ")"
     
-    showExprBindings [] = "{}"
-    showExprBindings bindings = "{ " <> intercalate "; " (map showBinding bindings) <> " }"
-    showBinding (Ident n, expr) = n <> " = " <> showExpr expr
+    showExprBindings [] = ""
+    showExprBindings bindings = intercalate "\n" (map showBinding bindings)
+    showBinding (Ident n, expr) = "  " <> n <> " : " <> showType (exprType expr) <> " = " <> indentExpr 2 expr <> ";"
+    
+    indentExpr indent expr = case expr of
+      EAbs {} -> "\n" <> unlines (map ("  " <>) (lines (showExpr expr)))
+      _ -> showExpr expr
 showExpr (EApp _ f args) = showExpr f <> "(" <> intercalate ", " (map showExpr args) <> ")"
 showExpr (ESelect _ e idx) = showExpr e <> "[" <> showExpr idx <> "]"
 showExpr (ERec t delay param bs body) = 
-  "rec[" <> showType t <> ", delay=" <> show delay <> "](" <> showRecAbs param bs body <> ")"
+  "rec[" <> showType t <> ", delay=" <> show delay <> "](λ" <> showParam param <> " -> {\n" <> showExprBindings bs <> "\n  return " <> showExpr body <> ";\n})"
   where
-    showRecAbs p bindings bod = 
-      "λ" <> showParam p <> " -> " <> showExprBindings bindings <> " = " <> showExpr bod
-    
     showParam (Ident n) = n
     
-    showExprBindings [] = "{}"
-    showExprBindings bindings = "{ " <> intercalate "; " (map showBinding bindings) <> " }"
-    showBinding (Ident n, expr) = n <> " = " <> showExpr expr
+    showExprBindings [] = ""
+    showExprBindings bindings = intercalate "\n" (map showBinding bindings)
+    showBinding (Ident n, expr) = "  " <> n <> " : " <> showType (exprType expr) <> " = " <> indentExpr 2 expr <> ";"
+    
+    indentExpr indent expr = case expr of
+      EAbs {} -> "\n" <> unlines (map ("  " <>) (lines (showExpr expr)))
+      ERec {} -> "\n" <> unlines (map ("  " <>) (lines (showExpr expr)))
+      _ -> showExpr expr
 
 --------------------------------------------------------------------------------
 
