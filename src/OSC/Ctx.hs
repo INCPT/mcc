@@ -32,7 +32,10 @@ import Data.Generics.Str
 data TNumber = TI32 | TF32 | TI64 | TF64 deriving (Eq, Data, Show)
 
 data Type = TNumber TNumber | TArr Type {- length -} Int | TAbs [Type] Type
-  deriving (Eq, Data)
+  deriving (Show, Eq, Data)
+
+-- instance Show Type where
+--   show = showType
 
 sizeOfType :: Type -> Int
 sizeOfType (TNumber TI32) = 4
@@ -217,9 +220,6 @@ instance Show abs => Show (CExpr abs) where
   show (CConst n) = show n
   show (COp _ op a b) = "(" <> show a <> " " <> showOp op <> " " <> show b <> ")"
   show (CAbs _ abs) = show abs
-
-instance Show Type where
-  show = showType
 
 showType :: Type -> String
 showType (TNumber TI32) = "i32"
