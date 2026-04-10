@@ -155,7 +155,7 @@ showExprIndent indent (EApp _ f args) = showFunc f <> "(" <> intercalate ", " (m
     
     -- Special version for functions wrapped in parens - body indents from current position
     showExprIndentInParen ind (EAbs t params bs body) = 
-      "fn(" <> showParams (paramTypes t) params <> ") -> " <> showType (returnType t) <> showBody (ind + 3) bs body
+      "fn(" <> showParams (paramTypes t) params <> ") -> " <> showType (returnType t) <> showBody (ind + 2) bs body
       where
         showParams [] [] = ""
         showParams pts ps = intercalate ", " (zipWith showParam ps pts)
@@ -173,7 +173,7 @@ showExprIndent indent (EApp _ f args) = showFunc f <> "(" <> intercalate ", " (m
         showReturnExpr bodyInd e = showExprIndent bodyInd e
     
     showExprIndentInParen ind (ERec t delay param bs body) = 
-      "rec<delay = " <> show delay <> ">(" <> showParam param <> ": " <> showType t <> ") -> " <> showType t <> showBody (ind + 3) bs body
+      "rec<delay = " <> show delay <> ">(" <> showParam param <> ": " <> showType t <> ") -> " <> showType t <> showBody (ind + 2) bs body
       where
         showParam (Ident n) = n
         
