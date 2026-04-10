@@ -154,7 +154,7 @@ showExpr (EAbs t params bs body) =
 showExpr (EApp _ f args) = showExpr f <> "(" <> intercalate ", " (map showExpr args) <> ")"
 showExpr (ESelect _ e idx) = showExpr e <> "[" <> showExpr idx <> "]"
 showExpr (ERec t delay param bs body) = 
-  "rec(delay: " <> show delay <> ") -> " <> showType t <> " |" <> showParam param <> "|" <> showBody bs body
+  "rec<delay = " <> show delay <> ">(" <> showParam param <> ": " <> showType t <> ") -> " <> showType t <> showBody bs body
   where
     showParam (Ident n) = n
     
