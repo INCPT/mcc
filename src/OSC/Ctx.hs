@@ -133,16 +133,17 @@ showExprIndent indent (EAbs t params bs body) =
     showParams pts ps = intercalate ", " (zipWith showParam ps pts)
     showParam (Ident n) pt = n <> ": " <> showType pt
     
-    showBody ind [] bod = "\n" <> replicate (ind + 2) ' ' <> "return " <> showBodyExpr (ind + 2) bod
+    showBody ind [] bod = "\n" <> replicate (ind + 2) ' ' <> "return " <> showReturnExpr (ind + 2) bod
     showBody ind bindings bod = 
-      "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate (ind + 2) ' ' <> "return " <> showBodyExpr (ind + 2) bod
+      "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate (ind + 2) ' ' <> "return " <> showReturnExpr (ind + 2) bod
     
     showBinding ind (Ident n, expr) = replicate (ind + 2) ' ' <> n <> " = " <> showExprIndent (ind + 2) expr
     
-    -- Don't add extra indentation for block expressions in return position
-    showBodyExpr ind e@(EAbs _ _ _ _) = showExprIndent ind e
-    showBodyExpr ind e@(ERec _ _ _ _ _) = showExprIndent ind e
-    showBodyExpr ind e = showExprIndent ind e
+    -- Don't wrap returned expressions in parentheses
+    showReturnExpr ind e@(EAbs _ _ _ _) = showExprIndent ind e
+    showReturnExpr ind e@(ERec _ _ _ _ _) = showExprIndent ind e
+    showReturnExpr ind (EOp _ op a b) = showExprIndent ind a <> " " <> showOp op <> " " <> showExprIndent ind b
+    showReturnExpr ind e = showExprIndent ind e
 showExprIndent indent (EApp _ f args) = showExprIndent indent f <> "(" <> intercalate ", " (map (showExprIndent indent) args) <> ")"
 showExprIndent indent (ESelect _ e idx) = showExprIndent indent e <> "[" <> showExprIndent indent idx <> "]"
 showExprIndent indent (ERec t delay param bs body) = 
@@ -150,16 +151,17 @@ showExprIndent indent (ERec t delay param bs body) =
   where
     showParam (Ident n) = n
     
-    showBody ind [] bod = "\n" <> replicate (ind + 2) ' ' <> "return " <> showBodyExpr (ind + 2) bod
+    showBody ind [] bod = "\n" <> replicate (ind + 2) ' ' <> "return " <> showReturnExpr (ind + 2) bod
     showBody ind bindings bod = 
-      "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate (ind + 2) ' ' <> "return " <> showBodyExpr (ind + 2) bod
+      "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate (ind + 2) ' ' <> "return " <> showReturnExpr (ind + 2) bod
     
     showBinding ind (Ident n, expr) = replicate (ind + 2) ' ' <> n <> " = " <> showExprIndent (ind + 2) expr
     
-    -- Don't add extra indentation for block expressions in return position
-    showBodyExpr ind e@(EAbs _ _ _ _) = showExprIndent ind e
-    showBodyExpr ind e@(ERec _ _ _ _ _) = showExprIndent ind e
-    showBodyExpr ind e = showExprIndent ind e
+    -- Don't wrap returned expressions in parentheses
+    showReturnExpr ind e@(EAbs _ _ _ _) = showExprIndent ind e
+    showReturnExpr ind e@(ERec _ _ _ _ _) = showExprIndent ind e
+    showReturnExpr ind (EOp _ op a b) = showExprIndent ind a <> " " <> showOp op <> " " <> showExprIndent ind b
+    showReturnExpr ind e = showExprIndent ind e
 
 --------------------------------------------------------------------------------
 
