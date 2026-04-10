@@ -151,7 +151,7 @@ ppExpr (EArr _ es) =
 ppExpr (EVar _ (Ident n)) = line n
 ppExpr (EAbs t params bs body) = do
   line $ "fn(" <> showParams (paramTypes t) params <> ") -> " <> showType (returnType t)
-  indent $ ppAbsBody bs body
+  ppAbsBody bs body
   where
     showParams [] [] = ""
     showParams pts ps = intercalate ", " (zipWith showParam ps pts)
@@ -160,7 +160,7 @@ ppExpr (EApp _ f args) = ppApp f args
 ppExpr (ESelect _ e idx) = ppSelect e idx
 ppExpr (ERec t delay param bs body) = do
   line $ "rec<delay = " <> show delay <> ">(" <> showParam param <> ": " <> showType t <> ") -> " <> showType t
-  indent $ ppAbsBody bs body
+  ppAbsBody bs body
   where
     showParam (Ident n) = n
 
@@ -179,8 +179,8 @@ ppSelect e idx = line $ showExprInline e <> "[" <> showExprInline idx <> "]"
 
 ppAbsBody :: [(Ident, Expr Type)] -> Expr Type -> PPrint
 ppAbsBody [] body = line $ "return " <> ppReturnExpr body
-ppAbsBody bindings body = do
-  ppintercalate (line "") [ ppBinding n expr | (n, expr) <- bindings ]
+ppAbsBody bindings body = indent $ do
+  ppconcat [ ppBinding n expr | (n, expr) <- bindings ]
   line ""
   line $ "return " <> ppReturnExpr body
   where
