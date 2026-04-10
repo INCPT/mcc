@@ -112,12 +112,15 @@ exprType (ESelect t _ _) = t
 exprType (ERec t _ _ _ _) = t
 
 showExpr :: Expr Type -> String
-showExpr (EConst n) = show n
+showExpr (EConst (I32 n)) = show n
+showExpr (EConst (I64 n)) = show n
+showExpr (EConst (F32 n)) = show n
+showExpr (EConst (F64 n)) = show n
 showExpr (EOp _ op a b) = "(" <> showExpr a <> " " <> showOp op <> " " <> showExpr b <> ")"
 showExpr (EArr _ es) = 
   let singleLine = "[" <> intercalate ", " (map showExpr es) <> "]"
   in if length singleLine > 50
-    then "[\n" <> intercalate "\n" (map (\e -> "  " <> indentLines 2 (showExpr e)) es) <> "\n]"
+    then "[\n" <> intercalate "\n" (map (\e -> "    " <> indentLines 4 (showExpr e)) es) <> "\n  ]"
     else singleLine
   where
     indentLines indent str = 
