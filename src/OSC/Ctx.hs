@@ -140,14 +140,14 @@ showExprIndent indent (EAbs t params bs body) =
     showBinding ind (Ident n, expr) = replicate ind ' ' <> n <> " = " <> showExprIndent ind expr
     
     -- Don't wrap returned expressions in parentheses
-    showReturnExpr ind e@(EAbs _ _ _ _) = "\n" <> replicate ind ' ' <> showExprIndent ind e
-    showReturnExpr ind e@(ERec _ _ _ _ _) = "\n" <> replicate ind ' ' <> showExprIndent ind e
+    showReturnExpr ind e@(EAbs _ _ _ _) = showExprIndent ind e
+    showReturnExpr ind e@(ERec _ _ _ _ _) = showExprIndent ind e
     showReturnExpr ind (EOp _ op a b) = showExprIndent ind a <> " " <> showOp op <> " " <> showExprIndent ind b
     showReturnExpr ind e = showExprIndent ind e
 showExprIndent indent (EApp _ f args) = showFunc f <> "(" <> intercalate ", " (map (showExprIndent indent) args) <> ")"
   where
-    showFunc e@(EAbs _ _ _ _) = "(" <> showExprIndent indent e <> ")"
-    showFunc e@(ERec _ _ _ _ _) = "(" <> showExprIndent indent e <> ")"
+    showFunc e@(EAbs _ _ _ _) = "(" <> showExprIndent (indent + 1) e <> ")"
+    showFunc e@(ERec _ _ _ _ _) = "(" <> showExprIndent (indent + 1) e <> ")"
     showFunc e = showExprIndent indent e
 showExprIndent indent (ESelect _ e idx) = showExprIndent indent e <> "[" <> showExprIndent indent idx <> "]"
 showExprIndent indent (ERec t delay param bs body) = 
@@ -162,8 +162,8 @@ showExprIndent indent (ERec t delay param bs body) =
     showBinding ind (Ident n, expr) = replicate ind ' ' <> n <> " = " <> showExprIndent ind expr
     
     -- Don't wrap returned expressions in parentheses
-    showReturnExpr ind e@(EAbs _ _ _ _) = "\n" <> replicate ind ' ' <> showExprIndent ind e
-    showReturnExpr ind e@(ERec _ _ _ _ _) = "\n" <> replicate ind ' ' <> showExprIndent ind e
+    showReturnExpr ind e@(EAbs _ _ _ _) = showExprIndent ind e
+    showReturnExpr ind e@(ERec _ _ _ _ _) = showExprIndent ind e
     showReturnExpr ind (EOp _ op a b) = showExprIndent ind a <> " " <> showOp op <> " " <> showExprIndent ind b
     showReturnExpr ind e = showExprIndent ind e
 
