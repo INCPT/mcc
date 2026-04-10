@@ -133,11 +133,15 @@ showExprIndent indent (EAbs t params bs body) =
     showParams pts ps = intercalate ", " (zipWith showParam ps pts)
     showParam (Ident n) pt = n <> ": " <> showType pt
     
-    showBody ind [] bod = "\n" <> replicate ind ' ' <> "return " <> showExprIndent ind bod
+    showBody ind [] bod = "\n" <> replicate ind ' ' <> "return " <> showExprNoParens ind bod
     showBody ind bindings bod = 
-      "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate ind ' ' <> "return " <> showExprIndent ind bod
+      "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate ind ' ' <> "return " <> showExprNoParens ind bod
     
     showBinding ind (Ident n, expr) = replicate ind ' ' <> n <> " = " <> showExprIndent ind expr
+    
+    showExprNoParens ind expr = case expr of
+      ERec {} -> showExprIndent ind expr
+      _ -> showExprIndent ind expr
 showExprIndent _ (EApp _ f args) = showExpr f <> "(" <> intercalate ", " (map showExpr args) <> ")"
 showExprIndent _ (ESelect _ e idx) = showExpr e <> "[" <> showExpr idx <> "]"
 showExprIndent indent (ERec t delay param bs body) = 
@@ -145,11 +149,15 @@ showExprIndent indent (ERec t delay param bs body) =
   where
     showParam (Ident n) = n
     
-    showBody ind [] bod = "\n" <> replicate ind ' ' <> "return " <> showExprIndent ind bod
+    showBody ind [] bod = "\n" <> replicate ind ' ' <> "return " <> showExprNoParens ind bod
     showBody ind bindings bod = 
-      "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate ind ' ' <> "return " <> showExprIndent ind bod
+      "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate ind ' ' <> "return " <> showExprNoParens ind bod
     
     showBinding ind (Ident n, expr) = replicate ind ' ' <> n <> " = " <> showExprIndent ind expr
+    
+    showExprNoParens ind expr = case expr of
+      ERec {} -> showExprIndent ind expr
+      _ -> showExprIndent ind expr
 
 --------------------------------------------------------------------------------
 
