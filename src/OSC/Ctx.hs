@@ -114,7 +114,17 @@ exprType (ERec t _ _ _ _) = t
 showExpr :: Expr Type -> String
 showExpr (EConst n) = show n
 showExpr (EOp _ op a b) = "(" <> showExpr a <> " " <> showOp op <> " " <> showExpr b <> ")"
-showExpr (EArr _ es) = "[" <> intercalate ", " (map showExpr es) <> "]"
+showExpr (EArr _ es) = 
+  let singleLine = "[" <> intercalate ", " (map showExpr es) <> "]"
+  in if length singleLine > 50
+    then "[\n" <> intercalate "\n" (map (\e -> "  " <> indentLines 2 (showExpr e)) es) <> "\n]"
+    else singleLine
+  where
+    indentLines indent str = 
+      let ls = lines str
+      in case ls of
+        [] -> ""
+        (first:rest) -> first <> (if null rest then "" else "\n" <> unlines (map (replicate indent ' ' <>) rest))
 showExpr (EVar _ (Ident n)) = n
 showExpr (EAbs t params bs body) = 
   "fn(" <> showParams (paramTypes t) params <> ") -> " <> showType (returnType t) <> showBody bs body
@@ -130,13 +140,14 @@ showExpr (EAbs t params bs body) =
     showBinding (Ident n, expr) = case expr of
       EAbs {} -> "  " <> n <> " = " <> indentLines 2 (showExpr expr)
       ERec {} -> "  " <> n <> " = " <> indentLines 2 (showExpr expr)
+      EArr {} -> "  " <> n <> " = " <> indentLines 2 (showExpr expr)
       _ -> "  " <> n <> " = " <> showExpr expr
     
     indentLines indent str = 
       let ls = lines str
       in case ls of
         [] -> ""
-        (first:rest) -> first <> "\n" <> unlines (map (replicate indent ' ' <>) rest)
+        (first:rest) -> first <> (if null rest then "" else "\n" <> unlines (map (replicate indent ' ' <>) rest))
 showExpr (EApp _ f args) = showExpr f <> "(" <> intercalate ", " (map showExpr args) <> ")"
 showExpr (ESelect _ e idx) = showExpr e <> "[" <> showExpr idx <> "]"
 showExpr (ERec t delay param bs body) = 
@@ -151,13 +162,14 @@ showExpr (ERec t delay param bs body) =
     showBinding (Ident n, expr) = case expr of
       EAbs {} -> "  " <> n <> " = " <> indentLines 2 (showExpr expr)
       ERec {} -> "  " <> n <> " = " <> indentLines 2 (showExpr expr)
+      EArr {} -> "  " <> n <> " = " <> indentLines 2 (showExpr expr)
       _ -> "  " <> n <> " = " <> showExpr expr
     
     indentLines indent str = 
       let ls = lines str
       in case ls of
         [] -> ""
-        (first:rest) -> first <> "\n" <> unlines (map (replicate indent ' ' <>) rest)
+        (first:rest) -> first <> (if null rest then "" else "\n" <> unlines (map (replicate indent ' ' <>) rest))
 
 --------------------------------------------------------------------------------
 
