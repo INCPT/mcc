@@ -101,6 +101,18 @@ data Expr t
   | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
   deriving (Functor, Show, Data)
 
+type PPrint = R.ReaderT Int (W.Writer [(Int, String)]) ()
+
+indent :: PPrint -> PPrint
+indent pp = R.local (\ind -> ind + 2) pp
+
+line :: String -> PPrint
+line t = R.ask >>= \ind -> lift (W.tell [(ind, t)])
+
+runPPrint :: PPrint -> String
+runPPrint pp = intercalate "\n"
+  [ take ind (repeat ' ') <> ln | (ind, ln) <- W.execWriter (R.runReaderT (pp) 0) ]
+
 exprType :: Expr Type -> Type
 exprType (EConst n) = numberType n
 exprType (EOp t _ _ _) = t
