@@ -15,7 +15,7 @@ module OSC.Ctx where
 import Data.Bifunctor (first, second)
 import Data.Data (Typeable, Data)
 import Data.Functor.Identity
-import Data.List (intercalate)
+import Data.List (intercalate, intersperse)
 import qualified Data.Graph as G
 import Data.Map (Map)
 import Data.String (IsString)
@@ -108,6 +108,14 @@ indent pp = R.local (\ind -> ind + 2) pp
 
 line :: String -> PPrint
 line t = R.ask >>= \ind -> lift (W.tell [(ind, t)])
+
+ppconcat :: [PPrint] -> PPrint
+ppconcat pps = do
+  ind <- R.ask
+  lift $ R.runReaderT (sequence_ pps) ind
+
+ppintercalate :: PPrint -> [PPrint] -> PPrint
+ppintercalate i pps = ppconcat $ intersperse i pps
 
 runPPrint :: PPrint -> String
 runPPrint pp = intercalate "\n"
