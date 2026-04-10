@@ -119,37 +119,47 @@ showExprIndent _ (EConst (I32 n)) = show n
 showExprIndent _ (EConst (I64 n)) = show n
 showExprIndent _ (EConst (F32 n)) = show n
 showExprIndent _ (EConst (F64 n)) = show n
-showExprIndent _ (EOp _ op a b) = "(" <> showExpr a <> " " <> showOp op <> " " <> showExpr b <> ")"
+showExprIndent indent (EOp _ op a b) = "(" <> showExprIndent indent a <> " " <> showOp op <> " " <> showExprIndent indent b <> ")"
 showExprIndent indent (EArr _ es) = 
-  let singleLine = "[" <> intercalate ", " (map showExpr es) <> "]"
+  let singleLine = "[" <> intercalate ", " (map (showExprIndent indent) es) <> "]"
   in if length singleLine > 50
     then "[\n" <> intercalate "\n" (map (\e -> replicate (indent + 2) ' ' <> showExprIndent (indent + 2) e) es) <> "\n" <> replicate indent ' ' <> "]"
     else singleLine
 showExprIndent _ (EVar _ (Ident n)) = n
 showExprIndent indent (EAbs t params bs body) = 
-  "fn(" <> showParams (paramTypes t) params <> ") -> " <> showType (returnType t) <> showBody bs body
+  "fn(" <> showParams (paramTypes t) params <> ") -> " <> showType (returnType t) <> showBody indent bs body
   where
     showParams [] [] = ""
     showParams pts ps = intercalate ", " (zipWith showParam ps pts)
     showParam (Ident n) pt = n <> ": " <> showType pt
     
-    showBody [] bod = "\n" <> replicate (indent + 2) ' ' <> "return " <> showExprIndent (indent + 2) bod
-    showBody bindings bod = 
-      "\n" <> intercalate "\n" (map showBinding bindings) <> "\n\n" <> replicate (indent + 2) ' ' <> "return " <> showExprIndent (indent + 2) bod
+    showBody ind [] bod = "\n" <> replicate (ind + 2) ' ' <> "return " <> showBodyExpr (ind + 2) bod
+    showBody ind bindings bod = 
+      "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate (ind + 2) ' ' <> "return " <> showBodyExpr (ind + 2) bod
     
-    showBinding (Ident n, expr) = replicate (indent + 2) ' ' <> n <> " = " <> showExprIndent (indent + 2) expr
-showExprIndent _ (EApp _ f args) = showExpr f <> "(" <> intercalate ", " (map showExpr args) <> ")"
-showExprIndent _ (ESelect _ e idx) = showExpr e <> "[" <> showExpr idx <> "]"
+    showBinding ind (Ident n, expr) = replicate (ind + 2) ' ' <> n <> " = " <> showExprIndent (ind + 2) expr
+    
+    -- Don't add extra indentation for block expressions in return position
+    showBodyExpr ind e@(EAbs _ _ _ _) = showExprIndent ind e
+    showBodyExpr ind e@(ERec _ _ _ _ _) = showExprIndent ind e
+    showBodyExpr ind e = showExprIndent ind e
+showExprIndent indent (EApp _ f args) = showExprIndent indent f <> "(" <> intercalate ", " (map (showExprIndent indent) args) <> ")"
+showExprIndent indent (ESelect _ e idx) = showExprIndent indent e <> "[" <> showExprIndent indent idx <> "]"
 showExprIndent indent (ERec t delay param bs body) = 
-  "rec<delay = " <> show delay <> ">(" <> showParam param <> ": " <> showType t <> ") -> " <> showType t <> showBody bs body
+  "rec<delay = " <> show delay <> ">(" <> showParam param <> ": " <> showType t <> ") -> " <> showType t <> showBody indent bs body
   where
     showParam (Ident n) = n
     
-    showBody [] bod = "\n" <> replicate (indent + 2) ' ' <> "return " <> showExprIndent (indent + 2) bod
-    showBody bindings bod = 
-      "\n" <> intercalate "\n" (map showBinding bindings) <> "\n\n" <> replicate (indent + 2) ' ' <> "return " <> showExprIndent (indent + 2) bod
+    showBody ind [] bod = "\n" <> replicate (ind + 2) ' ' <> "return " <> showBodyExpr (ind + 2) bod
+    showBody ind bindings bod = 
+      "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate (ind + 2) ' ' <> "return " <> showBodyExpr (ind + 2) bod
     
-    showBinding (Ident n, expr) = replicate (indent + 2) ' ' <> n <> " = " <> showExprIndent (indent + 2) expr
+    showBinding ind (Ident n, expr) = replicate (ind + 2) ' ' <> n <> " = " <> showExprIndent (ind + 2) expr
+    
+    -- Don't add extra indentation for block expressions in return position
+    showBodyExpr ind e@(EAbs _ _ _ _) = showExprIndent ind e
+    showBodyExpr ind e@(ERec _ _ _ _ _) = showExprIndent ind e
+    showBodyExpr ind e = showExprIndent ind e
 
 --------------------------------------------------------------------------------
 
