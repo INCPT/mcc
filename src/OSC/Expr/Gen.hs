@@ -339,3 +339,71 @@ randomExprWithDepth :: Int -> Gen (Expr Type)
 randomExprWithDepth depth = do
   targetType <- genType 2
   genExprOfType (emptyCtx { maxDepth = depth }) targetType
+
+-- | Generate a random ERec expression for testing in GHCi
+--
+-- Usage:
+--   > sample randomERec
+--   > sample (randomERecOfType (TNumber TI32))
+--   > sample (randomERecWithDelay 5)
+randomERec :: Gen (Expr Type)
+randomERec = do
+  recType <- genNonFuncType 2
+  genRec emptyCtx recType
+
+-- | Generate a random ERec expression of a specific type
+randomERecOfType :: Type -> Gen (Expr Type)
+randomERecOfType recType = genRec emptyCtx recType
+
+-- | Generate a random ERec expression with a specific delay
+randomERecWithDelay :: Int -> Gen (Expr Type)
+randomERecWithDelay delay = do
+  recType <- genNonFuncType 2
+  paramName <- genIdent
+  numBindings <- choose (0, 3)
+  let paramCtx = withVar paramName recType emptyCtx
+  (bindings, bindingCtx) <- genBindings paramCtx numBindings
+  
+  let bodyCtx = bindingCtx { maxDepth = maxDepth emptyCtx - 1 }
+  body <- scale (`div` 2) $ genBodyUsingParam bodyCtx recType paramName
+  
+  return $ ERec recType delay paramName bindings body
+  where
+    genBodyUsingParam :: GenCtx -> Type -> Ident -> Gen (Expr Type)
+    genBodyUsingParam ctx t@(TNumber tn) paramName = oneof
+      [ do
+          op <- elements [Add, Sub, Mul, Div, Min, Max]
+          other <- scale (`div` 2) $ genExprOfType ctx t
+          elements
+            [ EOp t op (EVar t paramName) other
+            , EOp t op other (EVar t paramName)
+            ]
+      , do
+          op1 <- elements [Add, Sub, Mul]
+          op2 <- elements [Add, Sub, Mul]
+          a <- scale (`div` 3) $ genExprOfType ctx t
+          b <- scale (`div` 3) $ genExprOfType ctx t
+          return $ EOp t op1 (EOp t op2 (EVar t paramName) a) b
+      ]
+    genBodyUsingParam ctx t@(TArr elemType len) paramName = oneof
+      [ do
+          idxVal <- choose (0, len - 1)
+          idx <- elements [EConst (I32 idxVal), EConst (I64 idxVal)]
+          return $ ESelect elemType (EVar t paramName) idx
+      , do
+          indices <- replicateM len $ choose (0, len - 1)
+          let mkSelect i = do
+                idx <- elements [EConst (I32 i), EConst (I64 i)]
+                return $ ESelect elemType (EVar t paramName) idx
+          elems <- mapM mkSelect indices
+          return $ EArr t elems
+      , do
+          idxVal <- choose (0, len - 1)
+          idx <- elements [EConst (I32 idxVal), EConst (I64 idxVal)]
+          let paramElem = ESelect elemType (EVar t paramName) idx
+          otherElems <- replicateM (len - 1) (scale (`div` len) $ genExprOfType ctx elemType)
+          pos <- choose (0, len - 1)
+          let (before, after) = splitAt pos otherElems
+          return $ EArr t (before ++ [paramElem] ++ after)
+      ]
+    genBodyUsingParam ctx t paramName = return $ EVar t paramName
