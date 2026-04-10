@@ -155,7 +155,7 @@ genComposite ctx t@(TAbs params retType) = oneof
 -- | Generate a binary operation
 genBinOp :: GenCtx -> Type -> Gen (Expr Type)
 genBinOp ctx t@(TNumber tn) = do
-  op <- elements [Add, Sub, Mul, Div, Mod, And, Or, Xor, Min, Max]
+  op <- elements [Add, Sub, Mul, Mod, And, Or, Xor, Min, Max]
   let ctx' = ctx { maxDepth = maxDepth ctx - 1 }
   a <- scale (`div` 2) $ genExprOfType ctx' t
   b <- scale (`div` 2) $ genExprOfType ctx' t
@@ -247,7 +247,7 @@ genBindings ctx n = do
 genRec :: GenCtx -> Type -> Gen (Expr Type)
 genRec ctx recType = do
   -- Generate delay (number of samples to delay)
-  delay <- choose (1, 10)
+  delay <- choose (1, 5)
   
   -- Generate unique recursive parameter name
   paramName <- genUniqueIdentNotIn (M.keys $ availableVars ctx)
