@@ -111,6 +111,34 @@ exprType (EApp t _ _) = t
 exprType (ESelect t _ _) = t
 exprType (ERec t _ _ _ _) = t
 
+showExpr :: Expr Type -> String
+showExpr (EConst n) = show n
+showExpr (EOp _ op a b) = "(" <> showExpr a <> " " <> showOp op <> " " <> showExpr b <> ")"
+showExpr (EArr _ es) = "[" <> intercalate ", " (map showExpr es) <> "]"
+showExpr (EVar _ (Ident n)) = n
+showExpr (EAbs t params bs body) = 
+  "λ" <> showParams params <> " : " <> showType t <> " " <> showExprBindings bs <> " = " <> showExpr body
+  where
+    showParams [] = "()"
+    showParams ps = "(" <> intercalate ", " (map (\(Ident n) -> n) ps) <> ")"
+    
+    showExprBindings [] = ""
+    showExprBindings bindings = "{ " <> intercalate "; " (map showBinding bindings) <> " }"
+    showBinding (Ident n, expr) = n <> " = " <> showExpr expr
+showExpr (EApp _ f args) = showExpr f <> "(" <> intercalate ", " (map showExpr args) <> ")"
+showExpr (ESelect _ e idx) = showExpr e <> "[" <> showExpr idx <> "]"
+showExpr (ERec t delay param bs body) = 
+  "rec[" <> showType t <> ", delay=" <> show delay <> "](" <> showRecAbs param bs body <> ")"
+  where
+    showRecAbs p bindings bod = 
+      "λ" <> showParam p <> " " <> showExprBindings bindings <> " = " <> showExpr bod
+    
+    showParam (Ident n) = n
+    
+    showExprBindings [] = ""
+    showExprBindings bindings = "{ " <> intercalate "; " (map showBinding bindings) <> " }"
+    showBinding (Ident n, expr) = n <> " = " <> showExpr expr
+
 --------------------------------------------------------------------------------
 
 type StackM s m a = ST.StateT [s] m a
