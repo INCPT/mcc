@@ -306,10 +306,9 @@ genRec ctx recType = do
           idx <- elements [EConst (I32 idxVal), EConst (I64 idxVal)]
           otherElems <- replicateM (len - 1) (scale (`div` len) $ genExprOfType ctx elemType)
           pos <- choose (0, len - 1)
+          let (before, after) = splitAt pos otherElems
+          let paramElem = ESelect elemType (EVar t paramName) idx
           pure $ EArr t (before <> [paramElem] <> after)
-            where
-              (before, after) = splitAt pos otherElems
-              paramElem = ESelect elemType (EVar t paramName) idx
       ]
       where
         mkSelect i = do
