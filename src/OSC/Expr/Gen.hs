@@ -153,7 +153,7 @@ genComposite ctx t@(TAbs params retType) = oneof
   ]
 
 -- | Generate a binary operation
-genBinOp :: GenCtx -> Type -> Gen (Expr Type)
+genBinOp :: GenCtx -> Type -> Gen(Expr Type)
 genBinOp ctx t@(TNumber tn) = do
   op <- elements [Add, Sub, Mul, Mod, And, Or, Xor, Min, Max]
   let ctx' = ctx { maxDepth = maxDepth ctx - 1 }
