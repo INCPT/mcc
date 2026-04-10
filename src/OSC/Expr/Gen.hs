@@ -178,6 +178,8 @@ genSelect :: GenCtx -> Type -> Gen (Expr Type)
 genSelect ctx targetType = do
   -- Generate an array that contains elements of targetType
   arrLen <- choose (1, 5)
+  let arrType = TArr targetType arrLen
+  let ctx' = ctx { maxDepth = maxDepth ctx - 1 }
   
   arr <- scale (`div` 2) $ genExprOfType ctx' arrType
   
@@ -189,9 +191,6 @@ genSelect ctx targetType = do
     ]
   
   pure $ ESelect targetType arr idx
-  where
-    arrType = TArr targetType arrLen
-    ctx' = ctx { maxDepth = maxDepth ctx - 1 }
 
 -- | Generate a function application
 genApp :: GenCtx -> Type -> Gen (Expr Type)
@@ -199,6 +198,8 @@ genApp ctx retType = do
   -- Generate function type
   numParams <- choose (0, 3)
   paramTypes <- replicateM numParams (genType 2)
+  let funcType = TAbs paramTypes retType
+  let ctx' = ctx { maxDepth = maxDepth ctx - 1 }
   
   -- Generate function expression
   func <- scale (`div` 2) $ genExprOfType ctx' funcType
@@ -207,27 +208,23 @@ genApp ctx retType = do
   args <- mapM (scale (`div` 2) . genExprOfType ctx') paramTypes
   
   pure $ EApp retType func args
-  where
-    funcType = TAbs paramTypes retType
-    ctx' = ctx { maxDepth = maxDepth ctx - 1 }
 
 -- | Generate an abstraction with bindings
 genAbs :: GenCtx -> [Type] -> Type -> Gen (Expr Type)
 genAbs ctx paramTypes retType = do
   -- Generate unique parameter names
   paramNames <- genUniqueIdents (length paramTypes)
+  let params = zip paramNames paramTypes
   
   -- Generate bindings that may reference params and each other (but not recursively)
   numBindings <- choose (0, 3)
   (bindings, bindingCtx) <- genBindings (withVars params ctx) numBindings
   
   -- Generate body that can reference params and bindings
+  let bodyCtx = bindingCtx { maxDepth = maxDepth ctx - 1 }
   body <- scale (`div` 2) $ genExprOfType bodyCtx retType
   
   pure $ EAbs (TAbs paramTypes retType) paramNames bindings body
-  where
-    params = zip paramNames paramTypes
-    bodyCtx = bindingCtx { maxDepth = maxDepth ctx - 1 }
 
 -- | Generate a list of bindings where each can reference previous ones
 genBindings :: GenCtx -> Int -> Gen ([(Ident, Expr Type)], GenCtx)
@@ -236,15 +233,16 @@ genBindings ctx n = do
   -- Generate a unique binding name (not already in context)
   bindingName <- genUniqueIdentNotIn (M.keys $ availableVars ctx)
   bindingType <- genType 2
+  let ctx' = ctx { maxDepth = maxDepth ctx - 1 }
   bindingExpr <- scale (`div` 2) $ genExprOfType ctx' bindingType
+  
+  -- Add this binding to context for subsequent bindings
+  let newCtx = withVar bindingName bindingType ctx
   
   -- Generate remaining bindings
   (restBindings, finalCtx) <- genBindings newCtx (n - 1)
   
   pure ((bindingName, bindingExpr) : restBindings, finalCtx)
-  where
-    ctx' = ctx { maxDepth = maxDepth ctx - 1 }
-    newCtx = withVar bindingName bindingType ctx
 
 -- | Generate a recursive expression (ERec)
 -- The type cannot contain functions, and the recursive parameter represents
@@ -256,18 +254,18 @@ genRec ctx recType = do
   
   -- Generate unique recursive parameter name
   paramName <- genUniqueIdentNotIn (M.keys $ availableVars ctx)
+  let paramCtx = withVar paramName recType ctx
   
   -- Generate bindings that can reference the recursive parameter
   numBindings <- choose (0, 3)
   (bindings, bindingCtx) <- genBindings paramCtx numBindings
   
   -- Generate body that MUST use the recursive parameter
+  let bodyCtx = bindingCtx { maxDepth = maxDepth ctx - 1 }
   body <- scale (`div` 2) $ genBodyUsingParam bodyCtx recType paramName
   
   pure $ ERec recType delay paramName bindings body
   where
-    paramCtx = withVar paramName recType ctx
-    bodyCtx = bindingCtx { maxDepth = maxDepth ctx - 1 }
 
     -- Generate a body expression that uses the recursive parameter
     genBodyUsingParam :: GenCtx -> Type -> Ident -> Gen (Expr Type)
