@@ -17,13 +17,13 @@ genIdent :: Gen Ident
 genIdent = do
   prefix <- elements ["x", "y", "z", "a", "b", "c", "f", "g"]
   suffix <- choose (0, 999 :: Int)
-  return $ Ident (prefix ++ show suffix)
+  pure $ Ident (prefix <> show suffix)
 
 -- | Generate n unique identifiers
 genUniqueIdents :: Int -> Gen [Ident]
 genUniqueIdents n = go n []
   where
-    go 0 acc = return acc
+    go 0 acc = pure acc
     go remaining acc = do
       ident <- genIdent
       if ident `elem` acc
@@ -36,7 +36,7 @@ genUniqueIdentNotIn existing = do
   ident <- genIdent
   if ident `elem` existing
     then genUniqueIdentNotIn existing  -- Try again if duplicate
-    else return ident
+    else pure ident
 
 -- | Generate a random type
 genType :: Int -> Gen Type
@@ -53,13 +53,13 @@ genType depth
     genArrayType = do
       elemType <- genType (depth - 1)
       len <- choose (1, 5)
-      return $ TArr elemType len
+      pure $ TArr elemType len
     
     genFuncType = do
       numParams <- choose (0, 3)
       params <- replicateM numParams (genType (depth - 1))
       retType <- genType (depth - 1)
-      return $ TAbs params retType
+      pure $ TAbs params retType
 
 -- | Generate a type that doesn't contain functions (for ERec)
 genNonFuncType :: Int -> Gen Type
@@ -75,7 +75,7 @@ genNonFuncType depth
     genArrayType = do
       elemType <- genNonFuncType (depth - 1)
       len <- choose (1, 5)
-      return $ TArr elemType len
+      pure $ TArr elemType len
 
 -- | Context for generating expressions with available variables
 data GenCtx = GenCtx
@@ -96,11 +96,11 @@ withVars vars ctx = ctx { availableVars = M.fromList vars <> availableVars ctx }
 genExprOfType :: GenCtx -> Type -> Gen (Expr Type)
 genExprOfType ctx targetType = sized $ \size ->
   if size <= 0 || maxDepth ctx <= 0
-  then genLeaf ctx targetType
-  else frequency
-    [ (2, genLeaf ctx targetType)
-    , (5, genComposite ctx targetType)
-    ]
+    then genLeaf ctx targetType
+    else frequency
+      [ (2, genLeaf ctx targetType)
+      , (5, genComposite ctx targetType)
+      ]
 
 -- | Generate leaf expressions (constants and variables)
 genLeaf :: GenCtx -> Type -> Gen (Expr Type)
@@ -125,13 +125,14 @@ genLeaf ctx t@(TAbs _ _) = case genVarOfType ctx t of
 
 -- | Generate a variable reference of a specific type (returns Nothing if no vars available)
 genVarOfType :: GenCtx -> Type -> Maybe (Gen (Expr Type))
-genVarOfType ctx targetType = do
-  let varsOfType = M.toList $ M.filter (== targetType) (availableVars ctx)
+genVarOfType ctx targetType =
   if null varsOfType
-  then Nothing
-  else Just $ do
-    (ident, t) <- elements varsOfType
-    return $ EVar t ident
+    then Nothing
+    else Just $ do
+      (ident, t) <- elements varsOfType
+      pure $ EVar t ident
+  where
+    varsOfType = M.toList $ M.filter (== targetType) (availableVars ctx)
 
 -- | Generate composite expressions
 genComposite :: GenCtx -> Type -> Gen (Expr Type)
@@ -156,26 +157,28 @@ genComposite ctx t@(TAbs params retType) = oneof
 genBinOp :: GenCtx -> Type -> Gen(Expr Type)
 genBinOp ctx t@(TNumber tn) = do
   op <- elements [Add, Sub, Mul, Mod, And, Or, Xor, Min, Max]
-  let ctx' = ctx { maxDepth = maxDepth ctx - 1 }
+
   a <- scale (`div` 2) $ genExprOfType ctx' t
   b <- scale (`div` 2) $ genExprOfType ctx' t
-  return $ EOp t op a b
+
+  pure $ EOp t op a b
+  where
+    ctx' = ctx { maxDepth = maxDepth ctx - 1 }
 genBinOp _ t = error $ "genBinOp: not a number type: " ++ show t
 
 -- | Generate an array
 genArray :: GenCtx -> Type -> Int -> Gen (Expr Type)
 genArray ctx elemType len = do
-  let ctx' = ctx { maxDepth = maxDepth ctx - 1 }
   elems <- replicateM len (scale (`div` len) $ genExprOfType ctx' elemType)
-  return $ EArr (TArr elemType len) elems
+  pure $ EArr (TArr elemType len) elems
+  where
+    ctx' = ctx { maxDepth = maxDepth ctx - 1 }
 
 -- | Generate an array selection with in-bounds index
 genSelect :: GenCtx -> Type -> Gen (Expr Type)
 genSelect ctx targetType = do
   -- Generate an array that contains elements of targetType
   arrLen <- choose (1, 5)
-  let arrType = TArr targetType arrLen
-  let ctx' = ctx { maxDepth = maxDepth ctx - 1 }
   
   arr <- scale (`div` 2) $ genExprOfType ctx' arrType
   
@@ -186,7 +189,10 @@ genSelect ctx targetType = do
     , EConst (I64 idxVal)
     ]
   
-  return $ ESelect targetType arr idx
+  pure $ ESelect targetType arr idx
+  where
+    arrType = TArr targetType arrLen
+    ctx' = ctx { maxDepth = maxDepth ctx - 1 }
 
 -- | Generate a function application
 genApp :: GenCtx -> Type -> Gen (Expr Type)
@@ -194,9 +200,6 @@ genApp ctx retType = do
   -- Generate function type
   numParams <- choose (0, 3)
   paramTypes <- replicateM numParams (genType 2)
-  let funcType = TAbs paramTypes retType
-  
-  let ctx' = ctx { maxDepth = maxDepth ctx - 1 }
   
   -- Generate function expression
   func <- scale (`div` 2) $ genExprOfType ctx' funcType
@@ -204,42 +207,45 @@ genApp ctx retType = do
   -- Generate arguments of correct types
   args <- mapM (scale (`div` 2) . genExprOfType ctx') paramTypes
   
-  return $ EApp retType func args
+  pure $ EApp retType func args
+  where
+    funcType = TAbs paramTypes retType
+    ctx' = ctx { maxDepth = maxDepth ctx - 1 }
 
 -- | Generate an abstraction with bindings
 genAbs :: GenCtx -> [Type] -> Type -> Gen (Expr Type)
 genAbs ctx paramTypes retType = do
   -- Generate unique parameter names
   paramNames <- genUniqueIdents (length paramTypes)
-  let params = zip paramNames paramTypes
   
   -- Generate bindings that may reference params and each other (but not recursively)
   numBindings <- choose (0, 3)
   (bindings, bindingCtx) <- genBindings (withVars params ctx) numBindings
   
   -- Generate body that can reference params and bindings
-  let bodyCtx = bindingCtx { maxDepth = maxDepth ctx - 1 }
   body <- scale (`div` 2) $ genExprOfType bodyCtx retType
   
-  return $ EAbs (TAbs paramTypes retType) paramNames bindings body
+  pure $ EAbs (TAbs paramTypes retType) paramNames bindings body
+  where
+    params = zip paramNames paramTypes
+    bodyCtx = bindingCtx { maxDepth = maxDepth ctx - 1 }
 
 -- | Generate a list of bindings where each can reference previous ones
 genBindings :: GenCtx -> Int -> Gen ([(Ident, Expr Type)], GenCtx)
-genBindings ctx 0 = return ([], ctx)
+genBindings ctx 0 = pure ([], ctx)
 genBindings ctx n = do
   -- Generate a unique binding name (not already in context)
   bindingName <- genUniqueIdentNotIn (M.keys $ availableVars ctx)
   bindingType <- genType 2
-  let ctx' = ctx { maxDepth = maxDepth ctx - 1 }
   bindingExpr <- scale (`div` 2) $ genExprOfType ctx' bindingType
-  
-  -- Add this binding to context for subsequent bindings
-  let newCtx = withVar bindingName bindingType ctx
   
   -- Generate remaining bindings
   (restBindings, finalCtx) <- genBindings newCtx (n - 1)
   
-  return ((bindingName, bindingExpr) : restBindings, finalCtx)
+  pure ((bindingName, bindingExpr) : restBindings, finalCtx)
+  where
+    ctx' = ctx { maxDepth = maxDepth ctx - 1 }
+    newCtx = withVar bindingName bindingType ctx
 
 -- | Generate a recursive expression (ERec)
 -- The type cannot contain functions, and the recursive parameter represents
@@ -254,14 +260,15 @@ genRec ctx recType = do
   
   -- Generate bindings that can reference the recursive parameter
   numBindings <- choose (0, 3)
-  let paramCtx = withVar paramName recType ctx
   (bindings, bindingCtx) <- genBindings paramCtx numBindings
   
   -- Generate body that MUST use the recursive parameter
-  let bodyCtx = bindingCtx { maxDepth = maxDepth ctx - 1 }
   body <- scale (`div` 2) $ genBodyUsingParam bodyCtx recType paramName
   
-  return $ ERec recType delay paramName bindings body
+  pure $ ERec recType delay paramName bindings body
+  where
+    paramCtx = withVar paramName recType ctx
+    bodyCtx = bindingCtx { maxDepth = maxDepth ctx - 1 }
   where
     -- Generate a body expression that uses the recursive parameter
     genBodyUsingParam :: GenCtx -> Type -> Ident -> Gen (Expr Type)
@@ -281,36 +288,38 @@ genRec ctx recType = do
           op2 <- elements [Add, Sub]
           a <- scale (`div` 3) $ genExprOfType ctx t
           b <- scale (`div` 3) $ genExprOfType ctx t
-          return $ EOp t op1 (EOp t op2 (EVar t paramName) a) b
+          pure $ EOp t op1 (EOp t op2 (EVar t paramName) a) b
       ]
     genBodyUsingParam ctx t@(TArr elemType len) paramName = oneof
       [ -- Select from the recursive parameter array
         do
           idxVal <- choose (0, len - 1)
           idx <- elements [EConst (I32 idxVal), EConst (I64 idxVal)]
-          return $ ESelect elemType (EVar t paramName) idx
+          pure $ ESelect elemType (EVar t paramName) idx
       , -- Build array using recursive parameter elements
         do
           indices <- replicateM len $ choose (0, len - 1)
-          let mkSelect i = do
-                idx <- elements [EConst (I32 i), EConst (I64 i)]
-                return $ ESelect elemType (EVar t paramName) idx
           elems <- mapM mkSelect indices
-          return $ EArr t elems
+          pure $ EArr t elems
       , -- Combine recursive param with other values in array
         do
           idxVal <- choose (0, len - 1)
           idx <- elements [EConst (I32 idxVal), EConst (I64 idxVal)]
-          let paramElem = ESelect elemType (EVar t paramName) idx
           otherElems <- replicateM (len - 1) (scale (`div` len) $ genExprOfType ctx elemType)
           -- Insert param element at random position
           pos <- choose (0, len - 1)
-          let (before, after) = splitAt pos otherElems
-          return $ EArr t (before ++ [paramElem] ++ after)
+          pure $ EArr t (before <> [paramElem] <> after)
+            where
+              (before, after) = splitAt pos otherElems
+              paramElem = ESelect elemType (EVar t paramName) idx
       ]
+      where
+        mkSelect i = do
+          idx <- elements [EConst (I32 i), EConst (I64 i)]
+          pure $ ESelect elemType (EVar t paramName) idx
     genBodyUsingParam ctx t paramName = 
       -- Fallback: just return the parameter itself
-      return $ EVar t paramName
+      pure $ EVar t paramName
 
 -- | Arbitrary instance for Expr Type
 instance Arbitrary (Expr Type) where
