@@ -155,7 +155,7 @@ genComposite ctx t@(TAbs params retType) = oneof
 -- | Generate a binary operation
 genBinOp :: GenCtx -> Type -> Gen(Expr Type)
 genBinOp ctx t@(TNumber tn) = do
-  op <- elements [Add, Sub, Mul, Mod, And, Or, Xor, Min, Max]
+  op <- elements [Add, Sub, Mul, And, Or, Xor, Min, Max]
 
   a <- scale (`div` 2) $ genExprOfType ctx' t
   b <- scale (`div` 2) $ genExprOfType ctx' t

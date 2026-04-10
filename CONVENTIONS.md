@@ -2,6 +2,8 @@
 
 - Always prefer the Semigroup operator <> over the List ++ where possible
 
+- Use `traverse` over `mapM`, `traverse_` over `mapM_`
+
 - Use list comprehensions where possible
 
 -- Prefer `[ (f a, b) | (a, b) <- zip as bs ]` over `zipWith (\(a, b) -> (f a, b)) as bs`
