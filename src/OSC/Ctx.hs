@@ -146,9 +146,49 @@ showExprIndent indent (EAbs t params bs body) =
     showReturnExpr ind e = showExprIndent ind e
 showExprIndent indent (EApp _ f args) = showFunc f <> "(" <> intercalate ", " (map (showExprIndent indent) args) <> ")"
   where
-    showFunc e@(EAbs _ _ _ _) = "(" <> showExprIndent (indent + 1) e <> ")"
-    showFunc e@(ERec _ _ _ _ _) = "(" <> showExprIndent (indent + 1) e <> ")"
+    -- When wrapping a function in parens, the function signature starts at indent+1
+    -- but the body should be indented from there, so we pass indent (not indent+1)
+    -- and let the function add its own indentation
+    showFunc e@(EAbs _ _ _ _) = "(" <> showExprIndentInParen indent e <> ")"
+    showFunc e@(ERec _ _ _ _ _) = "(" <> showExprIndentInParen indent e <> ")"
     showFunc e = showExprIndent indent e
+    
+    -- Special version for functions wrapped in parens - body indents from current position
+    showExprIndentInParen ind (EAbs t params bs body) = 
+      "fn(" <> showParams (paramTypes t) params <> ") -> " <> showType (returnType t) <> showBody (ind + 3) bs body
+      where
+        showParams [] [] = ""
+        showParams pts ps = intercalate ", " (zipWith showParam ps pts)
+        showParam (Ident n) pt = n <> ": " <> showType pt
+        
+        showBody bodyInd [] bod = "\n" <> replicate bodyInd ' ' <> "return " <> showReturnExpr bodyInd bod
+        showBody bodyInd bindings bod = 
+          "\n" <> intercalate "\n" (map (showBinding bodyInd) bindings) <> "\n\n" <> replicate bodyInd ' ' <> "return " <> showReturnExpr bodyInd bod
+        
+        showBinding bodyInd (Ident n, expr) = replicate bodyInd ' ' <> n <> " = " <> showExprIndent bodyInd expr
+        
+        showReturnExpr bodyInd e@(EAbs _ _ _ _) = showExprIndent bodyInd e
+        showReturnExpr bodyInd e@(ERec _ _ _ _ _) = showExprIndent bodyInd e
+        showReturnExpr bodyInd (EOp _ op a b) = showExprIndent bodyInd a <> " " <> showOp op <> " " <> showExprIndent bodyInd b
+        showReturnExpr bodyInd e = showExprIndent bodyInd e
+    
+    showExprIndentInParen ind (ERec t delay param bs body) = 
+      "rec<delay = " <> show delay <> ">(" <> showParam param <> ": " <> showType t <> ") -> " <> showType t <> showBody (ind + 3) bs body
+      where
+        showParam (Ident n) = n
+        
+        showBody bodyInd [] bod = "\n" <> replicate bodyInd ' ' <> "return " <> showReturnExpr bodyInd bod
+        showBody bodyInd bindings bod = 
+          "\n" <> intercalate "\n" (map (showBinding bodyInd) bindings) <> "\n\n" <> replicate bodyInd ' ' <> "return " <> showReturnExpr bodyInd bod
+        
+        showBinding bodyInd (Ident n, expr) = replicate bodyInd ' ' <> n <> " = " <> showExprIndent bodyInd expr
+        
+        showReturnExpr bodyInd e@(EAbs _ _ _ _) = showExprIndent bodyInd e
+        showReturnExpr bodyInd e@(ERec _ _ _ _ _) = showExprIndent bodyInd e
+        showReturnExpr bodyInd (EOp _ op a b) = showExprIndent bodyInd a <> " " <> showOp op <> " " <> showExprIndent bodyInd b
+        showReturnExpr bodyInd e = showExprIndent bodyInd e
+    
+    showExprIndentInParen ind e = showExprIndent ind e
 showExprIndent indent (ESelect _ e idx) = showExprIndent indent e <> "[" <> showExprIndent indent idx <> "]"
 showExprIndent indent (ERec t delay param bs body) = 
   "rec<delay = " <> show delay <> ">(" <> showParam param <> ": " <> showType t <> ") -> " <> showType t <> showBody (indent + 2) bs body
