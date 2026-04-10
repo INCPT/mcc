@@ -8,7 +8,6 @@ import OSC.Expr
 
 import Test.QuickCheck
 import Control.Monad (replicateM)
-import Data.List (nub)
 import qualified Data.Map as M
 import Data.Map (Map)
 
@@ -269,7 +268,7 @@ genRec ctx recType = do
   where
     paramCtx = withVar paramName recType ctx
     bodyCtx = bindingCtx { maxDepth = maxDepth ctx - 1 }
-  where
+
     -- Generate a body expression that uses the recursive parameter
     genBodyUsingParam :: GenCtx -> Type -> Ident -> Gen (Expr Type)
     genBodyUsingParam ctx t@(TNumber tn) paramName = oneof
@@ -306,7 +305,6 @@ genRec ctx recType = do
           idxVal <- choose (0, len - 1)
           idx <- elements [EConst (I32 idxVal), EConst (I64 idxVal)]
           otherElems <- replicateM (len - 1) (scale (`div` len) $ genExprOfType ctx elemType)
-          -- Insert param element at random position
           pos <- choose (0, len - 1)
           pure $ EArr t (before <> [paramElem] <> after)
             where
