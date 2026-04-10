@@ -127,39 +127,43 @@ showExprIndent indent (EArr _ es) =
     else singleLine
 showExprIndent _ (EVar _ (Ident n)) = n
 showExprIndent indent (EAbs t params bs body) = 
-  "fn(" <> showParams (paramTypes t) params <> ") -> " <> showType (returnType t) <> showBody indent bs body
+  "fn(" <> showParams (paramTypes t) params <> ") -> " <> showType (returnType t) <> showBody (indent + 2) bs body
   where
     showParams [] [] = ""
     showParams pts ps = intercalate ", " (zipWith showParam ps pts)
     showParam (Ident n) pt = n <> ": " <> showType pt
     
-    showBody ind [] bod = "\n" <> replicate (ind + 2) ' ' <> "return " <> showReturnExpr (ind + 2) bod
+    showBody ind [] bod = "\n" <> replicate ind ' ' <> "return " <> showReturnExpr ind bod
     showBody ind bindings bod = 
-      "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate (ind + 2) ' ' <> "return " <> showReturnExpr (ind + 2) bod
+      "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate ind ' ' <> "return " <> showReturnExpr ind bod
     
-    showBinding ind (Ident n, expr) = replicate (ind + 2) ' ' <> n <> " = " <> showExprIndent (ind + 2) expr
+    showBinding ind (Ident n, expr) = replicate ind ' ' <> n <> " = " <> showExprIndent ind expr
     
     -- Don't wrap returned expressions in parentheses
-    showReturnExpr ind e@(EAbs _ _ _ _) = showExprIndent ind e
-    showReturnExpr ind e@(ERec _ _ _ _ _) = showExprIndent ind e
+    showReturnExpr ind e@(EAbs _ _ _ _) = "\n" <> replicate ind ' ' <> showExprIndent ind e
+    showReturnExpr ind e@(ERec _ _ _ _ _) = "\n" <> replicate ind ' ' <> showExprIndent ind e
     showReturnExpr ind (EOp _ op a b) = showExprIndent ind a <> " " <> showOp op <> " " <> showExprIndent ind b
     showReturnExpr ind e = showExprIndent ind e
-showExprIndent indent (EApp _ f args) = showExprIndent indent f <> "(" <> intercalate ", " (map (showExprIndent indent) args) <> ")"
+showExprIndent indent (EApp _ f args) = showFunc f <> "(" <> intercalate ", " (map (showExprIndent indent) args) <> ")"
+  where
+    showFunc e@(EAbs _ _ _ _) = "(" <> showExprIndent indent e <> ")"
+    showFunc e@(ERec _ _ _ _ _) = "(" <> showExprIndent indent e <> ")"
+    showFunc e = showExprIndent indent e
 showExprIndent indent (ESelect _ e idx) = showExprIndent indent e <> "[" <> showExprIndent indent idx <> "]"
 showExprIndent indent (ERec t delay param bs body) = 
-  "rec<delay = " <> show delay <> ">(" <> showParam param <> ": " <> showType t <> ") -> " <> showType t <> showBody indent bs body
+  "rec<delay = " <> show delay <> ">(" <> showParam param <> ": " <> showType t <> ") -> " <> showType t <> showBody (indent + 2) bs body
   where
     showParam (Ident n) = n
     
-    showBody ind [] bod = "\n" <> replicate (ind + 2) ' ' <> "return " <> showReturnExpr (ind + 2) bod
+    showBody ind [] bod = "\n" <> replicate ind ' ' <> "return " <> showReturnExpr ind bod
     showBody ind bindings bod = 
-      "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate (ind + 2) ' ' <> "return " <> showReturnExpr (ind + 2) bod
+      "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate ind ' ' <> "return " <> showReturnExpr ind bod
     
-    showBinding ind (Ident n, expr) = replicate (ind + 2) ' ' <> n <> " = " <> showExprIndent (ind + 2) expr
+    showBinding ind (Ident n, expr) = replicate ind ' ' <> n <> " = " <> showExprIndent ind expr
     
     -- Don't wrap returned expressions in parentheses
-    showReturnExpr ind e@(EAbs _ _ _ _) = showExprIndent ind e
-    showReturnExpr ind e@(ERec _ _ _ _ _) = showExprIndent ind e
+    showReturnExpr ind e@(EAbs _ _ _ _) = "\n" <> replicate ind ' ' <> showExprIndent ind e
+    showReturnExpr ind e@(ERec _ _ _ _ _) = "\n" <> replicate ind ' ' <> showExprIndent ind e
     showReturnExpr ind (EOp _ op a b) = showExprIndent ind a <> " " <> showOp op <> " " <> showExprIndent ind b
     showReturnExpr ind e = showExprIndent ind e
 
