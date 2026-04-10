@@ -474,13 +474,13 @@ interpret _ (ERec t delay param bindings body) = mdo
     alloc (TAbs _ _) = error "interpret: ERec: function in return type"
 
 tinterpretToList :: Expr Type -> [Value]
-tinterpretToList texpr = take 10 (go st.initialMem st.tick sim)
+tinterpretToList texpr = take 20 (go st.initialMem st.tick sim)
   where
     go mem tick sim = R.runReader sim mem:go (tick mem) tick sim
     (sim, st) = ST.runState (R.runReaderT (interpret [] texpr) mempty) (GenState { nextCell = 0, initialMem = mempty, tick = id })
 
 interpretToList :: Expr () -> [Value]
-interpretToList expr = take 10 (go st.initialMem st.tick sim)
+interpretToList expr = take 20 (go st.initialMem st.tick sim)
   where
     go mem tick sim = R.runReader sim mem:go (tick mem) tick sim
 
@@ -509,7 +509,7 @@ et = abs_ [] ti32
   ]
   (var "rec")
 
-et2 = ERec (TNumber TI64) 1 (Ident "a") [(Ident "b",ERec (TNumber TF32) 2 (Ident "c") [] (EOp (TNumber TF32) Add (EVar (TNumber TF32) (Ident "c")) (EVar (TNumber TF32) (Ident "c"))))] (EOp (TNumber TI64) Sub (ERec (TNumber TI64) 4 (Ident "d") [(Ident "e",EAbs (TAbs [TNumber TI32,TNumber TI64] (TArr (TNumber TI64) 3)) [Ident "f",Ident "g"] [] (EArr (TArr (TNumber TI64) 3) [EConst (I64 0),EConst (I64 0),EConst (I64 0)]))] (EOp (TNumber TI64) Add (EOp (TNumber TI64) Sub (EVar (TNumber TI64) (Ident "d")) (EConst (I64 0))) (EConst (I64 0)))) (EVar (TNumber TI64) (Ident "a")))
+et2 = ERec (TNumber TI64) 1 (Ident "a") [(Ident "b",ERec (TNumber TF32) 2 (Ident "c") [] (EOp (TNumber TF32) Add (EVar (TNumber TF32) (Ident "c")) (EVar (TNumber TF32) (Ident "c"))))] (EOp (TNumber TI64) Sub (ERec (TNumber TI64) 4 (Ident "d") [(Ident "e",EAbs (TAbs [TNumber TI32,TNumber TI64] (TArr (TNumber TI64) 3)) [Ident "f",Ident "g"] [] (EArr (TArr (TNumber TI64) 3) [EConst (I64 0),EConst (I64 0),EConst (I64 0)]))] (EOp (TNumber TI64) Add (EOp (TNumber TI64) Sub (EVar (TNumber TI64) (Ident "d")) (EConst (I64 2))) (EConst (I64 0)))) (EVar (TNumber TI64) (Ident "a")))
 et3 = ERec (TArr (TNumber TI64) 4) 1 (Ident "x402") [(Ident "a809",EAbs (TAbs [] (TNumber TF64)) [] [] (EConst (F64 0.0))),(Ident "b267",EAbs (TAbs [TAbs [TNumber TF32,TNumber TI64] (TNumber TI64),TNumber TI64,TAbs [TNumber TI32] (TNumber TF32)] (TAbs [TNumber TI32] (TNumber TI64))) [Ident "x18",Ident "f549",Ident "g533"] [(Ident "g998",EConst (I64 0)),(Ident "b474",EArr (TArr (TAbs [TNumber TI32] (TNumber TF64)) 5) [EAbs (TAbs [TNumber TI32] (TNumber TF64)) [Ident "b901"] [(Ident "a680",EConst (I64 0)),(Ident "c189",EArr (TArr (TNumber TI32) 2) [EConst (I32 0),EConst (I32 0)])] (EConst (F64 0.0)),EAbs (TAbs [TNumber TI32] (TNumber TF64)) [Ident "f596"] [(Ident "a956",EConst (F32 0.48784024)),(Ident "b125",EVar (TNumber TI64) (Ident "g998"))] (EConst (F64 0.0)),EAbs (TAbs [TNumber TI32] (TNumber TF64)) [Ident "g339"] [(Ident "c769",EArr (TArr (TNumber TI64) 5) [EConst (I64 0),EConst (I64 0),EConst (I64 0),EConst (I64 0),EConst (I64 0)]),(Ident "y983",EConst (I64 0)),(Ident "z339",EConst (F32 0.0))] (EConst (F64 0.0)),EAbs (TAbs [TNumber TI32] (TNumber TF64)) [Ident "y58"] [(Ident "c980",EConst (F64 0.0)),(Ident "z285",EConst (I64 0))] (EVar (TNumber TF64) (Ident "c980")),EAbs (TAbs [TNumber TI32] (TNumber TF64)) [Ident "x724"] [(Ident "x898",EConst (I32 0))] (EConst (F64 0.0))]),(Ident "z782",EConst (I32 0))] (EAbs (TAbs [TNumber TI32] (TNumber TI64)) [Ident "b142"] [] (EVar (TNumber TI64) (Ident "f549"))))] (EArr (TArr (TNumber TI64) 4) [ESelect (TNumber TI64) (EVar (TArr (TNumber TI64) 4) (Ident "x402")) (EConst (I64 1)),ESelect (TNumber TI64) (EVar (TArr (TNumber TI64) 4) (Ident "x402")) (EConst (I32 3)),ESelect (TNumber TI64) (EVar (TArr (TNumber TI64) 4) (Ident "x402")) (EConst (I32 3)),ESelect (TNumber TI64) (EVar (TArr (TNumber TI64) 4) (Ident "x402")) (EConst (I32 0))])
 
 t2 = do
