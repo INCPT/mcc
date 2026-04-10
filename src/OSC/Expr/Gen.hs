@@ -42,6 +42,22 @@ genType depth
       retType <- genType (depth - 1)
       return $ TAbs params retType
 
+-- | Generate a type that doesn't contain functions (for ERec)
+genNonFuncType :: Int -> Gen Type
+genNonFuncType depth
+  | depth <= 0 = genSimpleType
+  | otherwise = frequency
+      [ (3, genSimpleType)
+      , (1, genArrayType)
+      ]
+  where
+    genSimpleType = TNumber <$> elements [TI32, TF32, TI64, TF64]
+    
+    genArrayType = do
+      elemType <- genNonFuncType (depth - 1)
+      len <- choose (1, 5)
+      return $ TArr elemType len
+
 -- | Context for generating expressions with available variables
 data GenCtx = GenCtx
   { availableVars :: Map Ident Type
@@ -104,11 +120,13 @@ genComposite ctx t@(TNumber tn) = oneof
   [ genBinOp ctx t
   , genSelect ctx t
   , genApp ctx t
+  , genRec ctx t
   ]
 genComposite ctx t@(TArr elemType len) = oneof
   [ genArray ctx elemType len
   , genSelect ctx t
   , genApp ctx t
+  , genRec ctx t
   ]
 genComposite ctx t@(TAbs params retType) = oneof
   [ genAbs ctx params retType
@@ -205,6 +223,28 @@ genBindings ctx n = do
   
   return ((bindingName, bindingExpr) : restBindings, finalCtx)
 
+-- | Generate a recursive expression (ERec)
+-- The type cannot contain functions, and the recursive parameter represents
+-- the previous value in the recursive computation
+genRec :: GenCtx -> Type -> Gen (Expr Type)
+genRec ctx recType = do
+  -- Generate delay (number of samples to delay)
+  delay <- choose (1, 10)
+  
+  -- Generate recursive parameter name
+  paramName <- genIdent
+  
+  -- Generate bindings that can reference the recursive parameter
+  numBindings <- choose (0, 3)
+  let paramCtx = withVar paramName recType ctx
+  (bindings, bindingCtx) <- genBindings paramCtx numBindings
+  
+  -- Generate body that can reference the recursive parameter and bindings
+  let bodyCtx = bindingCtx { maxDepth = maxDepth ctx - 1 }
+  body <- scale (`div` 2) $ genExprOfType bodyCtx recType
+  
+  return $ ERec recType delay paramName bindings body
+
 -- | Arbitrary instance for Expr Type
 instance Arbitrary (Expr Type) where
   arbitrary = do
@@ -220,6 +260,7 @@ instance Arbitrary (Expr Type) where
   shrink (ESelect _ arr _) = [arr]
   shrink (EApp _ f args) = f : args
   shrink (EAbs _ _ bindings body) = body : map snd bindings
+  shrink (ERec _ _ _ bindings body) = body : map snd bindings
   shrink _ = []
 
 -- | Generate a random expression for testing in GHCi
