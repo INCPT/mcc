@@ -127,35 +127,29 @@ showExprIndent indent (EArr _ es) =
     else singleLine
 showExprIndent _ (EVar _ (Ident n)) = n
 showExprIndent indent (EAbs t params bs body) = 
-  "fn(" <> showParams (paramTypes t) params <> ") -> " <> showType (returnType t) <> showBody (indent + 2) bs body
+  "fn(" <> showParams (paramTypes t) params <> ") -> " <> showType (returnType t) <> showBody bs body
   where
     showParams [] [] = ""
     showParams pts ps = intercalate ", " (zipWith showParam ps pts)
     showParam (Ident n) pt = n <> ": " <> showType pt
     
-    showBody ind [] bod = case bod of
-      ERec {} -> "\n" <> replicate ind ' ' <> "return " <> showExprIndent ind bod
-      _ -> "\n" <> replicate ind ' ' <> "return " <> showExprIndent ind bod
-    showBody ind bindings bod = case bod of
-      ERec {} -> "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate ind ' ' <> "return " <> showExprIndent ind bod
-      _ -> "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate ind ' ' <> "return " <> showExprIndent ind bod
+    showBody [] bod = "\n" <> replicate (indent + 2) ' ' <> "return " <> showExprIndent (indent + 2) bod
+    showBody bindings bod = 
+      "\n" <> intercalate "\n" (map showBinding bindings) <> "\n\n" <> replicate (indent + 2) ' ' <> "return " <> showExprIndent (indent + 2) bod
     
-    showBinding ind (Ident n, expr) = replicate ind ' ' <> n <> " = " <> showExprIndent ind expr
+    showBinding (Ident n, expr) = replicate (indent + 2) ' ' <> n <> " = " <> showExprIndent (indent + 2) expr
 showExprIndent _ (EApp _ f args) = showExpr f <> "(" <> intercalate ", " (map showExpr args) <> ")"
 showExprIndent _ (ESelect _ e idx) = showExpr e <> "[" <> showExpr idx <> "]"
 showExprIndent indent (ERec t delay param bs body) = 
-  "rec<delay = " <> show delay <> ">(" <> showParam param <> ": " <> showType t <> ") -> " <> showType t <> showBody (indent + 2) bs body
+  "rec<delay = " <> show delay <> ">(" <> showParam param <> ": " <> showType t <> ") -> " <> showType t <> showBody bs body
   where
     showParam (Ident n) = n
     
-    showBody ind [] bod = case bod of
-      ERec {} -> "\n" <> replicate ind ' ' <> "return " <> showExprIndent ind bod
-      _ -> "\n" <> replicate ind ' ' <> "return " <> showExprIndent ind bod
-    showBody ind bindings bod = case bod of
-      ERec {} -> "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate ind ' ' <> "return " <> showExprIndent ind bod
-      _ -> "\n" <> intercalate "\n" (map (showBinding ind) bindings) <> "\n\n" <> replicate ind ' ' <> "return " <> showExprIndent ind bod
+    showBody [] bod = "\n" <> replicate (indent + 2) ' ' <> "return " <> showExprIndent (indent + 2) bod
+    showBody bindings bod = 
+      "\n" <> intercalate "\n" (map showBinding bindings) <> "\n\n" <> replicate (indent + 2) ' ' <> "return " <> showExprIndent (indent + 2) bod
     
-    showBinding ind (Ident n, expr) = replicate ind ' ' <> n <> " = " <> showExprIndent ind expr
+    showBinding (Ident n, expr) = replicate (indent + 2) ' ' <> n <> " = " <> showExprIndent (indent + 2) expr
 
 --------------------------------------------------------------------------------
 
