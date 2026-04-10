@@ -346,8 +346,8 @@ randomExpr = fmap tc $ arbitrary
     tc :: Expr Type -> Either TypeError (Expr Type)
     tc = infer . fmap (const ())
 
-irandomExpr :: Gen (Either TypeError [Value])
-irandomExpr = fmap (fmap tinterpretToList . tc) $ arbitrary
+irandomExpr :: Gen (Either TypeError (Expr Type, [Value]))
+irandomExpr = fmap (fmap (\e -> (e, tinterpretToList e)) . tc) $ arbitrary
   where
     tc :: Expr Type -> Either TypeError (Expr Type)
     tc = infer . fmap (const ())
@@ -371,8 +371,8 @@ randomERec = do
   recType <- genNonFuncType 2
   genRec emptyCtx recType
 
-irandomERec :: Gen (Either TypeError [Value])
-irandomERec = fmap (fmap tinterpretToList . tc) $ randomERec
+irandomERec :: Gen (Either TypeError (Expr Type, [Value]))
+irandomERec = fmap (fmap (\e -> (e, tinterpretToList e)) . tc) $ randomERec
   where
     tc :: Expr Type -> Either TypeError (Expr Type)
     tc = infer . fmap (const ())

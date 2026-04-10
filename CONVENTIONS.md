@@ -1,3 +1,5 @@
+- Use `pure` over `return`
+
 - Always prefer the Semigroup operator <> over the List ++ where possible
 
 - Use list comprehensions where possible
@@ -18,7 +20,7 @@
     pure thing
     ```
 
-- Prefer `where` over `let`
+- Prefer `where` over `let` (but this obviously doesn't work in `do` blocks)
 
 - Prefer `mconcat` over a multiline bracketed `<>` expression:
   ```
@@ -35,3 +37,31 @@
   ```
 
   Single line `(a <> b)` expressions are fine.
+
+- Indent the `then` and `else` clauses of an `if` expression:
+    ```
+    if condition
+      then ...
+      else ...
+    ```
+
+- Put empty lines between loosely similar groups of lines (but try to not have too many singe line groups):
+    ```
+      op <- elements [Add, Sub, Mul, Mod, And, Or, Xor, Min, Max]
+
+      let ctx' = ctx { maxDepth = maxDepth ctx - 1 }
+
+      a <- scale (`div` 2) $ genExprOfType ctx' t
+      b <- scale (`div` 2) $ genExprOfType ctx' t
+
+      pure $ EOp t op a b
+    ```
+
+    ```
+      genFuncType = do
+        numParams <- choose (0, 3)
+        params <- replicateM numParams (genType (depth - 1))
+        retType <- genType (depth - 1)
+
+        pure $ TAbs params retType
+    ```

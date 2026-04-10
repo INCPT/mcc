@@ -117,12 +117,12 @@ showExpr (EOp _ op a b) = "(" <> showExpr a <> " " <> showOp op <> " " <> showEx
 showExpr (EArr _ es) = "[" <> intercalate ", " (map showExpr es) <> "]"
 showExpr (EVar _ (Ident n)) = n
 showExpr (EAbs t params bs body) = 
-  "λ" <> showParams params <> " : " <> showType t <> " " <> showExprBindings bs <> " = " <> showExpr body
+  "λ" <> showParams params <> " : " <> showType t <> " -> " <> showExprBindings bs <> " = " <> showExpr body
   where
     showParams [] = "()"
     showParams ps = "(" <> intercalate ", " (map (\(Ident n) -> n) ps) <> ")"
     
-    showExprBindings [] = ""
+    showExprBindings [] = "{}"
     showExprBindings bindings = "{ " <> intercalate "; " (map showBinding bindings) <> " }"
     showBinding (Ident n, expr) = n <> " = " <> showExpr expr
 showExpr (EApp _ f args) = showExpr f <> "(" <> intercalate ", " (map showExpr args) <> ")"
@@ -131,11 +131,11 @@ showExpr (ERec t delay param bs body) =
   "rec[" <> showType t <> ", delay=" <> show delay <> "](" <> showRecAbs param bs body <> ")"
   where
     showRecAbs p bindings bod = 
-      "λ" <> showParam p <> " " <> showExprBindings bindings <> " = " <> showExpr bod
+      "λ" <> showParam p <> " -> " <> showExprBindings bindings <> " = " <> showExpr bod
     
     showParam (Ident n) = n
     
-    showExprBindings [] = ""
+    showExprBindings [] = "{}"
     showExprBindings bindings = "{ " <> intercalate "; " (map showBinding bindings) <> " }"
     showBinding (Ident n, expr) = n <> " = " <> showExpr expr
 
