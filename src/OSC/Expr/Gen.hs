@@ -19,6 +19,25 @@ genIdent = do
   suffix <- choose (0, 999 :: Int)
   return $ Ident (prefix ++ show suffix)
 
+-- | Generate n unique identifiers
+genUniqueIdents :: Int -> Gen [Ident]
+genUniqueIdents n = go n []
+  where
+    go 0 acc = return acc
+    go remaining acc = do
+      ident <- genIdent
+      if ident `elem` acc
+        then go remaining acc  -- Try again if duplicate
+        else go (remaining - 1) (ident : acc)
+
+-- | Generate a unique identifier not in the given list
+genUniqueIdentNotIn :: [Ident] -> Gen Ident
+genUniqueIdentNotIn existing = do
+  ident <- genIdent
+  if ident `elem` existing
+    then genUniqueIdentNotIn existing  -- Try again if duplicate
+    else return ident
+
 -- | Generate a random type
 genType :: Int -> Gen Type
 genType depth
@@ -190,10 +209,9 @@ genApp ctx retType = do
 -- | Generate an abstraction with bindings
 genAbs :: GenCtx -> [Type] -> Type -> Gen (Expr Type)
 genAbs ctx paramTypes retType = do
-  -- Generate parameter names
-  paramNames <- replicateM (length paramTypes) genIdent
-  let uniqueParams = take (length paramTypes) $ nub paramNames
-  let params = zip uniqueParams paramTypes
+  -- Generate unique parameter names
+  paramNames <- genUniqueIdents (length paramTypes)
+  let params = zip paramNames paramTypes
   
   -- Generate bindings that may reference params and each other (but not recursively)
   numBindings <- choose (0, 3)
@@ -203,14 +221,14 @@ genAbs ctx paramTypes retType = do
   let bodyCtx = bindingCtx { maxDepth = maxDepth ctx - 1 }
   body <- scale (`div` 2) $ genExprOfType bodyCtx retType
   
-  return $ EAbs (TAbs paramTypes retType) uniqueParams bindings body
+  return $ EAbs (TAbs paramTypes retType) paramNames bindings body
 
 -- | Generate a list of bindings where each can reference previous ones
 genBindings :: GenCtx -> Int -> Gen ([(Ident, Expr Type)], GenCtx)
 genBindings ctx 0 = return ([], ctx)
 genBindings ctx n = do
-  -- Generate a binding
-  bindingName <- genIdent
+  -- Generate a unique binding name (not already in context)
+  bindingName <- genUniqueIdentNotIn (M.keys $ availableVars ctx)
   bindingType <- genType 2
   let ctx' = ctx { maxDepth = maxDepth ctx - 1 }
   bindingExpr <- scale (`div` 2) $ genExprOfType ctx' bindingType
@@ -231,8 +249,8 @@ genRec ctx recType = do
   -- Generate delay (number of samples to delay)
   delay <- choose (1, 10)
   
-  -- Generate recursive parameter name
-  paramName <- genIdent
+  -- Generate unique recursive parameter name
+  paramName <- genUniqueIdentNotIn (M.keys $ availableVars ctx)
   
   -- Generate bindings that can reference the recursive parameter
   numBindings <- choose (0, 3)
