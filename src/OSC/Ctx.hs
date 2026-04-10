@@ -139,13 +139,13 @@ ppExpr (EConst (I32 n)) = line (show n)
 ppExpr (EConst (I64 n)) = line (show n)
 ppExpr (EConst (F32 n)) = line (show n)
 ppExpr (EConst (F64 n)) = line (show n)
-ppExpr (EOp _ op a b) = line $ "(" <> runPPrint (ppExpr a) <> " " <> showOp op <> " " <> runPPrint (ppExpr b) <> ")"
+ppExpr (EOp _ op a b) = ppOp op a b
 ppExpr (EArr _ es) =
-  let singleLine = "[" <> intercalate ", " (map (runPPrint . ppExpr) es) <> "]"
+  let singleLine = "[" <> intercalate ", " (map showExprInline es) <> "]"
   in if length singleLine > 50
     then do
       line "["
-      indent $ mapM_ ppExpr es
+      indent $ ppintercalate (line "") (map ppExpr es)
       line "]"
     else line singleLine
 ppExpr (EVar _ (Ident n)) = line n
@@ -156,32 +156,44 @@ ppExpr (EAbs t params bs body) = do
     showParams [] [] = ""
     showParams pts ps = intercalate ", " (zipWith showParam ps pts)
     showParam (Ident n) pt = n <> ": " <> showType pt
-ppExpr (EApp _ f args) = line $ ppFunc f <> "(" <> intercalate ", " (map (runPPrint . ppExpr) args) <> ")"
-  where
-    ppFunc e@(EAbs _ _ _ _) = "(" <> runPPrint (ppExpr e) <> ")"
-    ppFunc e@(ERec _ _ _ _ _) = "(" <> runPPrint (ppExpr e) <> ")"
-    ppFunc e = runPPrint (ppExpr e)
-ppExpr (ESelect _ e idx) = line $ runPPrint (ppExpr e) <> "[" <> runPPrint (ppExpr idx) <> "]"
+ppExpr (EApp _ f args) = ppApp f args
+ppExpr (ESelect _ e idx) = ppSelect e idx
 ppExpr (ERec t delay param bs body) = do
   line $ "rec<delay = " <> show delay <> ">(" <> showParam param <> ": " <> showType t <> ") -> " <> showType t
   indent $ ppAbsBody bs body
   where
     showParam (Ident n) = n
 
+ppOp :: Op -> Expr Type -> Expr Type -> PPrint
+ppOp op a b = line $ "(" <> showExprInline a <> " " <> showOp op <> " " <> showExprInline b <> ")"
+
+ppApp :: Expr Type -> [Expr Type] -> PPrint
+ppApp f args = line $ ppFunc f <> "(" <> intercalate ", " (map showExprInline args) <> ")"
+  where
+    ppFunc e@(EAbs _ _ _ _) = "(" <> showExprInline e <> ")"
+    ppFunc e@(ERec _ _ _ _ _) = "(" <> showExprInline e <> ")"
+    ppFunc e = showExprInline e
+
+ppSelect :: Expr Type -> Expr Type -> PPrint
+ppSelect e idx = line $ showExprInline e <> "[" <> showExprInline idx <> "]"
+
 ppAbsBody :: [(Ident, Expr Type)] -> Expr Type -> PPrint
 ppAbsBody [] body = line $ "return " <> ppReturnExpr body
 ppAbsBody bindings body = do
-  mapM_ ppBinding bindings
+  ppintercalate (line "") [ ppBinding n expr | (n, expr) <- bindings ]
   line ""
   line $ "return " <> ppReturnExpr body
   where
-    ppBinding (Ident n, expr) = line $ n <> " = " <> runPPrint (ppExpr expr)
+    ppBinding (Ident n) expr = line $ n <> " = " <> showExprInline expr
 
 ppReturnExpr :: Expr Type -> String
-ppReturnExpr e@(EAbs _ _ _ _) = runPPrint (ppExpr e)
-ppReturnExpr e@(ERec _ _ _ _ _) = runPPrint (ppExpr e)
-ppReturnExpr (EOp _ op a b) = runPPrint (ppExpr a) <> " " <> showOp op <> " " <> runPPrint (ppExpr b)
-ppReturnExpr e = runPPrint (ppExpr e)
+ppReturnExpr e@(EAbs _ _ _ _) = showExprInline e
+ppReturnExpr e@(ERec _ _ _ _ _) = showExprInline e
+ppReturnExpr (EOp _ op a b) = showExprInline a <> " " <> showOp op <> " " <> showExprInline b
+ppReturnExpr e = showExprInline e
+
+showExprInline :: Expr Type -> String
+showExprInline = runPPrint . ppExpr
 
 --------------------------------------------------------------------------------
 
