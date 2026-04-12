@@ -13,6 +13,19 @@ import Data.Map (Map)
 
 -- TODO: shuffle bindings
 
+-- | Generate non-zero numeric constants (heavily biased against 0)
+genNonZeroI32 :: Gen (Expr Type)
+genNonZeroI32 = EConst . I32 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]
+
+genNonZeroF32 :: Gen (Expr Type)
+genNonZeroF32 = EConst . F32 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]
+
+genNonZeroI64 :: Gen (Expr Type)
+genNonZeroI64 = EConst . I64 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]
+
+genNonZeroF64 :: Gen (Expr Type)
+genNonZeroF64 = EConst . F64 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]
+
 -- | Generate a random identifier
 genIdent :: Gen Ident
 genIdent = do
@@ -106,17 +119,17 @@ genExprOfType ctx targetType = sized $ \size ->
 -- | Generate leaf expressions (constants and variables)
 genLeaf :: GenCtx -> Type -> Gen (Expr Type)
 genLeaf ctx (TNumber TI32) = case genVarOfType ctx (TNumber TI32) of
-  Just varGen -> frequency [(3, EConst . I32 <$> arbitrary), (1, varGen)]
-  Nothing -> EConst . I32 <$> arbitrary
+  Just varGen -> frequency [(3, genNonZeroI32), (1, varGen)]
+  Nothing -> genNonZeroI32
 genLeaf ctx (TNumber TF32) = case genVarOfType ctx (TNumber TF32) of
-  Just varGen -> frequency [(3, EConst . F32 <$> arbitrary), (1, varGen)]
-  Nothing -> EConst . F32 <$> arbitrary
+  Just varGen -> frequency [(3, genNonZeroF32), (1, varGen)]
+  Nothing -> genNonZeroF32
 genLeaf ctx (TNumber TI64) = case genVarOfType ctx (TNumber TI64) of
-  Just varGen -> frequency [(3, EConst . I64 <$> arbitrary), (1, varGen)]
-  Nothing -> EConst . I64 <$> arbitrary
+  Just varGen -> frequency [(3, genNonZeroI64), (1, varGen)]
+  Nothing -> genNonZeroI64
 genLeaf ctx (TNumber TF64) = case genVarOfType ctx (TNumber TF64) of
-  Just varGen -> frequency [(3, EConst . F64 <$> arbitrary), (1, varGen)]
-  Nothing -> EConst . F64 <$> arbitrary
+  Just varGen -> frequency [(3, genNonZeroF64), (1, varGen)]
+  Nothing -> genNonZeroF64
 genLeaf ctx t@(TArr elemType len) = case genVarOfType ctx t of
   Just varGen -> frequency [(3, genArray ctx elemType len), (1, varGen)]
   Nothing -> genArray ctx elemType len
