@@ -11,7 +11,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 
-module OSC.Call where
+module OSC.Codegen.Backend where
 
 import Data.Functor.Identity (Identity (Identity))
 import Control.Monad (when)
@@ -30,7 +30,7 @@ import qualified Data.Map as M
 import Control.Monad.Free (Free (Free, Pure), liftF)
 import qualified Control.Monad.Trans.Free as TF
 import Control.Monad.Trans.Free (FreeT (FreeT), FreeF)
-import OSC.Ctx
+import OSC.Codegen
 
 data Idx = Local Int | Global Int deriving (Eq, Ord)
 

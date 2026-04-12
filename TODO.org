@@ -1,2 +1,34 @@
 * DONE shuffle bindings in Gen
 * TODO binary tree if
+* TODO: allow simple arithmetic in range |i| syntax
+* TODO: streams not in scope outside of graph
+* TODO: normal functions/methods not in scope in graph (only variables are in scope)
+* TODO: branch operation computes both branches
+* TODO: after the shadow check/SSA pass all Idents are unique
+* TODO: have --max-locals/--max-globals options; if exhausted, go to mem
+* TODO: should this be legal: f: f32[4] -> f32, rec |prev| return (f prev)
+* TODO typecheck
+** is it possible to only type annotate arguments (and maybe return values) and have everything else be inferred?
+* TODO var names -> indices, SSA
+* DONE check for recursion
+** no mutual recursion in graph code
+* TODO mutual recursion in imperative code only with `wait` inbetween
+* TODO constant folding (also fold compile time constants like $voices)
+* TODO compiler time expression expansion (range, fold, lvalue index expressions must be computable at compile time)
+* TODO cluster common subexpressions
+* TODO if cluster referenced only once, inline
+** have a configurable max inline function size
+** optimization must happen after inlining
+*** simplify, fusion rules, find fixpoint
+**** fusion .e.g fold . map = fold with folded map inside :D
+**** (ERec _ _ _ (EConst n)) = n
+**** (ESelect [a, b, c])[1] = b
+**** (App (Abs f)) = can inline if feasible
+**** (Abs _ -> let b = xs in b) = (Abs _ -> xs) (bust this should be handled by inline-if-used-only-once rule)
+* TODO if something is not referenced in delay, don't alloc delay box and compute it lazily in e.g. select
+** e.g. bindings that do not reference the recusive head can be outside the rec block
+* TODO codegen
+** choice strategy: for small choice tables (e.g. < 5) use ifs
+** two targets: WASM and C
+* TODO MCP server with retrieve-syntax, retrieve-type, retrieve-source, retrieve-docs, etc
+* TODO LSP server

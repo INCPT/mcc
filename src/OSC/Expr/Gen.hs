@@ -3,7 +3,7 @@
 
 module OSC.Expr.Gen where
 
-import OSC.Ctx
+import OSC.Codegen
 import OSC.Expr
 
 import Test.QuickCheck

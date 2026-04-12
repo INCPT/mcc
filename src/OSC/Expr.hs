@@ -24,8 +24,8 @@ import qualified Data.Map as M
 import Data.Set (Set)
 import qualified Data.Set as S
 
-import OSC.Ctx hiding (push, pop)
-import OSC.Call
+import OSC.Codegen hiding (push, pop)
+import OSC.Codegen.Backend
 
 import Debug.Trace
 
@@ -572,15 +572,15 @@ t2 = do
   where
     Right et' = infer et
     ces = toCExpr et'
-    (CAbs _ fr, funcRefMap, genv) = compile3 ces
+    (CAbs _ fr, funcRefMap, genv) = compileExpr ces
     ir = toplevel genv.globals funcRefMap fr
 
-t3 = fmap compile2 ces
+t3 = fmap compileExprs ces
   where
     es' = inferMany es
     ces = fmap (M.fromList . fmap (fmap toCExpr)) es'
 
-t4 = fmap compile3 ces
+t4 = fmap compileExpr ces
   where
     et' = infer et
     ces = fmap toCExpr et'

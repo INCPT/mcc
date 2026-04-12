@@ -10,7 +10,7 @@
 {-# LANGUAGE TypeAbstractions #-}
 {-# LANGUAGE TypeApplications #-}
 
-module OSC.Ctx where
+module OSC.Codegen where
 
 import Data.Bifunctor (first, second)
 import Data.Data (Typeable, Data)
@@ -726,8 +726,8 @@ markPureExpressions = fmap go
 
 --------------------------------------------------------------------------------
 
-compile2 :: Map Ident (CExpr Abs) -> (Map FuncRef (Set Ident), Map Ident (CExpr FuncRef), Map FuncRef Func, GlobalsEnv)
-compile2 toplevelMap = runUnique $ do
+compileExprs :: Map Ident (CExpr Abs) -> (Map FuncRef (Set Ident), Map Ident (CExpr FuncRef), Map FuncRef Func, GlobalsEnv)
+compileExprs toplevelMap = runUnique $ do
   let (toplevelMap', env) = flip ST.runState (AbsEnv mempty 0) $ traverse gatherAbstractions toplevelMap
   let freeVarMap = gatherFreeVars env.funcRefMap
 
@@ -738,20 +738,8 @@ compile2 toplevelMap = runUnique $ do
 
   pure (freeVarMap, toplevelMap', optimize funcRefMap, genv)
 
-compile :: Map Ident (CExpr Abs) -> (Map Ident (CExpr FuncRef), Map FuncRef Func, GlobalsEnv)
-compile toplevelMap = runUnique $ do
-  let (toplevelMap', env) = flip ST.runState (AbsEnv mempty 0) $ traverse gatherAbstractions toplevelMap
-  let freeVarMap = gatherFreeVars env.funcRefMap
-
-  (funcRefMap, genv) <- markCapturedBindings freeVarMap env.funcRefMap
-  
-  -- TODO
-  let optimize = id
-
-  pure (toplevelMap', optimize funcRefMap, genv)
-
-compile3 :: CExpr Abs -> (CExpr FuncRef, Map FuncRef Func, GlobalsEnv)
-compile3 expr = runUnique $ do
+compileExpr :: CExpr Abs -> (CExpr FuncRef, Map FuncRef Func, GlobalsEnv)
+compileExpr expr = runUnique $ do
   let (expr', env) = flip ST.runState (AbsEnv mempty 0) $ gatherAbstractions expr
   let freeVarMap = gatherFreeVars env.funcRefMap
 
