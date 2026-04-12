@@ -200,9 +200,9 @@ ppExprL (EAbs t params bs body) =
     singleLine = T.unpack $ renderStrict $ layoutCompact ppAbsSingleline
     shouldMultiline = length singleLine > 50
 
-    ppAbsSingleline = parens $ "fn" <+> ppParams <+> ppBindingsInline bs <+> ppExprL body
+    ppAbsSingleline = parens $ "fn" <+> ppParams <> colon <+> ppRetType <+> ppBindingsInline bs <+> ppExprL body
     ppAbsMultiline = parens $ vsep
-      [ "fn" <+> ppParams
+      [ "fn" <+> ppParams <> colon <+> ppRetType
       , ppBindingsMultiline bs
       , mempty
       , indent 2 (ppExprL body)
@@ -210,6 +210,7 @@ ppExprL (EAbs t params bs body) =
 
     ppParams = brackets (hsep (punctuate comma (zipWith ppParam params (paramTypes t))))
     ppParam (Ident n) pt = pretty n <> colon <+> pretty (showType pt)
+    ppRetType = pretty (showType (returnType t))
 
 ppExprL (EApp _ f args) = parens (ppExprL f <+> hsep (map ppExprL args))
 ppExprL (ESelect _ e idx) = ppExprL e <> brackets (ppExprL idx)
@@ -221,9 +222,9 @@ ppExprL (ERec t delay param bs body) =
     singleLine = T.unpack $ renderStrict $ layoutCompact ppRecSingleline
     shouldMultiline = length singleLine > 50
 
-    ppRecSingleline = parens $ "rec" <+> ppDelay <+> ppParam <+> ppBindingsInline bs <+> ppExprL body
+    ppRecSingleline = parens $ "rec" <+> ppDelay <+> ppParam <> colon <+> ppRetType <+> ppBindingsInline bs <+> ppExprL body
     ppRecMultiline = parens $ vsep
-      [ "rec" <+> ppDelay <+> ppParam
+      [ "rec" <+> ppDelay <+> ppParam <> colon <+> ppRetType
       , ppBindingsMultiline bs
       , mempty
       , indent 2 (ppExprL body)
@@ -232,6 +233,7 @@ ppExprL (ERec t delay param bs body) =
     ppDelay = "<delay =" <+> pretty delay <> ">"
     ppParam = brackets (ppParamName <> colon <+> pretty (showType t))
     ppParamName = case param of Ident n -> pretty n
+    ppRetType = pretty (showType t)
 
 ppBindingsInline :: [(Ident, Expr Type)] -> Doc ann
 ppBindingsInline [] = "{}"
