@@ -8,6 +8,7 @@
 module OSC.Expr where
 
 import Control.Monad (when)
+import Control.Monad.Trans.Class (lift)
 import qualified Control.Monad.Except as E
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
@@ -306,21 +307,13 @@ type Mem = Map Int Value
 data GenState = GenState
   { nextCell :: Int
   , initialMem :: Mem
-  , tick :: Mem -> Mem
   }
 
-type SimM = R.ReaderT Mem (ST.State [Value])
-type CircuitM = R.ReaderT (Map Ident (SimM Value)) (ST.State GenState)
+data SimEnv = SimEnv {- args -} [SimM] {- args env -} (M.Map Ident SimM)
+type SimM = R.ReaderT SimEnv (ST.State Mem) Value
+type CircuitM = R.ReaderT (Map Ident SimM) (ST.State GenState)
 
-pop :: SimM Value
-pop = ST.get >>= \stack -> case stack of
-  (h:t) -> ST.put t >> pure h
-  [] -> error "pop: empty stack"
-
-push :: Value -> SimM ()
-push v = ST.modify (v:)
-
-interpret :: Expr Type -> CircuitM (SimM Value)
+interpret :: Expr Type -> CircuitM SimM
 interpret (EConst n) = pure (pure $ VNumber n)
 interpret (EOp _ op a b) = do
   sima <- interpret a
@@ -418,12 +411,17 @@ interpret (EVar _ n) = do
     Nothing -> error $ "interpret: var not in scoope: " <> show n
 interpret (EAbs _ params bindings body) = mdo
   simbindings <- fmap M.fromList $ sequence $ mconcat
-    [ [ (p,) <$> pure pop | p <- params ]
+    [ [ (p,) <$> pure (R.ask >>= \(SimEnv _ env) -> env M.! p) | p <- params ]
     , [ fmap (n,) $ R.local (\env -> simbindings <> env) $ interpret bbody
       | (n, bbody) <- bindings
       ]
     ]
-  R.local (\env -> simbindings <> env) $ interpret body
+  simbody <- R.local (\env -> simbindings <> env) $ interpret body
+  pure $ R.local (\(SimEnv args env) -> SimEnv [] (M.fromList (zip params args) <> env)) simbody
+interpret (EApp _ f params) = do
+  simargs <- traverse interpret params
+  simf <- interpret f
+  pure $ R.local (\(SimEnv _ env) -> SimEnv simargs env) simf
 interpret (ESelect _ expr idx) = do
   simexpr <- interpret expr
   simidx <- interpret idx
@@ -434,22 +432,20 @@ interpret (ESelect _ expr idx) = do
       (VArr as, VNumber (I32 i')) -> pure (as !! i')
       (VArr as, VNumber (I64 i')) -> pure (as !! i')
       (e', i') -> error $ "ESelect: " <> show e' <> ", " <> show i'
-interpret (EApp _ f params) = do
-  simargs <- traverse interpret params
-  simf <- interpret f
-  pure $ do
-    sequence_ [ push =<< arg | arg <- simargs ]
-    simf
 interpret (ERec t delay param bindings body) = mdo
   nextCell <- ST.gets (.nextCell)
-  ST.modify $ \st -> st { nextCell = st.nextCell + 2 }
 
   let delayBufferIdx = nextCell
   let delayIndexIdx = nextCell + 1
 
   let initialValue = alloc (TArr t (delay + 1))
 
-  let delayLine offset = R.ask >>= \mem -> do
+  ST.modify $ \st -> st
+    { nextCell = st.nextCell + 2
+    , initialMem = M.fromList [(delayBufferIdx, initialValue), (delayIndexIdx, VNumber (I32 (delay - 1)))] <> st.initialMem
+    }
+
+  let delayLine offset = ST.get >>= \mem -> do
         let delayBuffer = lookupE "delayBuffer" mem delayBufferIdx
         let delayIdx = lookupE "delayIdx" mem delayIndexIdx
         case (delayBuffer, delayIdx) of
@@ -465,25 +461,28 @@ interpret (ERec t delay param bindings body) = mdo
 
   simbody <- R.local (\env -> simbindings <> env) $ interpret body
 
-  ST.modify $ \st -> st
-    { initialMem = M.fromList [(delayBufferIdx, initialValue), (delayIndexIdx, VNumber (I32 (delay - 1)))] <> st.initialMem
-    , tick = \mem -> let
-        mem' = st.tick mem
-        nextValue = ST.evalState (R.runReaderT simbody mem') []
+  pure $ do
+    env <- R.ask
+    mem <- ST.get
 
-        delayBuffer = lookupE "delayBuffer: tick" mem' delayBufferIdx
-        delayIndex = lookupE "delayIndex: tick" mem' delayIndexIdx
+    let (nextValue, mem') = ST.runState (R.runReaderT simbody env) mem
 
-        in case (delayBuffer, delayIndex) of
+    let delayBuffer = lookupE "delayBuffer: tick" mem' delayBufferIdx
+    let delayIndex = lookupE "delayIndex: tick" mem' delayIndexIdx
+
+    ST.put $ mconcat
+      -- Update delay lines
+      [ case (delayBuffer, delayIndex) of
           (VArr ds, VNumber (I32 i)) -> M.fromList
             [ (delayBufferIdx, VArr $ replace i nextValue ds)
             , (delayIndexIdx, VNumber (I32 ((i + 1) `mod` delay)))
             ]
-            <> mem'
           _ -> error "delayLine (this is a bug)"
-    }
 
-  pure (delayLine 0)
+      , mem'
+      ]
+
+    delayLine 0
   where
     replace i a as = take i as <> [a] <> drop (i + 1) as
 
@@ -495,18 +494,18 @@ interpret (ERec t delay param bindings body) = mdo
     alloc (TAbs _ _) = error "interpret: ERec: function in return type"
 
 tinterpretToList :: Expr Type -> [Value]
-tinterpretToList texpr = take 20 (go st.initialMem st.tick sim)
+tinterpretToList texpr = take 20 (go st.initialMem sim)
   where
-    go mem tick sim = ST.evalState (R.runReaderT sim mem) []:go (tick mem) tick sim
-    (sim, st) = ST.runState (R.runReaderT (interpret texpr) mempty) (GenState { nextCell = 0, initialMem = mempty, tick = id })
+    go mem sim = let (a, mem') = ST.runState (R.runReaderT sim (SimEnv [] mempty)) mem in a:go mem' sim
+    (sim, st) = ST.runState (R.runReaderT (interpret texpr) mempty) (GenState { nextCell = 0, initialMem = mempty })
 
 interpretToList :: Expr () -> [Value]
-interpretToList expr = take 20 (go st.initialMem st.tick sim)
+interpretToList expr = take 20 (go st.initialMem sim)
   where
-    go mem tick sim = ST.evalState (R.runReaderT sim mem) []:go (tick mem) tick sim
+    go mem sim = let (a, mem') = ST.runState (R.runReaderT sim (SimEnv [] mempty)) mem in a:go mem' sim
 
     Right texpr = infer expr
-    (sim, st) = ST.runState (R.runReaderT (interpret texpr) mempty) (GenState { nextCell = 0, initialMem = mempty, tick = id })
+    (sim, st) = ST.runState (R.runReaderT (interpret texpr) mempty) (GenState { nextCell = 0, initialMem = mempty })
 
 --------------------------------------------------------------------------------
 
@@ -534,6 +533,7 @@ et2 = ERec (TNumber TI64) 1 (Ident "a") [(Ident "b",ERec (TNumber TF32) 2 (Ident
 et3 = ERec (TArr (TNumber TI64) 4) 1 (Ident "x402") [(Ident "a809",EAbs (TAbs [] (TNumber TF64)) [] [] (EConst (F64 0.0))),(Ident "b267",EAbs (TAbs [TAbs [TNumber TF32,TNumber TI64] (TNumber TI64),TNumber TI64,TAbs [TNumber TI32] (TNumber TF32)] (TAbs [TNumber TI32] (TNumber TI64))) [Ident "x18",Ident "f549",Ident "g533"] [(Ident "g998",EConst (I64 0)),(Ident "b474",EArr (TArr (TAbs [TNumber TI32] (TNumber TF64)) 5) [EAbs (TAbs [TNumber TI32] (TNumber TF64)) [Ident "b901"] [(Ident "a680",EConst (I64 0)),(Ident "c189",EArr (TArr (TNumber TI32) 2) [EConst (I32 0),EConst (I32 0)])] (EConst (F64 0.0)),EAbs (TAbs [TNumber TI32] (TNumber TF64)) [Ident "f596"] [(Ident "a956",EConst (F32 0.48784024)),(Ident "b125",EVar (TNumber TI64) (Ident "g998"))] (EConst (F64 0.0)),EAbs (TAbs [TNumber TI32] (TNumber TF64)) [Ident "g339"] [(Ident "c769",EArr (TArr (TNumber TI64) 5) [EConst (I64 0),EConst (I64 0),EConst (I64 0),EConst (I64 0),EConst (I64 0)]),(Ident "y983",EConst (I64 0)),(Ident "z339",EConst (F32 0.0))] (EConst (F64 0.0)),EAbs (TAbs [TNumber TI32] (TNumber TF64)) [Ident "y58"] [(Ident "c980",EConst (F64 0.0)),(Ident "z285",EConst (I64 0))] (EVar (TNumber TF64) (Ident "c980")),EAbs (TAbs [TNumber TI32] (TNumber TF64)) [Ident "x724"] [(Ident "x898",EConst (I32 0))] (EConst (F64 0.0))]),(Ident "z782",EConst (I32 0))] (EAbs (TAbs [TNumber TI32] (TNumber TI64)) [Ident "b142"] [] (EVar (TNumber TI64) (Ident "f549"))))] (EArr (TArr (TNumber TI64) 4) [ESelect (TNumber TI64) (EVar (TArr (TNumber TI64) 4) (Ident "x402")) (EConst (I64 1)),ESelect (TNumber TI64) (EVar (TArr (TNumber TI64) 4) (Ident "x402")) (EConst (I32 3)),ESelect (TNumber TI64) (EVar (TArr (TNumber TI64) 4) (Ident "x402")) (EConst (I32 3)),ESelect (TNumber TI64) (EVar (TArr (TNumber TI64) 4) (Ident "x402")) (EConst (I32 0))])
 et4 = ERec (TArr (TNumber TI64) 3) 1 (Ident "z359") [] (ESelect (TNumber TI64) (EVar (TArr (TNumber TI64) 3) (Ident "z359")) (EConst (I64 1)))
 et6 = ERec (TNumber TI32) 5 (Ident "b845") [] (EOp (TNumber TI32) Add (EOp (TNumber TI32) Sub (EVar (TNumber TI32) (Ident "b845")) (EApp (TNumber TI32) (EAbs (TAbs [TArr (TArr (TNumber TI64) 3) 3,TNumber TF64,TNumber TF64] (TNumber TI32)) [Ident "y921",Ident "c86",Ident "y781"] [(Ident "b287",EConst (F64 0.0))] (EVar (TNumber TI32) (Ident "b845"))) [EArr (TArr (TArr (TNumber TI64) 3) 3) [EArr (TArr (TNumber TI64) 3) [EConst (I64 0),EConst (I64 0),EConst (I64 0)],EArr (TArr (TNumber TI64) 3) [EConst (I64 0),EConst (I64 0),EConst (I64 0)],EArr (TArr (TNumber TI64) 3) [EConst (I64 0),EConst (I64 0),EConst (I64 0)]],EConst (F64 (-1.0)),EApp (TNumber TF64) (EAbs (TAbs [] (TNumber TF64)) [] [(Ident "a365",EConst (I32 0)),(Ident "b194",EConst (I64 0)),(Ident "f861",EConst (F64 0.0))] (EConst (F64 0.0))) []])) (EOp (TNumber TI32) Add (EApp (TNumber TI32) (EAbs (TAbs [TNumber TF64] (TNumber TI32)) [Ident "c326"] [(Ident "a957",EArr (TArr (TNumber TF64) 4) [EConst (F64 0.0),EVar (TNumber TF64) (Ident "c326"),EConst (F64 0.0),EConst (F64 0.25970278568437655)]),(Ident "g306",EArr (TArr (TArr (TNumber TF32) 4) 1) [EArr (TArr (TNumber TF32) 4) [EConst (F32 0.0),EConst (F32 0.0),EConst (F32 0.0),EConst (F32 0.0)]])] (EConst (I32 0))) [EConst (F64 0.0)]) (ESelect (TNumber TI32) (EArr (TArr (TNumber TI32) 5) [EConst (I32 0),EConst (I32 0),EConst (I32 0),EConst (I32 0),EVar (TNumber TI32) (Ident "b845")]) (EConst (I32 1)))))
+et7 = EAbs (TAbs [] (TNumber TI32)) [] [(Ident "z319",EAbs (TAbs [TNumber TF32,TNumber TI32,TAbs [TNumber TI64,TNumber TF64,TNumber TI64] (TNumber TF64)] (TArr (TNumber TI64) 4)) [Ident "a872",Ident "c755",Ident "y791"] [(Ident "y378",EConst (F64 0.8033096516022166))] (ESelect (TArr (TNumber TI64) 4) (ERec (TArr (TArr (TNumber TI64) 4) 3) 5 (Ident "y66") [(Ident "b341",EArr (TArr (TNumber TF64) 5) [EConst (F64 0.0),EConst (F64 0.0),EConst (F64 0.0),EConst (F64 0.0),EConst (F64 0.0)]),(Ident "b930",EArr (TArr (TNumber TI64) 5) [EConst (I64 0),EConst (I64 0),EConst (I64 0),EConst (I64 0),EConst (I64 0)])] (EArr (TArr (TArr (TNumber TI64) 4) 3) [ESelect (TArr (TNumber TI64) 4) (EVar (TArr (TArr (TNumber TI64) 4) 3) (Ident "y66")) (EConst (I32 2)),ESelect (TArr (TNumber TI64) 4) (EVar (TArr (TArr (TNumber TI64) 4) 3) (Ident "y66")) (EConst (I64 0)),ESelect (TArr (TNumber TI64) 4) (EVar (TArr (TArr (TNumber TI64) 4) 3) (Ident "y66")) (EConst (I64 0))])) (EConst (I32 2))))] (EApp (TNumber TI32) (EAbs (TAbs [TNumber TI64,TNumber TI32,TNumber TF32] (TNumber TI32)) [Ident "z149",Ident "c131",Ident "b890"] [] (ERec (TNumber TI32) 3 (Ident "f16") [(Ident "c12",EArr (TArr (TAbs [] (TNumber TF32)) 2) [EAbs (TAbs [] (TNumber TF32)) [] [(Ident "y965",EArr (TArr (TAbs [TNumber TI64,TNumber TI64] (TNumber TI64)) 1) [EAbs (TAbs [TNumber TI64,TNumber TI64] (TNumber TI64)) [Ident "b971",Ident "z215"] [] (EConst (I64 0))]),(Ident "y967",EAbs (TAbs [] (TAbs [TNumber TF32,TNumber TF64] (TNumber TF64))) [] [(Ident "g602",EConst (F64 0.0))] (EAbs (TAbs [TNumber TF32,TNumber TF64] (TNumber TF64)) [Ident "g326",Ident "z635"] [] (EConst (F64 0.0))))] (EConst (F32 0.9454602)),EAbs (TAbs [] (TNumber TF32)) [] [(Ident "z928",EConst (I32 0))] (EConst (F32 0.0))])] (EOp (TNumber TI32) Sub (EOp (TNumber TI32) Add (EVar (TNumber TI32) (Ident "f16")) (EConst (I32 0))) (EVar (TNumber TI32) (Ident "c131"))))) [ESelect (TNumber TI64) (EArr (TArr (TNumber TI64) 5) [EConst (I64 0),EConst (I64 0),EConst (I64 0),EConst (I64 0),EConst (I64 0)]) (EConst (I32 2)),ERec (TNumber TI32) 5 (Ident "b515") [(Ident "x138",EConst (I32 (-1)))] (EOp (TNumber TI32) Add (EOp (TNumber TI32) Sub (EVar (TNumber TI32) (Ident "b515")) (EConst (I32 0))) (EConst (I32 0))),EOp (TNumber TF32) Sub (EConst (F32 1.0)) (EOp (TNumber TF32) Mul (EConst (F32 0.0)) (EConst (F32 0.0)))])
 
 t2 = do
   putStrLn "ALLOCS"
