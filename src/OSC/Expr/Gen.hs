@@ -75,6 +75,9 @@ genType depth
       retType <- genType (depth - 1)
       pure $ TAbs params retType
 
+genSimpleType :: Gen Type
+genSimpleType = TNumber <$> elements [TI32, TF32, TI64, TF64]
+
 -- | Generate a type that doesn't contain functions (for ERec)
 genNonFuncType :: Int -> Gen Type
 genNonFuncType depth
@@ -84,8 +87,6 @@ genNonFuncType depth
       , (1, genArrayType)
       ]
   where
-    genSimpleType = TNumber <$> elements [TI32, TF32, TI64, TF64]
-    
     genArrayType = do
       elemType <- genNonFuncType (depth - 1)
       len <- choose (1, 5)
@@ -334,7 +335,7 @@ genRec ctx recType = do
 -- | Arbitrary instance for Expr Type
 instance Arbitrary (Expr Type) where
   arbitrary = do
-    returnType <- genType 2
+    returnType <- genSimpleType
     genExprOfType emptyCtx (TAbs [] returnType)
   
   shrink (EConst (I32 n)) = [EConst (I32 n') | n' <- shrink n]
@@ -364,7 +365,9 @@ randomExpr = fmap tc $ arbitrary
 irandomExpr :: Gen (Either TypeError (Expr Type, [Value]))
 irandomExpr = fmap (fmap (\e -> (app e, tinterpretToList (app e))) . tc) $ arbitrary
   where
-    app e = (EApp (returnType (exprType e)) e [])
+    app e = case exprType e of
+      TAbs _ t -> EApp t e []
+      _ -> e
 
     tc :: Expr Type -> Either TypeError (Expr Type)
     tc = infer . fmap (const ()) . app
