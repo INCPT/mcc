@@ -11,6 +11,8 @@ import Control.Monad (replicateM)
 import qualified Data.Map as M
 import Data.Map (Map)
 
+-- TODO: shuffle bindings
+
 -- | Generate a random identifier
 genIdent :: Gen Ident
 genIdent = do
@@ -347,10 +349,12 @@ randomExpr = fmap tc $ arbitrary
     tc = infer . fmap (const ())
 
 irandomExpr :: Gen (Either TypeError (Expr Type, [Value]))
-irandomExpr = fmap (fmap (\e -> (e, tinterpretToList e)) . tc) $ arbitrary
+irandomExpr = fmap (fmap (\e -> (app e, tinterpretToList (app e))) . tc) $ arbitrary
   where
+    app e = (EApp (returnType (exprType e)) e [])
+
     tc :: Expr Type -> Either TypeError (Expr Type)
-    tc = infer . fmap (const ())
+    tc = infer . fmap (const ()) . app
 
 -- | Generate a random expression of a specific type
 randomExprOfType :: Type -> Gen (Expr Type)
