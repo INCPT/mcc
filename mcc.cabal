@@ -43,6 +43,7 @@ library
       Microc.Utils
       OSC.Codegen
       OSC.Codegen.Backend
+      OSC.Codegen.Interpret
       OSC.Expr
       OSC.Expr.Gen
   other-modules:

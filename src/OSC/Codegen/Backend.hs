@@ -91,24 +91,6 @@ showBlock stmts = mconcat [ "  " <> line <> "\n" | stmt <- stmts, line <- lines 
 
 --------------------------------------------------------------------------------
 
--- INFORMAL SPECS
-
--- the calling convention is: simple values and references on the stack + a reference to where the result must be placed; the caller allocates the destination
-
--- for example when the function(x: i32, y: i32): i32[2][2] { return [[x, y], f(x + y)] } is called:
---   the caller allocates a flat i32 array with 2 * 2 elements
---   puts x and y on stack, calls function
---   when an array is returned we traverse each element and add its index into lens.to
---     the nested array traverses in turn ints elements and adds each one to lens.to
---       for example when coming to 'y' we'd be in the first element of the outer array and the second element of the inner (i.e. lens.to = [0, 1])
---       since 'y' is a value and can't be evaluated further we copy it using CopyConst or CopyRef to the destination slice (lens.to)
---     when calling f(x + y) its return value reference is computed as current_ret_reference + offset of element [0][1] into flat return array
---       this means essentially zero copying of data
---  on the other hand if we return a selection (e.g. f()[x][y]) (so f() is higher dimensional than the return type of the current function)
---    then space for the return value ret_val of f() is allocated, f called and a CopyRef operation (reference to ret_val, lens.from = [x][y]) => (current_ret_reference, lens.to = [...]) performed
-
--- NOTE: a literal array paired with a selection is a choice
-
 data Env = Env
   { bindings :: Map Ident Ref
   , ret :: Ref
@@ -420,6 +402,3 @@ toplevel globals funcRefMap fr = IR
 -- DONE: generate SAbs code; pretty straightforward
 -- DONE: replace refs to params with RArg 0, 1, 2 etc
 -- RJCT: rec and oversample take a lambda abstraction (or a Var pointing to a lambda abstraction)
-
---------------------------------------------------------------------------------
-
