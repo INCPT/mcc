@@ -1,4 +1,8 @@
+{-# LANGUAGE OverloadedRecordDot #-}
+
 module OSC.Codegen.Interpret where
+
+import Control.Monad (replicateM, forM_)
 
 import OSC.Codegen
 import OSC.Codegen.Backend
@@ -52,13 +56,16 @@ interpretToList steps ir = evalState (replicateM steps runTick) globalTable
         _ -> mapM_ (executeInstruction args) thn
 
     executeInstruction args (SCall funcRef argRefs retRef) = do
-      VNumber (I32 frIdx) <- readRef args funcRef
-      let fr = FuncRef (fromIntegral frIdx)
-      let irFunc = ir.funcMap M.! fr
-      argVals <- mapM (readRef args) argRefs
-      let localTable = allocateVars irFunc.allocations
-      (retVal, localTable') <- lift $ runStateT (executeInstructions irFunc.instructions argVals RRet) localTable
-      writeRef args retRef retVal
+      v <- readRef args funcRef
+      case v of
+        VNumber (I32 frIdx) -> do
+          let fr = FuncRef (fromIntegral frIdx)
+          let irFunc = ir.funcMap M.! fr
+          argVals <- mapM (readRef args) argRefs
+          let localTable = allocateVars irFunc.allocations
+          (retVal, _) <- lift $ runStateT (executeInstructions irFunc.instructions argVals RRet) localTable
+          writeRef args retRef retVal
+        _ -> error $ "readRef: expected i32: " <> show v
 
     executeInstruction args (SBinOp op aRef bRef resRef) = do
       aVal <- readRef args aRef
@@ -78,9 +85,12 @@ interpretToList steps ir = evalState (replicateM steps runTick) globalTable
     readRef _ (RVar idx) = readVar idx
     readRef _ (RArr _ idx) = readVar idx
     readRef args (RProj ref idxRef) = do
-      VNumber idx <- readRef args idxRef
-      val <- readRef args ref
-      pure (projectValue val idx)
+      v <- readRef args idxRef
+      case v of
+        VNumber idx -> do
+          val <- readRef args ref
+          pure (projectValue val idx)
+        _ -> error $ "expected number: " <> show v
     readRef _ (RFuncRef (FuncRef i)) = pure (VNumber (I32 (fromIntegral i)))
     readRef _ (RFuncRefRef idx) = readVar idx
 
@@ -88,10 +98,13 @@ interpretToList steps ir = evalState (replicateM steps runTick) globalTable
     writeRef _ (RVar idx) val = writeVar idx val
     writeRef _ (RArr _ idx) val = writeVar idx val
     writeRef args (RProj ref idxRef) val = do
-      VNumber idx <- readRef args idxRef
-      oldVal <- readRef args ref
-      let newVal = updateValue oldVal idx val
-      writeRef args ref newVal
+      v <- readRef args idxRef
+      case v of
+        VNumber idx -> do
+          oldVal <- readRef args ref
+          let newVal = updateValue oldVal idx val
+          writeRef args ref newVal
+        _ -> error $ "expected number: " <> show v
     writeRef _ _ _ = error "writeRef: invalid destination"
 
     readVar :: Idx -> StateT VarTable (State VarTable) Value
@@ -125,10 +138,10 @@ interpretToList steps ir = evalState (replicateM steps runTick) globalTable
     applyOp Sub (VNumber (I64 a)) (VNumber (I64 b)) = VNumber (I64 (a - b))
     applyOp Sub (VNumber (F32 a)) (VNumber (F32 b)) = VNumber (F32 (a - b))
     applyOp Sub (VNumber (F64 a)) (VNumber (F64 b)) = VNumber (F64 (a - b))
-    applyOp Mult (VNumber (I32 a)) (VNumber (I32 b)) = VNumber (I32 (a * b))
-    applyOp Mult (VNumber (I64 a)) (VNumber (I64 b)) = VNumber (I64 (a * b))
-    applyOp Mult (VNumber (F32 a)) (VNumber (F32 b)) = VNumber (F32 (a * b))
-    applyOp Mult (VNumber (F64 a)) (VNumber (F64 b)) = VNumber (F64 (a * b))
+    applyOp Mul (VNumber (I32 a)) (VNumber (I32 b)) = VNumber (I32 (a * b))
+    applyOp Mul (VNumber (I64 a)) (VNumber (I64 b)) = VNumber (I64 (a * b))
+    applyOp Mul (VNumber (F32 a)) (VNumber (F32 b)) = VNumber (F32 (a * b))
+    applyOp Mul (VNumber (F64 a)) (VNumber (F64 b)) = VNumber (F64 (a * b))
     applyOp Div (VNumber (I32 a)) (VNumber (I32 b)) = VNumber (I32 (a `div` b))
     applyOp Div (VNumber (I64 a)) (VNumber (I64 b)) = VNumber (I64 (a `div` b))
     applyOp Div (VNumber (F32 a)) (VNumber (F32 b)) = VNumber (F32 (a / b))

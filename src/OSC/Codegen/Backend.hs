@@ -44,9 +44,9 @@ data Ref
 
   | RConst Number
 
-  | RVar Idx -- either a function local var index (e.g. in function f() { int a; float b; } would be locals with index 0 and 1) or an index into a global var table
+  | RVar Idx
 
-  | RArr Type Idx -- global base address of array in a linear memory layout
+  | RArr Type Idx
   | RProj {- source/dest -} Ref {- index -} Ref -- projection from or into array
 
   | RFuncRef FuncRef -- index into a global function table
