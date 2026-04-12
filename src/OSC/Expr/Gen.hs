@@ -243,9 +243,22 @@ genAbs ctx paramTypes retType = do
   pure $ EAbs (TAbs paramTypes retType) paramNames bindings body
 
 -- | Generate a list of bindings where each can reference previous ones
+-- The bindings are shuffled so earlier bindings may reference later ones
 genBindings :: GenCtx -> Int -> Gen ([(Ident, Expr Type)], GenCtx)
 genBindings ctx 0 = pure ([], ctx)
 genBindings ctx n = do
+  -- Generate all bindings in dependency order
+  (bindings, finalCtx) <- genBindingsInOrder ctx n
+  
+  -- Shuffle the bindings
+  shuffledBindings <- shuffle bindings
+  
+  pure (shuffledBindings, finalCtx)
+
+-- | Generate bindings in dependency order (helper for genBindings)
+genBindingsInOrder :: GenCtx -> Int -> Gen ([(Ident, Expr Type)], GenCtx)
+genBindingsInOrder ctx 0 = pure ([], ctx)
+genBindingsInOrder ctx n = do
   -- Generate a unique binding name (not already in context)
   bindingName <- genUniqueIdentNotIn (M.keys $ availableVars ctx)
   bindingType <- genType 2
@@ -256,7 +269,7 @@ genBindings ctx n = do
   let newCtx = withVar bindingName bindingType ctx
   
   -- Generate remaining bindings
-  (restBindings, finalCtx) <- genBindings newCtx (n - 1)
+  (restBindings, finalCtx) <- genBindingsInOrder newCtx (n - 1)
   
   pure ((bindingName, bindingExpr) : restBindings, finalCtx)
 
