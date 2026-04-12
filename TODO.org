@@ -1,3 +1,4 @@
+* TODO rdtable, rwtable
 * DONE shuffle bindings in Gen
 * TODO binary tree if
 * TODO: allow simple arithmetic in range |i| syntax
