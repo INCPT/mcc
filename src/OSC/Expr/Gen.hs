@@ -11,8 +11,6 @@ import Control.Monad (replicateM)
 import qualified Data.Map as M
 import Data.Map (Map)
 
--- TODO: shuffle bindings
-
 -- | Generate non-zero numeric constants (heavily biased against 0)
 genNonZeroI32 :: Gen (Expr Type)
 genNonZeroI32 = EConst . I32 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]

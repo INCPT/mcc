@@ -1,1 +1,2 @@
-* shuffle bindings in Gen
+* DONE shuffle bindings in Gen
+* TODO binary tree if
