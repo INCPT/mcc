@@ -118,6 +118,9 @@ exprType (ERec t _ _ _ _) = t
 showExpr :: Expr Type -> String
 showExpr = T.unpack . renderStrict . layoutPretty defaultLayoutOptions . ppExpr
 
+showExprL :: Expr Type -> String
+showExprL = T.unpack . renderStrict . layoutPretty defaultLayoutOptions . ppExprL
+
 ppExpr :: Expr Type -> Doc ann
 ppExpr (EConst (I32 n)) = pretty n
 ppExpr (EConst (I64 n)) = pretty n
@@ -177,6 +180,74 @@ ppReturnExpr e = ppExprInline e
 
 ppExprInline :: Expr Type -> Doc ann
 ppExprInline = ppExpr
+
+--------------------------------------------------------------------------------
+-- Lisp-like pretty printer
+
+ppExprL :: Expr Type -> Doc ann
+ppExprL (EConst (I32 n)) = pretty n
+ppExprL (EConst (I64 n)) = pretty n
+ppExprL (EConst (F32 n)) = pretty n
+ppExprL (EConst (F64 n)) = pretty n
+ppExprL (EOp _ op a b) = parens (ppExprL a <+> pretty (showOp op) <+> ppExprL b)
+ppExprL (EArr _ es) = brackets (hsep (punctuate comma (map ppExprL es)))
+ppExprL (EVar _ (Ident n)) = pretty n
+ppExprL (EAbs t params bs body) =
+  if shouldMultiline
+    then ppAbsMultiline
+    else ppAbsSingleline
+  where
+    singleLine = T.unpack $ renderStrict $ layoutCompact ppAbsSingleline
+    shouldMultiline = length singleLine > 50
+
+    ppAbsSingleline = parens $ "fn" <+> ppParams <+> ppBindingsInline bs <+> ppExprL body
+    ppAbsMultiline = parens $ vsep
+      [ "fn" <+> ppParams
+      , ppBindingsMultiline bs
+      , mempty
+      , indent 2 (ppExprL body)
+      ]
+
+    ppParams = brackets (hsep (punctuate comma (zipWith ppParam params (paramTypes t))))
+    ppParam (Ident n) pt = pretty n <> colon <+> pretty (showType pt)
+
+ppExprL (EApp _ f args) = parens (ppExprL f <+> hsep (map ppExprL args))
+ppExprL (ESelect _ e idx) = ppExprL e <> brackets (ppExprL idx)
+ppExprL (ERec t delay param bs body) =
+  if shouldMultiline
+    then ppRecMultiline
+    else ppRecSingleline
+  where
+    singleLine = T.unpack $ renderStrict $ layoutCompact ppRecSingleline
+    shouldMultiline = length singleLine > 50
+
+    ppRecSingleline = parens $ "rec" <+> ppDelay <+> ppParam <+> ppBindingsInline bs <+> ppExprL body
+    ppRecMultiline = parens $ vsep
+      [ "rec" <+> ppDelay <+> ppParam
+      , ppBindingsMultiline bs
+      , mempty
+      , indent 2 (ppExprL body)
+      ]
+
+    ppDelay = "<delay =" <+> pretty delay <> ">"
+    ppParam = brackets (ppParamName <> colon <+> pretty (showType t))
+    ppParamName = case param of Ident n -> pretty n
+
+ppBindingsInline :: [(Ident, Expr Type)] -> Doc ann
+ppBindingsInline [] = "{}"
+ppBindingsInline bs = braces (hsep (punctuate comma [ ppBinding n e | (n, e) <- bs ]))
+  where
+    ppBinding (Ident n) e = pretty n <+> ppExprL e
+
+ppBindingsMultiline :: [(Ident, Expr Type)] -> Doc ann
+ppBindingsMultiline [] = indent 2 "{}"
+ppBindingsMultiline bs = indent 2 $ vsep
+  [ "{"
+  , indent 2 $ vsep [ ppBinding n e | (n, e) <- bs ]
+  , "}"
+  ]
+  where
+    ppBinding (Ident n) e = pretty n <+> ppExprL e
 
 --------------------------------------------------------------------------------
 
