@@ -324,6 +324,9 @@ indexableType (CVar t _) = t
 indexableType (CApp t _ _) = t
 indexableType (CRec t _ _ _ _) = t
 
+transformCExpr :: (CIndexable b -> CIndexable b) -> (CExpr a -> CExpr b) -> CExpr a -> CExpr b
+transformCExpr = undefined
+
 --------------------------------------------------------------------------------
 
 showAbs :: Show abs => [Ident] -> [(Ident, AllocRegion, CExpr abs)] -> CExpr abs -> String
