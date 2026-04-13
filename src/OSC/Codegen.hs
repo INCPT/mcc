@@ -183,7 +183,8 @@ transformExpr
   -> (Expr lam' sel' t -> Expr lam' sel' t)
   -> Expr lam sel t
   -> Expr lam' sel' t
-transformExpr transformLam transformSel transformExpr = undefined
+transformExpr transformLam transformSel transformExpr' =
+  runIdentity . transformExprM (pure . transformLam) (pure . transformSel) (pure . transformExpr')
 
 --------------------------------------------------------------------------------
 
