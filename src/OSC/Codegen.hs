@@ -330,46 +330,34 @@ transformCExpr transformAbs transformIndexable transformExpr = go
   where
     go :: CExpr a -> m (CExpr b)
     go expr = case expr of
-      CSel t choices selector -> do
-        choices' <- traverse go choices
-        selector' <- go selector
-        transformExpr (CSel t choices' selector')
+      CSel t choices selector ->
+        transformExpr =<< (CSel t <$> traverse go choices <*> go selector)
       
-      CIndexed idxs indexable -> do
-        idxs' <- traverse (\(t, e) -> (t,) <$> go e) idxs
-        indexable' <- goIndexable indexable
-        transformExpr (CIndexed idxs' indexable')
+      CIndexed idxs indexable ->
+        transformExpr =<< (CIndexed <$> traverse (\(t, e) -> (t,) <$> go e) idxs <*> goIndexable indexable)
       
-      CArr t exprs -> do
-        exprs' <- traverse go exprs
-        transformExpr (CArr t exprs')
+      CArr t exprs ->
+        transformExpr =<< (CArr t <$> traverse go exprs)
       
       CConst n ->
         transformExpr (CConst n)
       
-      COp t op a b -> do
-        a' <- go a
-        b' <- go b
-        transformExpr (COp t op a' b')
+      COp t op a b ->
+        transformExpr =<< (COp t op <$> go a <*> go b)
       
-      CAbs t abs -> do
-        abs' <- transformAbs t abs
-        transformExpr (CAbs t abs')
+      CAbs t abs ->
+        transformExpr =<< (CAbs t <$> transformAbs t abs)
 
     goIndexable :: CIndexable a -> m (CIndexable b)
     goIndexable indexable = case indexable of
       CVar t ident ->
         transformIndexable (CVar t ident)
       
-      CApp t f args -> do
-        f' <- go f
-        args' <- traverse go args
-        transformIndexable (CApp t f' args')
+      CApp t f args ->
+        transformIndexable =<< (CApp t <$> go f <*> traverse go args)
       
-      CRec t delay param bindings body -> do
-        bindings' <- traverse (\(n, region, e) -> (n, region,) <$> go e) bindings
-        body' <- go body
-        transformIndexable (CRec t delay param bindings' body')
+      CRec t delay param bindings body ->
+        transformIndexable =<< (CRec t delay param <$> traverse (\(n, region, e) -> (n, region,) <$> go e) bindings <*> go body)
 
 --------------------------------------------------------------------------------
 
