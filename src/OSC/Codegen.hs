@@ -113,7 +113,19 @@ data Expr lam sel t
   deriving (Functor, Show, Data)
 
 descendExpr :: (Expr lam sel t -> Maybe b) -> Expr lam sel t -> [b]
-descendExpr = undefined
+descendExpr f expr = case f expr of
+  Just b -> [b]
+  Nothing -> case expr of
+    EConst _ -> []
+    EOp _ _ a b -> descendExpr f a <> descendExpr f b
+    EArr _ exprs -> mconcat (fmap (descendExpr f) exprs)
+    EVar _ _ -> []
+    EAbs _ _ bindings body -> mconcat (fmap (descendExpr f . snd) bindings) <> descendExpr f body
+    EAbs2 _ _ -> []
+    EApp _ func args -> descendExpr f func <> mconcat (fmap (descendExpr f) args)
+    ESelect _ e idx -> descendExpr f e <> descendExpr f idx
+    ESelect2 _ _ -> []
+    ERec _ _ _ bindings body -> mconcat (fmap (descendExpr f . snd) bindings) <> descendExpr f body
 
 exprType :: Expr lam sel Type -> Type
 exprType (EConst n) = numberType n
