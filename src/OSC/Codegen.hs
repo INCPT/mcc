@@ -325,6 +325,12 @@ indexableType (CVar t _) = t
 indexableType (CApp t _ _) = t
 indexableType (CRec t _ _ _ _) = t
 
+universeCExpr :: CExpr a -> [CExpr a]
+universeCExpr = undefined
+
+universeCIndexable :: CExpr a -> [CIndexable a]
+universeCIndexable = undefined
+
 transformCExprM :: forall a b m. Monad m => (Type -> a -> m b) -> (CIndexable b -> m (CIndexable b)) -> (CExpr b -> m (CExpr b)) -> CExpr a -> m (CExpr b)
 transformCExprM transformAbs transformIndexable transformExpr = go
   where
@@ -513,7 +519,11 @@ gatherAbstractions = transformCExprM transformAbs pure pure
     transformAbs t (Abs params bindings body) = do
       fr <- FuncRef <$> ST.gets (.nextFuncRef)
       ST.modify $ \st -> st { nextFuncRef = st.nextFuncRef + 1 }
-      ST.modify $ \st -> st { funcRefMap = M.insert fr (Func t params bindings body) st.funcRefMap }
+
+      bindings' <- sequenceA [ (n, region,) <$> gatherAbstractions bbody | (n, region, bbody) <- bindings ]
+      body' <- gatherAbstractions body
+
+      ST.modify $ \st -> st { funcRefMap = M.insert fr (Func t params bindings' body') st.funcRefMap }
       pure fr
 
 -- | Compute the free variables for each abstraction in the function map.
