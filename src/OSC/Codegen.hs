@@ -82,6 +82,12 @@ data UOp = Sqrt | Abs' | Neg | Ceil | Floor | Trunc | Nearest
          | Extend | Wrap | Convert | Demote | Promote | Reinterpret
   deriving (Eq, Show)
 
+data Selection t = Selection (Expr Selection t) (Expr Selection t)
+
+data FlatSelection t
+  = FlatSelectionLHS [Expr FlatSelection t] (Expr FlatSelection t)
+  | FlatSelectionRHS (Expr FlatSelection t) [Expr FlatSelection t]
+
 data Expr sel t
   = EConst Number
   | EOp t Op (Expr sel t) (Expr sel t) -- both args and the result are simple types
@@ -94,6 +100,7 @@ data Expr sel t
   | EApp t (Expr sel t) [Expr sel t]
 
   | ESelect t (Expr sel t) {- selector -} (Expr sel t)
+  | ESelect2 t (sel t)
 
   -- NOTE: The (return) type of a recursive expression can not contain functions
   -- in order to simplify the logic and not require an initial value. It wouldn't make
@@ -102,6 +109,7 @@ data Expr sel t
   -- NOTE: Bindings will be in topsort order after typechecking
   | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr sel t)] {- body -} (Expr sel t)
   deriving (Functor, Show, Data)
+
 
 exprType :: Expr sel Type -> Type
 exprType (EConst n) = numberType n
@@ -451,7 +459,7 @@ showOp Rem = "rem"
 
 --------------------------------------------------------------------------------
 
-toC :: Monad m => CIndexable Abs -> StackM (Type, Expr Type) m (CExpr Abs)
+toC :: Monad m => CIndexable Abs -> StackM (Type, Expr sel Type) m (CExpr Abs)
 toC e = do
   idxs <- ST.get
   pure $ CIndexed (map (second toCExpr) idxs) e
