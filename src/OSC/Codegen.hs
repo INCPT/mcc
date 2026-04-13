@@ -6,6 +6,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeAbstractions #-}
@@ -643,7 +644,7 @@ instance Monoid GlobalsEnv where mempty = GlobalsEnv mempty mempty
 --   - GlobalsEnv containing the substitution map and global variable types
 markCapturedBindings :: Map FuncRef (Set Ident) -> Map FuncRef Func -> Unique (Map FuncRef Func, GlobalsEnv)
 markCapturedBindings freeVarMap funcRefMap = do
-  (funcRefMapWithGlobalBindings, genv) <- W.runWriterT (traverse go funcRefMap)
+  (funcRefMapWithGlobalBindings, genv) <- W.runWriterT $ sequenceA (M.mapWithKey go funcRefMap)
   pure (M.mapWithKey (substituteVars genv.substMap) funcRefMapWithGlobalBindings, genv)
   where
     descendFunc :: (CIndexable FuncRef -> Maybe b) -> (CExpr FuncRef -> Maybe b) -> Func -> [b]
@@ -654,39 +655,49 @@ markCapturedBindings freeVarMap funcRefMap = do
           ]
       , descendCExpr fi fe body
       ]
+    
+    gatherRecFreeVars :: CExpr FuncRef -> Set Ident
+    gatherRecFreeVars expr = mconcat
+      [ vars \\ S.singleton n
+      | crec@(CRec _ _ n _ _) <- descendCExpr (\e -> case e of crec@(CRec {}) -> Just crec; _ -> Nothing) (const Nothing) expr
+      , vars <- descendCIndexable gatherVar gatherRec crec
+      ]
+      where
+        gatherVar (CVar _ n) = Just $ S.singleton n
+        gatherVar _ = Nothing
+
+        gatherRec e@(CIndexed _ (CRec {})) = Just $ gatherRecFreeVars e
+        gatherRec _ = Nothing
 
     -- Process a single function to create global bindings for captured parameters
-    go :: Func -> W.WriterT GlobalsEnv Unique Func
-    go abs@(Func t params bindings body) = do
+    go :: FuncRef -> Func -> W.WriterT GlobalsEnv Unique Func
+    go funcRef abs@(Func t params bindings body) = do
       -- Find all closures defined in this function and their free variables
       let freeVarsForClosure =
             [ (fr, fvs)
             | fr <- descendFunc (const Nothing) (\e -> case e of CAbs _ fr -> Just fr; _ -> Nothing) abs
             , Just fvs <- [ M.lookup fr freeVarMap ]
             ]
+
       -- Union of all free variables from nested closures
       let freeVars = mconcat (fmap snd freeVarsForClosure)
+      
+      -- Find all variables referenced from recursive blocks
+      let recFreeVars = mconcat [ vars | vars <- descendFunc (const Nothing) (Just . gatherRecFreeVars) abs ]
 
       -- Create fresh global names for each captured parameter
       capturedParams <- sequence
         [ (ptype, n,) <$> lift fresh
         | (ptype, n) <- zip (paramTypes ("markCapturedBindings: " <> show abs) t) params
-        , S.member n freeVars
+        , S.member n freeVars || S.member n recFreeVars
         ]
 
       -- Build substitution map: original param name -> fresh global name
       let paramSubsts = M.fromList [ (n, subst) | (_, n, subst) <- capturedParams ]
       
-      -- Find all variables referenced from recursive blocks
-      let recVars = S.fromList
-            [ n
-            | crec@(CRec _ _ _ _ _) <- descendFunc (\e -> case e of crec@(CRec _ _ _ _ _) -> Just crec; _ -> Nothing) (const Nothing) abs
-            , CVar _ n <- universeCIndexableFromIndexable crec
-            ]
-      
       -- Update bindings: mark captured bindings as global, add new global bindings for captured params
       let bindings' = mconcat
-            [ [ if S.member n freeVars || S.member n recVars then (n, AGlobal, body) else (n, r, body)
+            [ [ if S.member n freeVars || S.member n recFreeVars then (n, AGlobal, body) else (n, r, body)
               | (n, r, body) <- bindings
               ]
             , [ (subst, AGlobal, CIndexed [] (CVar t n)) | (t, n, subst) <- capturedParams ]
@@ -698,7 +709,7 @@ markCapturedBindings freeVarMap funcRefMap = do
             -- For each closure and each of its free variables that's a captured param,
             -- record the substitution that should be applied to that closure
             [ (fr, M.singleton fv subst)
-            | (fr, fvs) <- freeVarsForClosure
+            | (fr, fvs) <- (funcRef, recFreeVars):freeVarsForClosure
             , fv <- S.toList fvs
             , Just subst <- [ M.lookup fv paramSubsts ]
             ]
