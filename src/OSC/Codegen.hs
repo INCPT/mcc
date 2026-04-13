@@ -82,28 +82,28 @@ data UOp = Sqrt | Abs' | Neg | Ceil | Floor | Trunc | Nearest
          | Extend | Wrap | Convert | Demote | Promote | Reinterpret
   deriving (Eq, Show)
 
-data Expr t
+data Expr sel t
   = EConst Number
-  | EOp t Op (Expr t) (Expr t) -- both args and the result are simple types
-  | EArr t [Expr t]
+  | EOp t Op (Expr sel t) (Expr sel t) -- both args and the result are simple types
+  | EArr t [Expr sel t]
 
   | EVar t Ident
 
   -- NOTE: Bindings will be in topsort order after typechecking
-  | EAbs Type {- params -} [Ident] {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
-  | EApp t (Expr t) [Expr t]
+  | EAbs Type {- params -} [Ident] {- bindings -} [(Ident, Expr sel t)] {- body -} (Expr sel t)
+  | EApp t (Expr sel t) [Expr sel t]
 
-  | ESelect t (Expr t) {- selector -} (Expr t)
+  | ESelect t (Expr sel t) {- selector -} (Expr sel t)
 
   -- NOTE: The (return) type of a recursive expression can not contain functions
   -- in order to simplify the logic and not require an initial value. It wouldn't make
   -- much sense generally anyway.
 
   -- NOTE: Bindings will be in topsort order after typechecking
-  | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
+  | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr sel t)] {- body -} (Expr sel t)
   deriving (Functor, Show, Data)
 
-exprType :: Expr Type -> Type
+exprType :: Expr sel Type -> Type
 exprType (EConst n) = numberType n
 exprType (EOp t _ _ _) = t
 exprType (EArr t _) = t
@@ -115,13 +115,13 @@ exprType (ERec t _ _ _ _) = t
 
 --------------------------------------------------------------------------------
 
-showExpr :: Expr Type -> String
+showExpr :: Expr sel Type -> String
 showExpr = T.unpack . renderStrict . layoutPretty defaultLayoutOptions . ppExpr
 
-showExprL :: Expr Type -> String
+showExprL :: Expr sel Type -> String
 showExprL = T.unpack . renderStrict . layoutPretty defaultLayoutOptions . ppExprL
 
-ppExpr :: Expr Type -> Doc ann
+ppExpr :: Expr sel Type -> Doc ann
 ppExpr (EConst (I32 n)) = pretty n
 ppExpr (EConst (I64 n)) = pretty n
 ppExpr (EConst (F32 n)) = pretty n
@@ -149,20 +149,20 @@ ppExpr (ERec t delay param bs body) =
   where
     ppParam (Ident n) = pretty n
 
-ppOp :: Op -> Expr Type -> Expr Type -> Doc ann
+ppOp :: Op -> Expr sel Type -> Expr sel Type -> Doc ann
 ppOp op a b = parens (ppExprInline a <+> pretty (showOp op) <+> ppExprInline b)
 
-ppApp :: Expr Type -> [Expr Type] -> Doc ann
+ppApp :: Expr sel Type -> [Expr sel Type] -> Doc ann
 ppApp f args = ppFunc f <> parens (hsep (punctuate comma (map ppExprInline args)))
   where
     ppFunc e@(EAbs _ _ _ _) = parens (ppExprInline e)
     ppFunc e@(ERec _ _ _ _ _) = parens (ppExprInline e)
     ppFunc e = ppExprInline e
 
-ppSelect :: Expr Type -> Expr Type -> Doc ann
+ppSelect :: Expr sel Type -> Expr sel Type -> Doc ann
 ppSelect e idx = ppExprInline e <> brackets (ppExprInline idx)
 
-ppAbsBody :: [(Ident, Expr Type)] -> Expr Type -> Doc ann
+ppAbsBody :: [(Ident, Expr sel Type)] -> Expr sel Type -> Doc ann
 ppAbsBody [] body = indent 2 $ "return" <+> ppReturnExpr body
 ppAbsBody bindings body = indent 2 $ vsep
   [ vsep [ ppBinding n expr | (n, expr) <- bindings ]
@@ -172,19 +172,19 @@ ppAbsBody bindings body = indent 2 $ vsep
   where
     ppBinding (Ident n) expr = pretty n <+> "=" <+> ppExprInline expr
 
-ppReturnExpr :: Expr Type -> Doc ann
+ppReturnExpr :: Expr sel Type -> Doc ann
 ppReturnExpr e@(EAbs _ _ _ _) = ppExprInline e
 ppReturnExpr e@(ERec _ _ _ _ _) = ppExprInline e
 ppReturnExpr (EOp _ op a b) = ppExprInline a <+> pretty (showOp op) <+> ppExprInline b
 ppReturnExpr e = ppExprInline e
 
-ppExprInline :: Expr Type -> Doc ann
+ppExprInline :: Expr sel Type -> Doc ann
 ppExprInline = ppExpr
 
 --------------------------------------------------------------------------------
 -- Lisp-like pretty printer
 
-ppExprL :: Expr Type -> Doc ann
+ppExprL :: Expr sel Type -> Doc ann
 ppExprL (EConst (I32 n)) = pretty n
 ppExprL (EConst (I64 n)) = pretty n
 ppExprL (EConst (F32 n)) = pretty n
@@ -235,13 +235,13 @@ ppExprL (ERec t delay param bs body) =
     ppParamName = case param of Ident n -> pretty n
     ppRetType = pretty (showType t)
 
-ppBindingsInline :: [(Ident, Expr Type)] -> Doc ann
+ppBindingsInline :: [(Ident, Expr sel Type)] -> Doc ann
 ppBindingsInline [] = "{}"
 ppBindingsInline bs = braces (hsep (punctuate comma [ ppBinding n e | (n, e) <- bs ]))
   where
     ppBinding (Ident n) e = pretty n <+> ppExprL e
 
-ppBindingsMultiline :: [(Ident, Expr Type)] -> Doc ann
+ppBindingsMultiline :: [(Ident, Expr sel Type)] -> Doc ann
 ppBindingsMultiline [] = indent 2 "{}"
 ppBindingsMultiline bs = indent 2 $ vsep
   [ "{"
@@ -459,7 +459,7 @@ toC e = do
 -- Pair each index with the appropriate array, so an an expression like
 -- `[[0, 1], [2, 3]][1][0]` turns into `[[0, 1][0], [2, 3][0]][1]`.
 -- This allows for easy constant index elimination and the generation of more efficient code.
-choiceTree :: Monad m => Expr Type -> StackM (Type, Expr Type) m (CExpr Abs)
+choiceTree :: Monad m => Expr sel Type -> StackM (Type, Expr sel Type) m (CExpr Abs)
 choiceTree (EConst n) = do
   idxs <- ST.get
   pure $ case idxs of
@@ -511,7 +511,7 @@ elimConstIndices = transformCExpr (\_ -> id) id go
 optimize :: CExpr Abs -> CExpr Abs
 optimize = elimConstIndices
 
-toCExpr :: Expr Type -> CExpr Abs
+toCExpr :: Expr sel Type -> CExpr Abs
 toCExpr = optimize . flip ST.evalState [] . choiceTree
 
 --------------------------------------------------------------------------------
