@@ -32,6 +32,8 @@ import qualified Control.Monad.Trans.Free as TF
 import Control.Monad.Trans.Free (FreeT (FreeT), FreeF)
 import OSC.Codegen
 
+import Debug.Trace
+
 data Idx = Local Int | Global Int deriving (Eq, Ord)
 
 instance Show Idx where
@@ -223,7 +225,7 @@ rhsvalue _ (CIndexed [] (CVar t n)) = do
   env <- ask
   case M.lookup n env.bindings of
     Just ref -> pure (t, ref)
-    _ -> error $ "rhsvalue: unknown global (this is a bug): " <> show n
+    _ -> error $ "rhsvalue: unknown global (this is a bug): " <> show n <> ", " <> show env.bindings
 rhsvalue region e@(CIndexed _ _) = allocAndStore region e
 
 --------------------------------------------------------------------------------

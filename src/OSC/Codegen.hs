@@ -103,7 +103,6 @@ data Expr t
   | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr t)] {- body -} (Expr t)
   deriving (Functor, Show, Data)
 
-
 exprType :: Expr Type -> Type
 exprType (EConst n) = numberType n
 exprType (EOp t _ _ _) = t
@@ -113,6 +112,8 @@ exprType (EAbs t _ _ _) = t
 exprType (EApp t _ _) = t
 exprType (ESelect t _ _) = t
 exprType (ERec t _ _ _ _) = t
+
+--------------------------------------------------------------------------------
 
 showExpr :: Expr Type -> String
 showExpr = T.unpack . renderStrict . layoutPretty defaultLayoutOptions . ppExpr
@@ -656,14 +657,14 @@ markCapturedBindings freeVarMap funcRefMap = do
       , descendCExpr fi fe body
       ]
     
-    gatherRecFreeVars :: CExpr FuncRef -> Set Ident
+    gatherRecFreeVars :: CExpr FuncRef -> ([(Ident, Type)], Set Ident)
     gatherRecFreeVars expr = mconcat
-      [ vars \\ S.singleton n
-      | crec@(CRec _ _ n _ _) <- descendCExpr (\e -> case e of crec@(CRec {}) -> Just crec; _ -> Nothing) (const Nothing) expr
-      , vars <- descendCIndexable gatherVar gatherRec crec
+      [ ((param, t):heads, vars \\ S.singleton param)
+      | crec@(CRec t _ param _ _) <- descendCExpr (\e -> case e of crec@(CRec {}) -> Just crec; _ -> Nothing) (const Nothing) expr
+      , (heads, vars) <- descendCIndexable gatherVar gatherRec crec
       ]
       where
-        gatherVar (CVar _ n) = Just $ S.singleton n
+        gatherVar (CVar _ n) = Just ([], S.singleton n)
         gatherVar _ = Nothing
 
         gatherRec e@(CIndexed _ (CRec {})) = Just $ gatherRecFreeVars e
@@ -683,7 +684,9 @@ markCapturedBindings freeVarMap funcRefMap = do
       let freeVars = mconcat (fmap snd freeVarsForClosure)
       
       -- Find all variables referenced from recursive blocks
-      let recFreeVars = mconcat [ vars | vars <- descendFunc (const Nothing) (Just . gatherRecFreeVars) abs ]
+      let (recHeads, recFreeVars) = mconcat [ vars | vars <- descendFunc (const Nothing) (Just . gatherRecFreeVars) abs ]
+
+      -- TODO: no need for this after uniquefying all identifiers (+ parameter names)
 
       -- Create fresh global names for each captured parameter
       capturedParams <- sequence
