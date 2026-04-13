@@ -13,10 +13,11 @@
 
 module OSC.Codegen where
 
+import Data.Functor.Identity (Identity (runIdentity))
 import Data.Bifunctor (first, second)
-import Data.Data (Typeable, Data)
 import Data.Functor.Identity
 import Data.List (intercalate, intersperse)
+import Data.Data (Data)
 import qualified Data.Graph as G
 import Data.Map (Map)
 import Data.String (IsString)
@@ -27,19 +28,15 @@ import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State.Lazy as ST
 import qualified Control.Monad.Trans.Writer.CPS as W
-import Data.Generics.Uniplate.Data
-import Data.Generics.Str
 import Prettyprinter
 import Prettyprinter.Render.Text (renderStrict)
 import qualified Data.Text as T
 
-data TNumber = TI32 | TF32 | TI64 | TF64 deriving (Eq, Data, Show)
+data TNumber = TI32 | TF32 | TI64 | TF64
+  deriving (Eq, Show, Data)
 
 data Type = TNumber TNumber | TArr Type {- length -} Int | TAbs [Type] Type
-  deriving (Show, Eq, Data)
-
--- instance Show Type where
---   show = showType
+  deriving (Eq, Show, Data)
 
 sizeOfType :: Type -> Int
 sizeOfType (TNumber TI32) = 4
@@ -72,17 +69,17 @@ numberType (I64 _) = TNumber TI64
 numberType (F64 _) = TNumber TF64
 
 newtype Ident = Ident String
-  deriving (Eq, Ord, Data, Show, IsString)
+  deriving (Eq, Ord, Show, IsString, Data)
 
 data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Rotl | Rotr 
         | Eq | Ne | Gt | Lt | GEt | LEt 
         | Min | Max | CopySign | Rem
-  deriving (Eq, Data, Show)
+  deriving (Eq, Show, Data)
 
 data UOp = Sqrt | Abs' | Neg | Ceil | Floor | Trunc | Nearest 
          | Clz | Ctz | Popcnt | Eqz
          | Extend | Wrap | Convert | Demote | Promote | Reinterpret
-  deriving (Eq, Data, Show)
+  deriving (Eq, Show)
 
 data Expr t
   = EConst Number
@@ -287,16 +284,15 @@ runStack = flip ST.evalState []
 -- this is basically return value ref propagation up the binding chain
 -- the most recent returned binding (or argument) gets tagged with "write to return value ref"
 
-newtype FuncRef = FuncRef Int deriving (Eq, Ord, Data, Show)
+newtype FuncRef = FuncRef Int deriving (Eq, Ord, Show)
 
 data AllocRegion = ALocal | AGlobal
-  deriving (Show, Data)
+  deriving Show
 
 data CIndexable abs
   = CVar Type Ident
   | CApp Type (CExpr abs) [CExpr abs]
   | CRec Type {- delay -} Int {- must be of type abstraction -} {- params -} Ident {- bindings -} [(Ident, AllocRegion, CExpr abs)] (CExpr abs)
-  deriving Data
 
 data CExpr abs
   = CSel Type [CExpr abs] {- selector -} (CExpr abs)
@@ -305,7 +301,6 @@ data CExpr abs
   | CConst Number
   | COp Type Op (CExpr abs) (CExpr abs)
   | CAbs Type abs
-  deriving Data
 
 cexprType :: CExpr abs -> Type
 cexprType (CSel t _ _) = t
@@ -325,67 +320,40 @@ indexableType (CVar t _) = t
 indexableType (CApp t _ _) = t
 indexableType (CRec t _ _ _ _) = t
 
+descendCExpr :: (CIndexable a -> Maybe b) -> (CExpr a -> Maybe b) -> CExpr a -> [b]
+descendCExpr fi fe expr = case fe expr of
+  Just b -> [b]
+  Nothing -> case expr of
+    CSel _ choices selector -> mconcat (fmap (descendCExpr fi fe) choices) <> descendCExpr fi fe selector
+    CIndexed idxs indexable -> mconcat [ descendCExpr fi fe e | (_, e) <- idxs ] <> descendCIndexable fi fe indexable
+    CArr _ exprs -> mconcat (fmap (descendCExpr fi fe) exprs)
+    CConst _ -> []
+    COp _ _ a b -> descendCExpr fi fe a <> descendCExpr fi fe b
+    CAbs _ _ -> []
+
+descendCIndexable :: (CIndexable a -> Maybe b) -> (CExpr a -> Maybe b) -> CIndexable a -> [b]
+descendCIndexable fi fe indexable = case fi indexable of
+  Just b -> [b]
+  Nothing -> case indexable of
+    CVar _ _ -> []
+    CApp _ f args -> descendCExpr fi fe f <> mconcat (fmap (descendCExpr fi fe) args)
+    CRec _ _ _ bindings body -> mconcat [ descendCExpr fi fe e | (_, _, e) <- bindings ] <> descendCExpr fi fe body
+
+tailrec :: (a -> [a]) -> [a] -> [a]
+tailrec _ [] = []
+tailrec f (h:t) = h:concatMap f t
+
 universeCExpr :: CExpr a -> [CExpr a]
-universeCExpr expr = expr : case expr of
-  CSel _ choices selector ->
-    mconcat (fmap universeCExpr choices) <> universeCExpr selector
-  
-  CIndexed idxs indexable ->
-    mconcat [ universeCExpr e | (_, e) <- idxs ] <> universeCExprFromIndexable indexable
-  
-  CArr _ exprs ->
-    mconcat (fmap universeCExpr exprs)
-  
-  CConst _ ->
-    []
-  
-  COp _ _ a b ->
-    universeCExpr a <> universeCExpr b
-  
-  CAbs _ _ ->
-    []
+universeCExpr = tailrec universeCExpr . descendCExpr (const Nothing) Just
 
 universeCExprFromIndexable :: CIndexable a -> [CExpr a]
-universeCExprFromIndexable indexable = case indexable of
-  CVar _ _ ->
-    []
-  
-  CApp _ f args ->
-    universeCExpr f <> mconcat (fmap universeCExpr args)
-  
-  CRec _ _ _ bindings body ->
-    mconcat [ universeCExpr e | (_, _, e) <- bindings ] <> universeCExpr body
+universeCExprFromIndexable = tailrec universeCExpr . descendCIndexable (const Nothing) Just
 
 universeCIndexable :: CExpr a -> [CIndexable a]
-universeCIndexable expr = case expr of
-  CSel _ choices selector ->
-    mconcat (fmap universeCIndexable choices) <> universeCIndexable selector
-  
-  CIndexed idxs indexable ->
-    indexable : mconcat [ universeCIndexable e | (_, e) <- idxs ] <> universeCIndexableFromIndexable indexable
-  
-  CArr _ exprs ->
-    mconcat (fmap universeCIndexable exprs)
-  
-  CConst _ ->
-    []
-  
-  COp _ _ a b ->
-    universeCIndexable a <> universeCIndexable b
-  
-  CAbs _ _ ->
-    []
+universeCIndexable = tailrec universeCIndexableFromIndexable . descendCExpr Just (const Nothing)
 
 universeCIndexableFromIndexable :: CIndexable a -> [CIndexable a]
-universeCIndexableFromIndexable indexable = case indexable of
-  CVar _ _ ->
-    []
-  
-  CApp _ f args ->
-    universeCIndexable f <> mconcat (fmap universeCIndexable args)
-  
-  CRec _ _ _ bindings body ->
-    mconcat [ universeCIndexable e | (_, _, e) <- bindings ] <> universeCIndexable body
+universeCIndexableFromIndexable = tailrec universeCIndexableFromIndexable . descendCIndexable Just (const Nothing)
 
 transformCExprM :: forall a b m. Monad m => (Type -> a -> m b) -> (CIndexable b -> m (CIndexable b)) -> (CExpr b -> m (CExpr b)) -> CExpr a -> m (CExpr b)
 transformCExprM transformAbs transformIndexable transformExpr = go
@@ -404,6 +372,9 @@ transformCExprM transformAbs transformIndexable transformExpr = go
       CVar t ident -> transformIndexable (CVar t ident)
       CApp t f args -> transformIndexable =<< (CApp t <$> go f <*> traverse go args)
       CRec t delay param bindings body -> transformIndexable =<< (CRec t delay param <$> traverse (\(n, region, e) -> (n, region,) <$> go e) bindings <*> go body)
+
+transformCExpr :: forall a b. (Type -> a -> b) -> (CIndexable b -> CIndexable b) -> (CExpr b -> CExpr b) -> CExpr a -> CExpr b
+transformCExpr f g h expr = runIdentity $ transformCExprM (\t a -> pure (f t a)) (pure . g) (pure . h) expr
 
 --------------------------------------------------------------------------------
 
@@ -523,7 +494,7 @@ choiceTree (ESelect t e idx) = do
 
 -- TODO: this must happen after inlining / CSE (otherwise things like let a = [1, 2, 3] in a[0] won't be optimized)
 elimConstIndices :: CExpr Abs -> CExpr Abs
-elimConstIndices = transform go
+elimConstIndices = transformCExpr (\_ -> id) id go
   where
     go :: CExpr Abs -> CExpr Abs
 
@@ -558,10 +529,9 @@ fresh = Unique $ do
 --------------------------------------------------------------------------------
 
 data Abs = Abs {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, CExpr Abs)] (CExpr Abs)
-  deriving Data
 
 data Func = Func Type {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, CExpr FuncRef)] (CExpr FuncRef)
-  deriving (Data, Show)
+  deriving Show
 
 data AbsEnv = AbsEnv
   { funcRefMap :: Map FuncRef Func
@@ -619,12 +589,12 @@ gatherFreeVars funcRefMap = freeVarMap
 
     allVars :: [(Ident, AllocRegion, CExpr FuncRef)] -> CExpr FuncRef -> Set Ident
     allVars bindings body = mconcat $ fmap mconcat
-      [ [ S.fromList [ n | CVar @FuncRef _ n <- universeBi body ] ]
-      , [ S.fromList [ n | (_, _, b) <- bindings, CVar @FuncRef _ n <- universeBi b ] ]
+      [ [ S.fromList [ n | CVar _ n <- universeCIndexable body ] ]
+      , [ S.fromList [ n | (_, _, b) <- bindings, CVar _ n <- universeCIndexable b ] ]
 
       -- Gather transient free vars (by lazily referencing freeVarMap; this works because no mutual recursion between bindings is allowed)
-      , [ fvs | CAbs _ fr <- universeBi body, Just fvs <- [ M.lookup fr freeVarMap ] ]
-      , [ fvs | (_, _, b) <- bindings, CAbs _ fr <- universeBi b, Just fvs <- [ M.lookup fr freeVarMap ] ]
+      , [ fvs | CAbs _ fr <- universeCExpr body, Just fvs <- [ M.lookup fr freeVarMap ] ]
+      , [ fvs | (_, _, b) <- bindings, CAbs _ fr <- universeCExpr b, Just fvs <- [ M.lookup fr freeVarMap ] ]
       ]
 
 --------------------------------------------------------------------------------
@@ -676,13 +646,22 @@ markCapturedBindings freeVarMap funcRefMap = do
   (funcRefMapWithGlobalBindings, genv) <- W.runWriterT (traverse go funcRefMap)
   pure (M.mapWithKey (substituteVars genv.substMap) funcRefMapWithGlobalBindings, genv)
   where
+    descendFunc :: (CIndexable FuncRef -> Maybe b) -> (CExpr FuncRef -> Maybe b) -> Func -> [b]
+    descendFunc fi fe (Func _ _ bindings body) = mconcat
+      [ mconcat
+          [ descendCExpr fi fe bbody
+          | (_, _, bbody) <- bindings
+          ]
+      , descendCExpr fi fe body
+      ]
+
     -- Process a single function to create global bindings for captured parameters
     go :: Func -> W.WriterT GlobalsEnv Unique Func
     go abs@(Func t params bindings body) = do
       -- Find all closures defined in this function and their free variables
       let freeVarsForClosure =
             [ (fr, fvs)
-            | CAbs _ fr <- universeBi abs
+            | fr <- descendFunc (const Nothing) (\e -> case e of CAbs _ fr -> Just fr; _ -> Nothing) abs
             , Just fvs <- [ M.lookup fr freeVarMap ]
             ]
       -- Union of all free variables from nested closures
@@ -701,8 +680,8 @@ markCapturedBindings freeVarMap funcRefMap = do
       -- Find all variables referenced from recursive blocks
       let recVars = S.fromList
             [ n
-            | crec@(CRec @FuncRef _ _ _ _ _) <- childrenBi abs
-            , CVar @FuncRef _ n <- universeBi crec
+            | crec@(CRec _ _ _ _ _) <- descendFunc (\e -> case e of crec@(CRec _ _ _ _ _) -> Just crec; _ -> Nothing) (const Nothing) abs
+            , CVar _ n <- universeCIndexableFromIndexable crec
             ]
       
       -- Update bindings: mark captured bindings as global, add new global bindings for captured params
@@ -737,13 +716,13 @@ markCapturedBindings freeVarMap funcRefMap = do
     substituteVars frSubstMap fr a@(Func t params bindings body) = case M.lookup fr frSubstMap of
       Just substMap -> Func t params
         (fmap substBinding bindings)
-        (transformBi substVar body)
+        (transformCExpr (\_ -> id) substVar id body)
         where
           substBinding (n, region, body)
             -- Don't substitute the RHS of captured param bindings (e.g., _captured_0 = x)
             -- We want to keep the original reference to the parameter
             | Just _ <- M.lookup n substMap = (n, region, body)
-            | otherwise = (n, region, transformBi substVar body)
+            | otherwise = (n, region, transformCExpr (\_ -> id) substVar id body)
 
           substVar :: CIndexable FuncRef -> CIndexable FuncRef
           substVar (CVar t n) = CVar t (M.findWithDefault n n substMap)
