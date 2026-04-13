@@ -152,35 +152,48 @@ universeExpr flam fsel = tailrec (universeExpr flam fsel) . mconcat . descendExp
     expr (ESelect2 _ sel) = Just $ concatMap (universeExpr flam fsel) (fsel sel)
     expr e = Just [e]
 
-transformExprM
+transformExprGenM
   :: forall lam sel lam' sel' t m. Monad m
-  => (lam -> m lam')
-  -> (sel -> m sel')
+  => ((Expr lam sel t -> m (Expr lam' sel' t)) -> lam -> m lam')
+  -> ((Expr lam sel t -> m (Expr lam' sel' t)) -> sel -> m sel')
+  -> ((Expr lam sel t -> m (Expr lam' sel' t)) -> Expr lam sel t -> m (Expr lam' sel' t))
   -> (Expr lam' sel' t -> m (Expr lam' sel' t))
   -> Expr lam sel t
   -> m (Expr lam' sel' t)
-transformExprM flam fsel fexpr = go
+transformExprGenM flam fsel fdown fup = go
   where
+    y = transformExprGenM flam fsel fdown fup
+    yfdown = fdown y
+
     go :: Expr lam sel t -> m (Expr lam' sel' t)
     go expr = case expr of
-      EConst n -> fexpr (EConst n)
-      EOp t op a b -> fexpr =<< (EOp t op <$> go a <*> go b)
-      EArr t exprs -> fexpr =<< (EArr t <$> traverse go exprs)
-      EVar t ident -> fexpr (EVar t ident)
-      EAbs t params bindings body -> fexpr =<< (EAbs t params <$> traverse (\(n, e) -> (n,) <$> go e) bindings <*> go body)
-      EAbs2 t lam -> fexpr =<< (EAbs2 t <$> flam lam)
-      EApp t f args -> fexpr =<< (EApp t <$> go f <*> traverse go args)
-      ESelect t e idx -> fexpr =<< (ESelect t <$> go e <*> go idx)
-      ESelect2 t sel -> fexpr =<< (ESelect2 t <$> fsel sel)
-      ERec t delay param bindings body -> fexpr =<< (ERec t delay param <$> traverse (\(n, e) -> (n,) <$> go e) bindings <*> go body)
+      EConst n -> fup =<< pure (EConst n)
+      EOp t op a b -> fup =<< (EOp t op <$> yfdown a <*> yfdown b)
+      EArr t exprs -> fup =<< (EArr t <$> traverse yfdown exprs)
+      EVar t ident -> fup =<< (pure $ EVar t ident)
+      EAbs t params bindings body -> fup =<< (EAbs t params <$> traverse (\(n, e) -> (n,) <$> yfdown e) bindings <*> yfdown body)
+      EAbs2 t lam -> fup =<< (EAbs2 t <$> flam y lam)
+      EApp t f args -> fup =<< (EApp t <$> yfdown f <*> traverse yfdown args)
+      ESelect t e idx -> fup =<< (ESelect t <$> yfdown e <*> yfdown idx)
+      ESelect2 t sel -> fup =<< (ESelect2 t <$> fsel y sel)
+      ERec t delay param bindings body -> fup =<< (ERec t delay param <$> traverse (\(n, e) -> (n,) <$> yfdown e) bindings <*> yfdown body)
+
+transformExprM
+  :: forall lam sel lam' sel' t m. Monad m
+  => ((Expr lam sel t -> m (Expr lam' sel' t)) -> lam -> m lam')
+  -> ((Expr lam sel t -> m (Expr lam' sel' t)) -> sel -> m sel')
+  -> (Expr lam' sel' t -> m (Expr lam' sel' t))
+  -> Expr lam sel t
+  -> m (Expr lam' sel' t)
+transformExprM flam fsel fexpr = transformExprGenM flam fsel ($) fexpr
 
 transformExpr
-  :: (lam -> lam')
-  -> (sel -> sel')
+  :: ((Expr lam sel t -> Expr lam' sel' t) -> lam -> lam')
+  -> ((Expr lam sel t -> Expr lam' sel' t) -> sel -> sel')
   -> (Expr lam' sel' t -> Expr lam' sel' t)
   -> Expr lam sel t
   -> Expr lam' sel' t
-transformExpr flam fsel fexp = runIdentity . transformExprM (pure . flam) (pure . fsel) (pure . fexp)
+transformExpr flam fsel fexp = runIdentity . transformExprM (\k -> pure . flam (runIdentity . k)) (\k -> pure . fsel (runIdentity . k)) (pure . fexp)
 
 --------------------------------------------------------------------------------
 
@@ -566,16 +579,35 @@ choiceTree (ESelect t e idx) = do
 type ExprSel lam t       = Expr lam (Mu (Selection lam t)) t
 type ExprFoldedSel lam t = Expr lam (Mu (FoldedSelection lam t)) t
 
--- foldSelections
---   :: ExprSel lam t
---   -> ExprFoldedSel lam t
--- foldSelections = runStack . transformExprM _ _ expr
---   where
---     expr :: ExprFoldedSel lam t -> StackM (ExprFoldedSel lam t) Identity (ExprFoldedSel lam t)
---     expr e@(EArr _ elems) = do
---       s <- pop
---       pure e
---     expr e = pure e
+type FoldSelectionsM lam t a = StackM (ExprSel lam t) Identity a
+
+foldSelections
+  :: ExprSel lam t
+  -> ExprFoldedSel lam t
+foldSelections = runStack . transformExprGenM _ fsel expr pure
+  where
+    fsel :: (ExprSel lam t -> FoldSelectionsM lam t (ExprFoldedSel lam t)) -> Mu (Selection lam t) -> FoldSelectionsM lam t (Mu (FoldedSelection lam t))
+    fsel k (Mu (Selection expr idx)) = do
+      push idx
+      expr' <- k expr
+      _ <- pop
+      pure expr'
+
+    expr :: (ExprSel lam t -> FoldSelectionsM lam t (ExprFoldedSel lam t)) -> ExprSel lam t -> FoldSelectionsM lam t (ExprFoldedSel lam t)
+    expr k (EArr t elems) = do
+      s <- pop
+      case s of
+        Just idx -> do
+          elems <- traverse k elems
+          push idx
+          pure $ ESelect2 undefined (Mu $ FoldedSelectionLHS elems (foldSelections idx))
+        _ -> pure $ EArr t (fmap foldSelections elems)
+    expr k (ESelect2 t (Mu (Selection expr idx))) = do
+      push idx
+      expr' <- k expr
+      _ <- pop
+      pure expr'
+    expr k e = k e
 
 --------------------------------------------------------------------------------
 
