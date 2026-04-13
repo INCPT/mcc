@@ -324,8 +324,39 @@ indexableType (CVar t _) = t
 indexableType (CApp t _ _) = t
 indexableType (CRec t _ _ _ _) = t
 
-transformCExpr :: (CIndexable b -> CIndexable b) -> (CExpr a -> CExpr b) -> CExpr a -> CExpr b
-transformCExpr = undefined
+transformCExpr :: (CIndexable b -> CIndexable b) -> (CExpr b -> CExpr b) -> CExpr b -> CExpr b
+transformCExpr transformIndexable transformExpr = go
+  where
+    go :: CExpr b -> CExpr b
+    go expr = transformExpr $ case expr of
+      CSel t choices selector ->
+        CSel t (fmap go choices) (go selector)
+      
+      CIndexed idxs indexable ->
+        CIndexed (fmap (second go) idxs) (goIndexable indexable)
+      
+      CArr t exprs ->
+        CArr t (fmap go exprs)
+      
+      CConst n ->
+        CConst n
+      
+      COp t op a b ->
+        COp t op (go a) (go b)
+      
+      CAbs t abs ->
+        CAbs t abs
+
+    goIndexable :: CIndexable b -> CIndexable b
+    goIndexable indexable = transformIndexable $ case indexable of
+      CVar t ident ->
+        CVar t ident
+      
+      CApp t f args ->
+        CApp t (go f) (fmap go args)
+      
+      CRec t delay param bindings body ->
+        CRec t delay param (fmap (\(n, region, e) -> (n, region, go e)) bindings) (go body)
 
 --------------------------------------------------------------------------------
 
