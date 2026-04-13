@@ -82,37 +82,40 @@ data UOp = Sqrt | Abs' | Neg | Ceil | Floor | Trunc | Nearest
          | Extend | Wrap | Convert | Demote | Promote | Reinterpret
   deriving (Eq, Show)
 
-data Selection t = Selection (Expr () Selection t) (Expr () Selection t)
+data Selection lam t = Selection (Expr lam Selection t) (Expr lam Selection t)
 
-data FlatSelection t
-  = FlatSelectionLHS [Expr () FlatSelection t] (Expr () FlatSelection t)
-  | FlatSelectionRHS (Expr () FlatSelection t) [Expr () FlatSelection t]
+data FlatSelection lam t
+  = FlatSelectionLHS [Expr lam FlatSelection t] (Expr () FlatSelection t)
+  | FlatSelectionRHS (Expr lam FlatSelection t) [Expr () FlatSelection t]
 
-data Expr abs sel t
+data Expr lam sel t
   = EConst Number
-  | EOp t Op (Expr abs sel t) (Expr abs sel t) -- both args and the result are simple types
-  | EArr t [Expr abs sel t]
+  | EOp t Op (Expr lam sel t) (Expr lam sel t) -- both args and the result are simple types
+  | EArr t [Expr lam sel t]
 
   | EVar t Ident
 
   -- NOTE: Bindings will be in topsort order after typechecking
-  | EAbs Type {- params -} [Ident] {- bindings -} [(Ident, Expr abs sel t)] {- body -} (Expr abs sel t)
-  | EAbs2 Type abs
-  | EApp t (Expr abs sel t) [Expr abs sel t]
+  | EAbs Type {- params -} [Ident] {- bindings -} [(Ident, Expr lam sel t)] {- body -} (Expr lam sel t)
+  | EAbs2 Type lam
 
-  | ESelect t (Expr abs sel t) {- selector -} (Expr abs sel t)
-  | ESelect2 t (sel t)
+  | EApp t (Expr lam sel t) [Expr lam sel t]
+
+  | ESelect t (Expr lam sel t) {- selector -} (Expr lam sel t)
+  | ESelect2 t (sel lam t)
 
   -- NOTE: The (return) type of a recursive expression can not contain functions
   -- in order to simplify the logic and not require an initial value. It wouldn't make
   -- much sense generally anyway.
 
   -- NOTE: Bindings will be in topsort order after typechecking
-  | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr abs sel t)] {- body -} (Expr abs sel t)
+  | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr lam sel t)] {- body -} (Expr lam sel t)
   deriving (Functor, Show, Data)
 
+descendExpr :: (Expr lam sel t -> Maybe b) -> Expr lam sel t -> [b]
+descendExpr = undefined
 
-exprType :: Expr abs sel Type -> Type
+exprType :: Expr lam sel Type -> Type
 exprType (EConst n) = numberType n
 exprType (EOp t _ _ _) = t
 exprType (EArr t _) = t
@@ -126,13 +129,13 @@ exprType (ERec t _ _ _ _) = t
 
 --------------------------------------------------------------------------------
 
-showExpr :: Expr abs sel Type -> String
+showExpr :: Expr lam sel Type -> String
 showExpr = T.unpack . renderStrict . layoutPretty defaultLayoutOptions . ppExpr
 
-showExprL :: Expr abs sel Type -> String
+showExprL :: Expr lam sel Type -> String
 showExprL = T.unpack . renderStrict . layoutPretty defaultLayoutOptions . ppExprL
 
-ppExpr :: Expr abs sel Type -> Doc ann
+ppExpr :: Expr lam sel Type -> Doc ann
 ppExpr (EConst (I32 n)) = pretty n
 ppExpr (EConst (I64 n)) = pretty n
 ppExpr (EConst (F32 n)) = pretty n
@@ -160,20 +163,20 @@ ppExpr (ERec t delay param bs body) =
   where
     ppParam (Ident n) = pretty n
 
-ppOp :: Op -> Expr abs sel Type -> Expr abs sel Type -> Doc ann
+ppOp :: Op -> Expr lam sel Type -> Expr lam sel Type -> Doc ann
 ppOp op a b = parens (ppExprInline a <+> pretty (showOp op) <+> ppExprInline b)
 
-ppApp :: Expr abs sel Type -> [Expr abs sel Type] -> Doc ann
+ppApp :: Expr lam sel Type -> [Expr lam sel Type] -> Doc ann
 ppApp f args = ppFunc f <> parens (hsep (punctuate comma (map ppExprInline args)))
   where
     ppFunc e@(EAbs _ _ _ _) = parens (ppExprInline e)
     ppFunc e@(ERec _ _ _ _ _) = parens (ppExprInline e)
     ppFunc e = ppExprInline e
 
-ppSelect :: Expr abs sel Type -> Expr abs sel Type -> Doc ann
+ppSelect :: Expr lam sel Type -> Expr lam sel Type -> Doc ann
 ppSelect e idx = ppExprInline e <> brackets (ppExprInline idx)
 
-ppAbsBody :: [(Ident, Expr abs sel Type)] -> Expr abs sel Type -> Doc ann
+ppAbsBody :: [(Ident, Expr lam sel Type)] -> Expr lam sel Type -> Doc ann
 ppAbsBody [] body = indent 2 $ "return" <+> ppReturnExpr body
 ppAbsBody bindings body = indent 2 $ vsep
   [ vsep [ ppBinding n expr | (n, expr) <- bindings ]
@@ -183,19 +186,19 @@ ppAbsBody bindings body = indent 2 $ vsep
   where
     ppBinding (Ident n) expr = pretty n <+> "=" <+> ppExprInline expr
 
-ppReturnExpr :: Expr abs sel Type -> Doc ann
+ppReturnExpr :: Expr lam sel Type -> Doc ann
 ppReturnExpr e@(EAbs _ _ _ _) = ppExprInline e
 ppReturnExpr e@(ERec _ _ _ _ _) = ppExprInline e
 ppReturnExpr (EOp _ op a b) = ppExprInline a <+> pretty (showOp op) <+> ppExprInline b
 ppReturnExpr e = ppExprInline e
 
-ppExprInline :: Expr abs sel Type -> Doc ann
+ppExprInline :: Expr lam sel Type -> Doc ann
 ppExprInline = ppExpr
 
 --------------------------------------------------------------------------------
 -- Lisp-like pretty printer
 
-ppExprL :: Expr abs sel Type -> Doc ann
+ppExprL :: Expr lam sel Type -> Doc ann
 ppExprL (EConst (I32 n)) = pretty n
 ppExprL (EConst (I64 n)) = pretty n
 ppExprL (EConst (F32 n)) = pretty n
@@ -246,13 +249,13 @@ ppExprL (ERec t delay param bs body) =
     ppParamName = case param of Ident n -> pretty n
     ppRetType = pretty (showType t)
 
-ppBindingsInline :: [(Ident, Expr abs sel Type)] -> Doc ann
+ppBindingsInline :: [(Ident, Expr lam sel Type)] -> Doc ann
 ppBindingsInline [] = "{}"
 ppBindingsInline bs = braces (hsep (punctuate comma [ ppBinding n e | (n, e) <- bs ]))
   where
     ppBinding (Ident n) e = pretty n <+> ppExprL e
 
-ppBindingsMultiline :: [(Ident, Expr abs sel Type)] -> Doc ann
+ppBindingsMultiline :: [(Ident, Expr lam sel Type)] -> Doc ann
 ppBindingsMultiline [] = indent 2 "{}"
 ppBindingsMultiline bs = indent 2 $ vsep
   [ "{"
@@ -462,7 +465,7 @@ showOp Rem = "rem"
 
 --------------------------------------------------------------------------------
 
-toC :: Monad m => CIndexable Abs -> StackM (Type, Expr sel Type) m (CExpr Abs)
+toC :: Monad m => CIndexable Abs -> StackM (Type, Expr lam sel Type) m (CExpr Abs)
 toC e = do
   idxs <- ST.get
   pure $ CIndexed (map (second toCExpr) idxs) e
