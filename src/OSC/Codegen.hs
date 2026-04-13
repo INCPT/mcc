@@ -82,11 +82,15 @@ data UOp = Sqrt | Abs' | Neg | Ceil | Floor | Trunc | Nearest
          | Extend | Wrap | Convert | Demote | Promote | Reinterpret
   deriving (Eq, Show)
 
-data Selection lam t = Selection (Expr lam Selection t) (Expr lam Selection t)
+data Selection lam t sel = Selection (Expr lam sel t) (Expr lam sel t)
 
-data FlatSelection lam t
-  = FlatSelectionLHS [Expr lam FlatSelection t] (Expr () FlatSelection t)
-  | FlatSelectionRHS (Expr lam FlatSelection t) [Expr () FlatSelection t]
+data FlatSelection lam t sel
+  = FlatSelectionLHS [Expr lam sel t] (Expr lam sel t)
+  | FlatSelectionRHS (Expr lam sel t) [Expr lam sel t]
+
+data Lambda sel t lam = Lambda Type {- params -} [Ident] {- bindings -} [(Ident, Expr lam sel t)] {- body -} (Expr lam sel t)
+
+data Mu f = Mu (f (Mu f))
 
 data Expr lam sel t
   = EConst Number
@@ -102,7 +106,7 @@ data Expr lam sel t
   | EApp t (Expr lam sel t) [Expr lam sel t]
 
   | ESelect t (Expr lam sel t) {- selector -} (Expr lam sel t)
-  | ESelect2 t (sel lam t)
+  | ESelect2 t sel
 
   -- NOTE: The (return) type of a recursive expression can not contain functions
   -- in order to simplify the logic and not require an initial value. It wouldn't make
@@ -111,6 +115,21 @@ data Expr lam sel t
   -- NOTE: Bindings will be in topsort order after typechecking
   | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr lam sel t)] {- body -} (Expr lam sel t)
   deriving (Functor, Show, Data)
+
+type ExprL sel t = Expr (Mu (Lambda sel t)) sel t
+type ExprFR sel t = Expr FuncRef sel t
+
+exprType :: Expr lam sel Type -> Type
+exprType (EConst n) = numberType n
+exprType (EOp t _ _ _) = t
+exprType (EArr t _) = t
+exprType (EVar t _) = t
+exprType (EAbs t _ _ _) = t
+exprType (EAbs2 t _) = t
+exprType (EApp t _ _) = t
+exprType (ESelect t _ _) = t
+exprType (ESelect2 t _) = t
+exprType (ERec t _ _ _ _) = t
 
 descendExpr :: (Expr lam sel t -> Maybe b) -> Expr lam sel t -> [b]
 descendExpr f expr = case f expr of
@@ -127,17 +146,21 @@ descendExpr f expr = case f expr of
     ESelect2 _ _ -> []
     ERec _ _ _ bindings body -> mconcat (fmap (descendExpr f . snd) bindings) <> descendExpr f body
 
-exprType :: Expr lam sel Type -> Type
-exprType (EConst n) = numberType n
-exprType (EOp t _ _ _) = t
-exprType (EArr t _) = t
-exprType (EVar t _) = t
-exprType (EAbs t _ _ _) = t
-exprType (EAbs2 t _) = t
-exprType (EApp t _ _) = t
-exprType (ESelect t _ _) = t
-exprType (ESelect2 t _) = t
-exprType (ERec t _ _ _ _) = t
+universeExpr :: (lam -> [Expr lam sel t]) -> (sel -> [Expr lam sel t]) -> Expr lam sel t -> [Expr lam sel t]
+universeExpr flam fsel = tailrec (universeExpr flam fsel) . mconcat . descendExpr expr
+  where
+    expr (EAbs2 _ lam) = Just $ concatMap (universeExpr flam fsel) (flam lam)
+    expr (ESelect2 _ sel) = Just $ concatMap (universeExpr flam fsel) (fsel sel)
+    expr e = Just [e]
+
+transformExprM
+  :: forall lam sel lam' sel' t m. Monad m
+  => (lam -> m lam')
+  -> (sel -> m sel')
+  -> (Expr lam' sel' t -> m (Expr lam' sel' t))
+  -> Expr lam sel t
+  -> Expr lam' sel' t
+transformExprM = undefined
 
 --------------------------------------------------------------------------------
 
