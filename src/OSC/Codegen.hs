@@ -159,8 +159,21 @@ transformExprM
   -> (sel -> m sel')
   -> (Expr lam' sel' t -> m (Expr lam' sel' t))
   -> Expr lam sel t
-  -> Expr lam' sel' t
-transformExprM = undefined
+  -> m (Expr lam' sel' t)
+transformExprM transformLam transformSel transformExpr = go
+  where
+    go :: Expr lam sel t -> m (Expr lam' sel' t)
+    go expr = case expr of
+      EConst n -> transformExpr (EConst n)
+      EOp t op a b -> transformExpr =<< (EOp t op <$> go a <*> go b)
+      EArr t exprs -> transformExpr =<< (EArr t <$> traverse go exprs)
+      EVar t ident -> transformExpr (EVar t ident)
+      EAbs t params bindings body -> transformExpr =<< (EAbs t params <$> traverse (\(n, e) -> (n,) <$> go e) bindings <*> go body)
+      EAbs2 t lam -> transformExpr =<< (EAbs2 t <$> transformLam lam)
+      EApp t f args -> transformExpr =<< (EApp t <$> go f <*> traverse go args)
+      ESelect t e idx -> transformExpr =<< (ESelect t <$> go e <*> go idx)
+      ESelect2 t sel -> transformExpr =<< (ESelect2 t <$> transformSel sel)
+      ERec t delay param bindings body -> transformExpr =<< (ERec t delay param <$> traverse (\(n, e) -> (n,) <$> go e) bindings <*> go body)
 
 --------------------------------------------------------------------------------
 
