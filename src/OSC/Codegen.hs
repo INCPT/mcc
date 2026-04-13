@@ -116,9 +116,6 @@ data Expr lam sel t
   | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr lam sel t)] {- body -} (Expr lam sel t)
   deriving (Functor, Show, Data)
 
-type ExprL sel t = Expr (Mu (Lambda sel t)) sel t
-type ExprFR sel t = Expr FuncRef sel t
-
 exprType :: Expr lam sel Type -> Type
 exprType (EConst n) = numberType n
 exprType (EOp t _ _ _) = t
@@ -162,20 +159,20 @@ transformExprM
   -> (Expr lam' sel' t -> m (Expr lam' sel' t))
   -> Expr lam sel t
   -> m (Expr lam' sel' t)
-transformExprM transformLam transformSel transformExpr = go
+transformExprM flam fsel fexpr = go
   where
     go :: Expr lam sel t -> m (Expr lam' sel' t)
     go expr = case expr of
-      EConst n -> transformExpr (EConst n)
-      EOp t op a b -> transformExpr =<< (EOp t op <$> go a <*> go b)
-      EArr t exprs -> transformExpr =<< (EArr t <$> traverse go exprs)
-      EVar t ident -> transformExpr (EVar t ident)
-      EAbs t params bindings body -> transformExpr =<< (EAbs t params <$> traverse (\(n, e) -> (n,) <$> go e) bindings <*> go body)
-      EAbs2 t lam -> transformExpr =<< (EAbs2 t <$> transformLam lam)
-      EApp t f args -> transformExpr =<< (EApp t <$> go f <*> traverse go args)
-      ESelect t e idx -> transformExpr =<< (ESelect t <$> go e <*> go idx)
-      ESelect2 t sel -> transformExpr =<< (ESelect2 t <$> transformSel sel)
-      ERec t delay param bindings body -> transformExpr =<< (ERec t delay param <$> traverse (\(n, e) -> (n,) <$> go e) bindings <*> go body)
+      EConst n -> fexpr (EConst n)
+      EOp t op a b -> fexpr =<< (EOp t op <$> go a <*> go b)
+      EArr t exprs -> fexpr =<< (EArr t <$> traverse go exprs)
+      EVar t ident -> fexpr (EVar t ident)
+      EAbs t params bindings body -> fexpr =<< (EAbs t params <$> traverse (\(n, e) -> (n,) <$> go e) bindings <*> go body)
+      EAbs2 t lam -> fexpr =<< (EAbs2 t <$> flam lam)
+      EApp t f args -> fexpr =<< (EApp t <$> go f <*> traverse go args)
+      ESelect t e idx -> fexpr =<< (ESelect t <$> go e <*> go idx)
+      ESelect2 t sel -> fexpr =<< (ESelect2 t <$> fsel sel)
+      ERec t delay param bindings body -> fexpr =<< (ERec t delay param <$> traverse (\(n, e) -> (n,) <$> go e) bindings <*> go body)
 
 transformExpr
   :: (lam -> lam')
@@ -183,8 +180,7 @@ transformExpr
   -> (Expr lam' sel' t -> Expr lam' sel' t)
   -> Expr lam sel t
   -> Expr lam' sel' t
-transformExpr transformLam transformSel transformExpr' =
-  runIdentity . transformExprM (pure . transformLam) (pure . transformSel) (pure . transformExpr')
+transformExpr flam fsel fexp = runIdentity . transformExprM (pure . flam) (pure . fsel) (pure . fexp)
 
 --------------------------------------------------------------------------------
 
@@ -564,6 +560,22 @@ choiceTree (ESelect t e idx) = do
   c <- choiceTree e
   _ <- pop
   pure c
+
+--------------------------------------------------------------------------------
+
+type ExprSel lam t       = Expr lam (Mu (Selection lam t)) t
+type ExprFoldedSel lam t = Expr lam (Mu (FoldedSelection lam t)) t
+
+-- foldSelections
+--   :: ExprSel lam t
+--   -> ExprFoldedSel lam t
+-- foldSelections = runStack . transformExprM _ _ expr
+--   where
+--     expr :: ExprFoldedSel lam t -> StackM (ExprFoldedSel lam t) Identity (ExprFoldedSel lam t)
+--     expr e@(EArr _ elems) = do
+--       s <- pop
+--       pure e
+--     expr e = pure e
 
 --------------------------------------------------------------------------------
 
