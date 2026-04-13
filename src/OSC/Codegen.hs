@@ -84,9 +84,9 @@ data UOp = Sqrt | Abs' | Neg | Ceil | Floor | Trunc | Nearest
 
 data Selection lam t sel = Selection (Expr lam sel t) (Expr lam sel t)
 
-data FlatSelection lam t sel
-  = FlatSelectionLHS [Expr lam sel t] (Expr lam sel t)
-  | FlatSelectionRHS (Expr lam sel t) [Expr lam sel t]
+data FoldedSelection lam t sel
+  = FoldedSelectionLHS [Expr lam sel t] (Expr lam sel t)
+  | FoldedSelectionRHS (Expr lam sel t) [Expr lam sel t]
 
 data Lambda sel t lam = Lambda Type {- params -} [Ident] {- bindings -} [(Ident, Expr lam sel t)] {- body -} (Expr lam sel t)
 
@@ -131,6 +131,8 @@ exprType (ESelect t _ _) = t
 exprType (ESelect2 t _) = t
 exprType (ERec t _ _ _ _) = t
 
+--- Expr traversals ------------------------------------------------------------
+
 descendExpr :: (Expr lam sel t -> Maybe b) -> Expr lam sel t -> [b]
 descendExpr f expr = case f expr of
   Just b -> [b]
@@ -174,6 +176,14 @@ transformExprM transformLam transformSel transformExpr = go
       ESelect t e idx -> transformExpr =<< (ESelect t <$> go e <*> go idx)
       ESelect2 t sel -> transformExpr =<< (ESelect2 t <$> transformSel sel)
       ERec t delay param bindings body -> transformExpr =<< (ERec t delay param <$> traverse (\(n, e) -> (n,) <$> go e) bindings <*> go body)
+
+transformExpr
+  :: (lam -> lam')
+  -> (sel -> sel')
+  -> (Expr lam' sel' t -> Expr lam' sel' t)
+  -> Expr lam sel t
+  -> Expr lam' sel' t
+transformExpr transformLam transformSel transformExpr = undefined
 
 --------------------------------------------------------------------------------
 
