@@ -326,10 +326,66 @@ indexableType (CApp t _ _) = t
 indexableType (CRec t _ _ _ _) = t
 
 universeCExpr :: CExpr a -> [CExpr a]
-universeCExpr = undefined
+universeCExpr expr = expr : case expr of
+  CSel _ choices selector ->
+    mconcat (fmap universeCExpr choices) <> universeCExpr selector
+  
+  CIndexed idxs indexable ->
+    mconcat [ universeCExpr e | (_, e) <- idxs ] <> universeCExprFromIndexable indexable
+  
+  CArr _ exprs ->
+    mconcat (fmap universeCExpr exprs)
+  
+  CConst _ ->
+    []
+  
+  COp _ _ a b ->
+    universeCExpr a <> universeCExpr b
+  
+  CAbs _ _ ->
+    []
+
+universeCExprFromIndexable :: CIndexable a -> [CExpr a]
+universeCExprFromIndexable indexable = case indexable of
+  CVar _ _ ->
+    []
+  
+  CApp _ f args ->
+    universeCExpr f <> mconcat (fmap universeCExpr args)
+  
+  CRec _ _ _ bindings body ->
+    mconcat [ universeCExpr e | (_, _, e) <- bindings ] <> universeCExpr body
 
 universeCIndexable :: CExpr a -> [CIndexable a]
-universeCIndexable = undefined
+universeCIndexable expr = case expr of
+  CSel _ choices selector ->
+    mconcat (fmap universeCIndexable choices) <> universeCIndexable selector
+  
+  CIndexed idxs indexable ->
+    indexable : mconcat [ universeCIndexable e | (_, e) <- idxs ] <> universeCIndexableFromIndexable indexable
+  
+  CArr _ exprs ->
+    mconcat (fmap universeCIndexable exprs)
+  
+  CConst _ ->
+    []
+  
+  COp _ _ a b ->
+    universeCIndexable a <> universeCIndexable b
+  
+  CAbs _ _ ->
+    []
+
+universeCIndexableFromIndexable :: CIndexable a -> [CIndexable a]
+universeCIndexableFromIndexable indexable = case indexable of
+  CVar _ _ ->
+    []
+  
+  CApp _ f args ->
+    universeCIndexable f <> mconcat (fmap universeCIndexable args)
+  
+  CRec _ _ _ bindings body ->
+    mconcat [ universeCIndexable e | (_, _, e) <- bindings ] <> universeCIndexable body
 
 transformCExprM :: forall a b m. Monad m => (Type -> a -> m b) -> (CIndexable b -> m (CIndexable b)) -> (CExpr b -> m (CExpr b)) -> CExpr a -> m (CExpr b)
 transformCExprM transformAbs transformIndexable transformExpr = go
