@@ -507,43 +507,14 @@ data AbsEnv = AbsEnv
   } deriving Show
 
 gatherAbstractions :: CExpr Abs -> ST.State AbsEnv (CExpr FuncRef)
-gatherAbstractions (CSel t choices selector) = do
-  choices' <- traverse gatherAbstractions choices
-  selector' <- gatherAbstractions selector
-  pure $ CSel t choices' selector'
-gatherAbstractions (CIndexed idxs expr) = do
-  idxs' <- traverse (\(t, c) -> (t,) <$> gatherAbstractions c) idxs
-  expr' <- gatherAbstractionsExpr expr
-  pure $ CIndexed idxs' expr'
-gatherAbstractions (CArr t choices) = do
-  choices' <- traverse gatherAbstractions choices
-  pure $ CArr t choices'
-gatherAbstractions (CConst n) = pure $ CConst n
-gatherAbstractions (COp t op a b) = do
-  a' <- gatherAbstractions a
-  b' <- gatherAbstractions b
-  pure $ COp t op a' b'
-gatherAbstractions (CAbs t (Abs params bindings body)) = do
-  fr <- FuncRef <$> ST.gets (.nextFuncRef)
-  ST.modify $ \st -> st { nextFuncRef = st.nextFuncRef + 1 }
-
-  bindings' <- sequence [ (n, region,) <$> gatherAbstractions b | (n, region, b) <- bindings ]
-  body' <- gatherAbstractions body
-
-  ST.modify $ \st -> st { funcRefMap = M.insert fr (Func t params bindings' body') st.funcRefMap }
-
-  pure $ CAbs t fr
-
-gatherAbstractionsExpr :: CIndexable Abs -> ST.State AbsEnv (CIndexable FuncRef)
-gatherAbstractionsExpr (CVar t ident) = pure $ CVar t ident
-gatherAbstractionsExpr (CApp t f args) = do
-  f' <- gatherAbstractions f
-  args' <- traverse gatherAbstractions args
-  pure $ CApp t f' args'
-gatherAbstractionsExpr (CRec t delay param bindings body) = do
-  body' <- gatherAbstractions body
-  bindings' <- sequence [ (n, region,) <$> gatherAbstractions bbody | (n, region, bbody) <- bindings ]
-  pure $ CRec t delay param bindings' body'
+gatherAbstractions = transformCExprM transformAbs pure pure
+  where
+    transformAbs :: Type -> Abs -> ST.State AbsEnv FuncRef
+    transformAbs t (Abs params bindings body) = do
+      fr <- FuncRef <$> ST.gets (.nextFuncRef)
+      ST.modify $ \st -> st { nextFuncRef = st.nextFuncRef + 1 }
+      ST.modify $ \st -> st { funcRefMap = M.insert fr (Func t params bindings body) st.funcRefMap }
+      pure fr
 
 -- | Compute the free variables for each abstraction in the function map.
 --
