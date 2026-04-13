@@ -10,6 +10,7 @@ import qualified Data.Map as M
 import Data.Map (Map)
 import Control.Monad.State
 import Data.Maybe (fromMaybe)
+import Debug.Trace
 
 data Value = VNumber Number | VArr [Value]
   deriving Show
@@ -27,26 +28,30 @@ zeroValue (TAbs _ _) = VNumber (I32 0)
 allocateVars :: [(Type, Idx)] -> VarTable
 allocateVars allocs = M.fromList [ (idx, zeroValue t) | (t, idx) <- allocs ]
 
-interpretToList :: Int -> IR -> [Value]
-interpretToList steps ir = evalState (replicateM steps runTick) globalTable
+interpretToList :: Int -> IR -> Type -> FuncRef -> [Value]
+interpretToList steps ir mainType mainFuncFR = evalState (replicateM steps runTick) globalTable
   where
-    globalTable = allocateVars ir.globalAllocations
+    maxIdx = maximum [ idx | (_, Global idx) <- ir.globalAllocations ]
+    retIdx = Global (maxIdx + 1)
+    globalTable = allocateVars $ (mainType, Global (maxIdx + 1)):ir.globalAllocations
+    mainFunc = ir.funcMap M.! mainFuncFR
+
+    runFunc :: IRFunc -> [Ref] -> State VarTable ()
+    runFunc func args = do
+      let localTable = allocateVars func.allocations
+      evalStateT (executeInstructions ir.tickFunc.instructions args) localTable
 
     runTick :: State VarTable Value
     runTick = do
-      let localTable = allocateVars ir.tickFunc.allocations
-      (ret, _) <- runStateT (executeInstructions ir.tickFunc.instructions [] RRet) localTable
-      pure ret
+      runFunc mainFunc [RVar retIdx]
+      runFunc ir.tickFunc []
+      gets (fromMaybe (error $ "readVar: global not found: " <> show retIdx) . M.lookup retIdx)
 
-    executeInstructions :: [Instruction] -> [Value] -> Ref -> StateT VarTable (State VarTable) Value
-    executeInstructions instrs args retRef = do
-      mapM_ (executeInstruction args) instrs
-      readRef args retRef
+    executeInstructions :: [Instruction] -> [Ref] -> StateT VarTable (State VarTable) ()
+    executeInstructions instrs args = trace (show instrs <> "\n\n" <> show args) $ mapM_ (executeInstruction args) instrs
 
-    executeInstruction :: [Value] -> Instruction -> StateT VarTable (State VarTable) ()
-    executeInstruction args (SCopy t src dst) = do
-      srcVal <- readRef args src
-      writeRef args dst srcVal
+    executeInstruction :: [Ref] -> Instruction -> StateT VarTable (State VarTable) ()
+    executeInstruction args (SCopy _ src dst) = readRef args src >>= writeRef args dst
 
     executeInstruction args (SIf cond thn els) = do
       condVal <- readRef args cond
@@ -61,10 +66,8 @@ interpretToList steps ir = evalState (replicateM steps runTick) globalTable
         VNumber (I32 frIdx) -> do
           let fr = FuncRef (fromIntegral frIdx)
           let irFunc = ir.funcMap M.! fr
-          argVals <- mapM (readRef args) argRefs
           let localTable = allocateVars irFunc.allocations
-          (retVal, _) <- lift $ runStateT (executeInstructions irFunc.instructions argVals RRet) localTable
-          writeRef args retRef retVal
+          lift $ evalStateT (executeInstructions irFunc.instructions (argRefs <> [retRef])) localTable
         _ -> error $ "readRef: expected i32: " <> show v
 
     executeInstruction args (SBinOp op aRef bRef resRef) = do
@@ -78,9 +81,11 @@ interpretToList steps ir = evalState (replicateM steps runTick) globalTable
         writeRef args counterRef (VNumber (I32 i))
         mapM_ (executeInstruction args) body
 
-    readRef :: [Value] -> Ref -> StateT VarTable (State VarTable) Value
-    readRef args (RArg n) = pure (args !! n)
-    readRef args RRet = pure (args !! length args)
+    readRef :: [Ref] -> Ref -> StateT VarTable (State VarTable) Value
+    readRef args (RArg n) = if n < length args
+      then readRef args (args !! n)
+      else error $ "readRef: " <> show args <> ", " <> show n
+    readRef args RRet = readRef args (args !! (length args - 1))
     readRef _ (RConst n) = pure (VNumber n)
     readRef _ (RVar idx) = readVar idx
     readRef _ (RArr _ idx) = readVar idx
@@ -90,12 +95,13 @@ interpretToList steps ir = evalState (replicateM steps runTick) globalTable
         VNumber idx -> do
           val <- readRef args ref
           pure (projectValue val idx)
-        _ -> error $ "expected number: " <> show v
+        _ -> error $ "readRef: expected number: " <> show v
     readRef _ (RFuncRef (FuncRef i)) = pure (VNumber (I32 (fromIntegral i)))
     readRef _ (RFuncRefRef idx) = readVar idx
 
-    writeRef :: [Value] -> Ref -> Value -> StateT VarTable (State VarTable) ()
+    writeRef :: [Ref] -> Ref -> Value -> StateT VarTable (State VarTable) ()
     writeRef _ (RVar idx) val = writeVar idx val
+    writeRef args RRet val = writeRef args (args !! (length args - 1)) val
     writeRef _ (RArr _ idx) val = writeVar idx val
     writeRef args (RProj ref idxRef) val = do
       v <- readRef args idxRef
@@ -104,7 +110,7 @@ interpretToList steps ir = evalState (replicateM steps runTick) globalTable
           oldVal <- readRef args ref
           let newVal = updateValue oldVal idx val
           writeRef args ref newVal
-        _ -> error $ "expected number: " <> show v
+        _ -> error $ "writeRef: expected number: " <> show v
     writeRef _ _ _ = error "writeRef: invalid destination"
 
     readVar :: Idx -> StateT VarTable (State VarTable) Value

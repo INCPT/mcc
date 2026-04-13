@@ -318,17 +318,15 @@ data IR = IR
   { globalAllocations :: [(Type, Idx)]
   , funcMap :: Map FuncRef IRFunc
   , tickFunc :: IRFunc
-  , main :: Ref
   } deriving Show
 
-toplevel :: Map Ident Type -> Map FuncRef Func -> FuncRef -> IR
-toplevel globals funcRefMap fr = IR
+toplevel :: Map Ident Type -> Map FuncRef Func -> IR
+toplevel globals funcRefMap = IR
   { globalAllocations = st.globalAllocations
   , tickFunc = IRFunc
       { allocations = st.tickAllocations
       , instructions = st.tickInstructions
       }
-  , main = RFuncRef fr
   , .. }
   where
     (funcMap, st) = runState gen $ GlobalState

@@ -1,3 +1,4 @@
+* TODO propagate KR computations and compute them once per 128-sample frame
 * TODO rdtable, rwtable
 * DONE shuffle bindings in Gen
 * TODO binary tree if

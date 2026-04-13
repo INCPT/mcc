@@ -57,9 +57,9 @@ peelType (TArr t _) = t
 peelType (TAbs _ _) = error "peelType: abstraction"
 peelType t = error $ "peelType: " <> show t
 
-paramTypes :: Type -> [Type]
-paramTypes (TAbs params _) = params
-paramTypes _ = error "paramTypes: not an abs"
+paramTypes :: String -> Type -> [Type]
+paramTypes _ (TAbs params _) = params
+paramTypes e _ = error $ "paramTypes: not an abs: " <> e
 
 data Number = I32 Int | I64 Int | F32 Float | F64 Double
   deriving (Show, Data)
@@ -132,7 +132,7 @@ ppExpr (EArr _ es) =
 ppExpr (EVar _ (Ident n)) = pretty n
 ppExpr (EAbs t params bs body) =
   vsep
-    [ "fn" <> parens (ppParams (paramTypes t) params) <+> "->" <+> pretty (showType (returnType t))
+    [ "fn" <> parens (ppParams (paramTypes "ppExpr" t) params) <+> "->" <+> pretty (showType (returnType t))
     , ppAbsBody bs body
     ]
   where
@@ -208,7 +208,7 @@ ppExprL (EAbs t params bs body) =
       , indent 2 (ppExprL body)
       ]
 
-    ppParams = brackets (hsep (punctuate comma (zipWith ppParam params (paramTypes t))))
+    ppParams = brackets (hsep (punctuate comma (zipWith ppParam params (paramTypes "ppExprL" t))))
     ppParam (Ident n) pt = pretty n <> colon <+> pretty (showType pt)
     ppRetType = pretty (showType (returnType t))
 
@@ -635,7 +635,7 @@ markCapturedBindings freeVarMap funcRefMap = do
       -- Create fresh global names for each captured parameter
       capturedParams <- sequence
         [ (ptype, n,) <$> lift fresh
-        | (ptype, n) <- zip (paramTypes t) params
+        | (ptype, n) <- zip (paramTypes ("markCapturedBindings: " <> show abs) t) params
         , S.member n freeVars
         ]
 

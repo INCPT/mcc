@@ -134,7 +134,7 @@ genLeaf ctx t@(TArr elemType len) = case genVarOfType ctx t of
   Nothing -> genArray ctx elemType len
 genLeaf ctx t@(TAbs _ _) = case genVarOfType ctx t of
   Just varGen -> varGen
-  Nothing -> genAbs ctx (paramTypes t) (returnType t)
+  Nothing -> genAbs ctx (paramTypes "genLeaf" t) (returnType t)
 
 -- | Generate a variable reference of a specific type (returns Nothing if no vars available)
 genVarOfType :: GenCtx -> Type -> Maybe (Gen (Expr Type))
