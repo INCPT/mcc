@@ -325,23 +325,51 @@ indexableType (CVar t _) = t
 indexableType (CApp t _ _) = t
 indexableType (CRec t _ _ _ _) = t
 
-transformCExpr :: forall a b. (Type -> a -> b) -> (CIndexable b -> CIndexable b) -> (CExpr b -> CExpr b) -> CExpr a -> CExpr b
+transformCExpr :: forall a b m. Applicative m => (Type -> a -> m b) -> (CIndexable b -> m (CIndexable b)) -> (CExpr b -> m (CExpr b)) -> CExpr a -> m (CExpr b)
 transformCExpr transformAbs transformIndexable transformExpr = go
   where
-    go :: CExpr a -> CExpr b
-    go expr = transformExpr $ case expr of
-      CSel t choices selector -> CSel t (fmap go choices) (go selector)
-      CIndexed idxs indexable -> CIndexed (fmap (second go) idxs) (goIndexable indexable)
-      CArr t exprs -> CArr t (fmap go exprs)
-      CConst n -> CConst n
-      COp t op a b -> COp t op (go a) (go b)
-      CAbs t abs -> CAbs t (transformAbs t abs)
+    go :: CExpr a -> m (CExpr b)
+    go expr = case expr of
+      CSel t choices selector -> do
+        choices' <- traverse go choices
+        selector' <- go selector
+        transformExpr (CSel t choices' selector')
+      
+      CIndexed idxs indexable -> do
+        idxs' <- traverse (\(t, e) -> (t,) <$> go e) idxs
+        indexable' <- goIndexable indexable
+        transformExpr (CIndexed idxs' indexable')
+      
+      CArr t exprs -> do
+        exprs' <- traverse go exprs
+        transformExpr (CArr t exprs')
+      
+      CConst n ->
+        transformExpr (CConst n)
+      
+      COp t op a b -> do
+        a' <- go a
+        b' <- go b
+        transformExpr (COp t op a' b')
+      
+      CAbs t abs -> do
+        abs' <- transformAbs t abs
+        transformExpr (CAbs t abs')
 
-    goIndexable :: CIndexable a -> CIndexable b
-    goIndexable indexable = transformIndexable $ case indexable of
-      CVar t ident -> CVar t ident
-      CApp t f args -> CApp t (go f) (fmap go args)
-      CRec t delay param bindings body -> CRec t delay param (fmap (\(n, region, e) -> (n, region, go e)) bindings) (go body)
+    goIndexable :: CIndexable a -> m (CIndexable b)
+    goIndexable indexable = case indexable of
+      CVar t ident ->
+        transformIndexable (CVar t ident)
+      
+      CApp t f args -> do
+        f' <- go f
+        args' <- traverse go args
+        transformIndexable (CApp t f' args')
+      
+      CRec t delay param bindings body -> do
+        bindings' <- traverse (\(n, region, e) -> (n, region,) <$> go e) bindings
+        body' <- go body
+        transformIndexable (CRec t delay param bindings' body')
 
 --------------------------------------------------------------------------------
 
