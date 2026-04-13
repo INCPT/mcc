@@ -10,7 +10,6 @@ import qualified Data.Map as M
 import Data.Map (Map)
 import Control.Monad.State
 import Data.Maybe (fromMaybe)
-import Debug.Trace
 
 data Value = VNumber Number | VArr [Value]
   deriving Show
@@ -48,7 +47,7 @@ interpretToList steps ir mainType mainFuncFR = evalState (replicateM steps runTi
       gets (fromMaybe (error $ "readVar: global not found: " <> show retIdx) . M.lookup retIdx)
 
     executeInstructions :: [Instruction] -> [Ref] -> StateT VarTable (State VarTable) ()
-    executeInstructions instrs args = trace (show instrs <> "\n\n" <> show args) $ mapM_ (executeInstruction args) instrs
+    executeInstructions instrs args = mapM_ (executeInstruction args) instrs
 
     executeInstruction :: [Ref] -> Instruction -> StateT VarTable (State VarTable) ()
     executeInstruction args (SCopy _ src dst) = readRef args src >>= writeRef args dst
@@ -111,7 +110,8 @@ interpretToList steps ir mainType mainFuncFR = evalState (replicateM steps runTi
           let newVal = updateValue oldVal idx val
           writeRef args ref newVal
         _ -> error $ "writeRef: expected number: " <> show v
-    writeRef _ _ _ = error "writeRef: invalid destination"
+    writeRef _ (RFuncRefRef idx) val = writeVar idx val
+    writeRef _ ref _ = error $ "writeRef: invalid destination" <> show ref
 
     readVar :: Idx -> StateT VarTable (State VarTable) Value
     readVar idx@(Local _) = gets (fromMaybe (error $ "readVar: local not found: " <> show idx) . M.lookup idx)
