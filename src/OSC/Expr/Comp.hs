@@ -59,7 +59,13 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
         modify $ \s -> s { nextFuncId = nextFuncId s + 1 }
         modify $ \s -> s { collectedFuncs = (funcId, params, locals, body) : collectedFuncs s }
         return $ inject (FuncRef funcId)
-      Nothing -> return $ Term $ deepInject sig
+      Nothing -> 
+        -- If it's not Lam, it must be Exp or Value, both of which are in Sig'
+        case proj sig :: Maybe (Exp (Term Sig')) of
+          Just e -> return $ inject e
+          Nothing -> case proj sig :: Maybe (Value (Term Sig')) of
+            Just v -> return $ inject v
+            Nothing -> error "Impossible: signature must be Exp, Value, or Lam"
 
 data GatherState = GatherState
   { nextFuncId :: Int
