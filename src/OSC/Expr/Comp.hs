@@ -55,8 +55,8 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
     gatherAlg = gatherLam `compAlgM` hom
     
     -- Homomorphism: preserve structure by injecting into target signature
-    hom :: (Functor f, f :<: Sig) => HomM (State GatherState) f Lam
-    hom = undefined
+    hom :: (Functor f, f :<: Sig') => HomM (State GatherState) f (Term Sig')
+    hom = return . inject
     
     -- Only handle Lam specially
     gatherLam :: AlgM (State GatherState) Lam (Term Sig')
