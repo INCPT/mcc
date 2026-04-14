@@ -11,6 +11,7 @@ import Data.Comp
 import Data.Comp.Derive
 import Data.Comp.Ops
 import Data.Comp.Term
+import Data.Comp.Show ()  -- Provides Show instances for Term
 
 import Control.Monad.State
 
@@ -100,6 +101,16 @@ exampleTerm = iApp (iLam ["x"] [] (iOp (iVar "x") (iConst 1))) [iConst 5]
 exampleTransformed :: Term Sig'
 exampleTransformed = gatherAbs exampleTerm
 -- Result: App (FuncRef 0) [Const 5]
+
+-- To print a term, just use show:
+printExample :: IO ()
+printExample = do
+  putStrLn "Original term:"
+  print exampleTerm
+  putStrLn "\nTransformed term:"
+  print exampleTransformed
+  putStrLn "\nWith collected functions:"
+  print exampleWithFuncs
 
 -- To get the collected functions:
 exampleWithFuncs :: (Term Sig', GatherState)
