@@ -1,13 +1,14 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module OSC.Expr.Comp where
 
-import Data.Function ((&))
 import Data.Comp
 import Data.Comp.Derive
+import Data.Comp.Ops
 import Data.Comp.Term
 
 import Control.Monad.State
