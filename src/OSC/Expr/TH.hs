@@ -112,6 +112,13 @@ replaceInType expVar typ = case typ of
   ConT name -> ConT name
   _ -> typ
 
+-- Check if a type contains a type variable (i.e., is recursive)
+isRecursiveType :: Type -> Bool
+isRecursiveType typ = case typ of
+  VarT _ -> True
+  AppT f a -> isRecursiveType f || isRecursiveType a
+  _ -> False
+
 makePlateInstance :: Name -> Q [Dec]
 makePlateInstance typeName = do
   info <- reify typeName
@@ -155,28 +162,30 @@ makeDescendMatch conName fields unwrapVar extractVar = do
   
   let pat = ConP conName [] (fmap VarP fieldVars)
   
-  body <- if null fields
+  -- Filter to only recursive fields (those containing the type variable)
+  let recursiveFields = [ (f, v) | (f@(_, typ), v) <- zip fields fieldVars, isRecursiveType typ ]
+  
+  body <- if null recursiveFields
     then [| pure [] |]
-    else makeDescendBody fields fieldVars unwrapVar extractVar
+    else makeDescendBody recursiveFields unwrapVar extractVar
 
   pure $ Match pat (NormalB body) []
 
-makeDescendBody :: [BangType] -> [Name] -> Name -> Name -> Q Exp
-makeDescendBody fields fieldVars unwrapVar extractVar = do
+makeDescendBody :: [((Bang, Type), Name)] -> Name -> Name -> Q Exp
+makeDescendBody recursiveFields unwrapVar extractVar = do
   let isTraversable (_, typ) = case typ of
         AppT ListT _ -> True
         _ -> False
 
-  if length fields == 1
+  if length recursiveFields == 1
     then do
-      let (bang, typ) = head fields
-      let var = head fieldVars
+      let ((bang, typ), var) = head recursiveFields
       if isTraversable (bang, typ)
         then [| fmap mconcat $ traverse (descend $(varE unwrapVar) $(varE extractVar)) $(varE var) |]
         else [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
     else do
       -- Multiple fields: combine with <>
-      exprs <- forM (zip fields fieldVars) $ \((bang, typ), var) ->
+      exprs <- forM recursiveFields $ \((bang, typ), var) ->
         if isTraversable (bang, typ)
           then [| fmap mconcat $ traverse (descend $(varE unwrapVar) $(varE extractVar)) $(varE var) |]
           else [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
