@@ -1,37 +1,42 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveTraversable #-}
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
 
 module OSC.Expr.TH where
 
-import Control.Monad.Trans
-
--- Pair a recursive functor with a lookup monad
-class Lookup mu m where
-  unwrap :: Applicative m => mu expr -> m (expr (mu expr))
-
 class Plate expr where
-  descend :: Lookup mu m => Monad m => (mu expr -> expr (mu expr) -> m (Maybe a)) -> mu expr -> m [a]
-  transform :: Lookup mu m => Monad m => (expr (mu expr) -> m (expr (mu expr))) -> mu expr -> m (expr (mu expr))
+  descend :: Monad m
+    => (forall y. mu y -> m (y (mu y)))  -- | Unrwap
 
-class BiPlate a b diff | a b -> diff, a diff -> b, b diff -> a where
-  transformBi :: Lookup mu m => Monad m => (diff (mu diff) -> m (b (mu b))) -> a (mu a) -> m (b (mu b))
+    -> (expr (mu expr) -> m (Maybe a))   -- | Gather
+    -> mu expr
+    -> m [a]
+
+class BiPlate a b c | a c -> b, b c -> a where
+  transformBi :: Monad m
+    => (forall y. mu y -> m (y (mu y)))      -- | Unwrap
+    -> (forall y. y (mu' y) -> m (mu' y))    -- | Wrap
+
+    -> (c (mu' b) -> m (b (mu' b)))          -- | Transform
+    -> mu a
+    -> m (mu' b)
 
 --------------------------------------------------------------------------------
 
--- Recursive functor
+-- Simple recursive functor (can be paired with Identity)
 data Mu f = Mu (f (Mu f))
 
--- Lookup monad
-data AnnM m ann mu expr = AnnM (ann -> expr (mu expr) -> m (ann, expr (mu expr)))
+-- Annotated recursive functor + monad
+data Ann ann f = Ann (ann, f (Ann ann f))
+data AnnM ann expr a = AnnM (Ann ann expr -> a)
 
-instance Applicative f => Lookup Mu f where
-  unwrap (Mu f) = pure f
+-- DAG recursive functor + monad
+data Dag k f = Node (f (Dag k f)) | Key k
+data DagM k expr a = DagM ((k -> expr (Dag k expr)) -> a)
 
 -- write a TH function that:
 
@@ -53,41 +58,48 @@ data Sum0 exp
   | S_Mul exp exp
   deriving (Functor, Foldable, Traversable)
 
----- and implement the Plate class:
+---- and implement the Plate and Biplate classes:
 
 instance Plate Sum0 where
-  descend extract expr = do
-    undefined
-    -- inner <- unwrap expr
-    -- a <- extract expr inner
-    -- case a of
-    --   Just a' -> pure [a']
-    --   Nothing -> case inner of
-    --     S_Const _ -> pure []
-    --     -- if field is of type `h (g (f exp)) ...` (like `[exp]` or `[Maybe exp]`) then just traverse (not sure if mconcat etc is needed for more complicated traversls) - we'll throw a type error if f isn't a Traversable
-    --     S_Arr exprs -> fmap mconcat $ traverse (descend extract) exprs
-    --     S_Add exp1 exp2 -> (<>) <$> descend extract exp1 <*> descend extract exp2
-    --     S_Mul exp1 exp2 -> (<>) <$> descend extract exp1 <*> descend extract exp2
+  descend unwrap extract expr = do
+    inner <- unwrap expr
+    a <- extract inner
+    case a of
+      Just a' -> pure [a']
+      Nothing -> case inner of
+        S_Const _ -> pure []
+        -- if field is of type `h (g (f exp)) ...` (like `[exp]` or `[Maybe exp]`) then just traverse (not sure if mconcat etc is needed for more complicated traversls) - we'll throw a type error if f isn't a Traversable
+        S_Arr exprs -> fmap mconcat $ traverse (descend unwrap extract) exprs
+        S_Add exp1 exp2 -> (<>) <$> descend unwrap extract exp1 <*> descend unwrap extract exp2
+        S_Mul exp1 exp2 -> (<>) <$> descend unwrap extract exp1 <*> descend unwrap extract exp2
 
-  transform f expr = undefined
-    -- inner <- pure $ unwrap expr
-    -- case inner of
-    --   S_Const n -> (S_Const <$> pure n)
-    --   _ -> undefined
-    --   -- S_Arr exprs -> fmap wrap (S_Arr <$> traverse (transform f) exprs)
-    --   -- S_Add exp1 exp2 -> fmap wrap ()
+instance BiPlate Sum0 Sum0 Sum0 where
+  transformBi unwrap wrap f expr = do
+    inner <- unwrap expr
+    case inner of
+      S_Const n   -> wrap =<< pure (S_Const n)
+      S_Arr exprs -> wrap =<< f =<< (S_Arr <$> traverse (transformBi unwrap wrap f) exprs)
+      S_Add a b   -> wrap =<< f =<< (S_Add <$> transformBi unwrap wrap f a <*> transformBi unwrap wrap f b)
+      S_Mul a b   -> wrap =<< f =<< (S_Add <$> transformBi unwrap wrap f a <*> transformBi unwrap wrap f b)
   
 ---- calling
 
------- makeDiff "D_" "Sum0_Expr" [''Value, ''Expr] [''Value]
+------ makeDiff "D_" "Diff_Sum0_Expr" [''Value, ''Expr] [''Value]
 
 ---- will generate the following datatype:
 
-data Sum0_Expr exp
+data Diff_Sum0_Expr exp
   = D_Add exp exp
   | D_Mul exp exp
 
----- and implement the BiPlate class:
+---- and implement the following BiPlate class:
 
--- instance BiPlate Sum0 Expr Sum0_Expr where
---   transformBi a b = undefined
+instance BiPlate Sum0 Value Diff_Sum0_Expr where
+  transformBi unwrap wrap f expr = do
+    inner <- unwrap expr
+    case inner of
+      S_Const n -> wrap =<< pure (Const n)
+      S_Arr as  -> wrap =<< (Arr <$> traverse (transformBi unwrap wrap f) as)
+
+      S_Add a b -> wrap =<< f =<< (D_Add <$> transformBi unwrap wrap f a <*> transformBi unwrap wrap f b)
+      S_Mul a b -> wrap =<< f =<< (D_Add <$> transformBi unwrap wrap f a <*> transformBi unwrap wrap f b)
