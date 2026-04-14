@@ -51,15 +51,11 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
 
     -- Algebra that handles Lam specially and preserves everything else
     gatherAlg :: AlgM (State GatherState) Sig (Term Sig')
-    gatherAlg = caseF homExp (caseF homValue gatherLam)
+    gatherAlg = gatherLam `compAlgM` hom
     
-    -- Preserve Exp via homomorphism
-    homExp :: AlgM (State GatherState) Exp (Term Sig')
-    homExp = return . inject
-    
-    -- Preserve Value via homomorphism
-    homValue :: AlgM (State GatherState) Value (Term Sig')
-    homValue = return . inject
+    -- Homomorphism: preserve structure by injecting into target signature
+    hom :: (f :<: Sig') => AlgM (State GatherState) f (Term Sig')
+    hom = return . inject
     
     -- Only handle Lam specially
     gatherLam :: AlgM (State GatherState) Lam (Term Sig')
