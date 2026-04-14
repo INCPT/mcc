@@ -81,14 +81,6 @@ data UOp = Sqrt | Abs' | Neg | Ceil | Floor | Trunc | Nearest
          | Extend | Wrap | Convert | Demote | Promote | Reinterpret
   deriving (Eq, Show)
 
-data Selection lam t sel = Selection (Expr lam sel t) (Expr lam sel t)
-
-data FoldedSelection lam t sel
-  = FoldedSelectionLHS [Expr lam sel t] (Expr lam sel t)
-  | FoldedSelectionRHS (Expr lam sel t) [Expr lam sel t]
-
-data Mu f = Mu (f (Mu f))
-
 data Expr lam sel t
   = EConst Number
   | EOp t Op (Expr lam sel t) (Expr lam sel t) -- both args and the result are simple types
@@ -575,11 +567,26 @@ choiceTree (ESelect t e idx) = do
 
 --------------------------------------------------------------------------------
 
-data Lambda1 t lam = Lambda1 {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Expr lam (Mu (Selection (Mu (Lambda1 t)) t)) t)] {- body -} (Expr lam (Mu (Selection (Mu (Lambda1 t)) t)) t)
-data Lambda2 t lam = Lambda2 {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Expr lam (Mu (FoldedSelection (Mu (Lambda2 t)) t)) t)] {- body -} (Expr lam (Mu (FoldedSelection (Mu (Lambda2 t)) t)) t)
+data Mu f = Mu (f (Mu f))
 
-type ExprSel t       = Expr (Mu (Lambda1 t)) (Mu (Selection (Mu (Lambda1 t)) t)) t
-type ExprFoldedSel t = Expr (Mu (Lambda2 t)) (Mu (FoldedSelection (Mu (Lambda2 t)) t)) t
+data Selection lam t sel = Selection (Expr lam sel t) (Expr lam sel t)
+
+data FoldedSelection lam t sel
+  = FoldedSelectionLHS [Expr lam sel t] (Expr lam sel t)
+  | FoldedSelectionRHS (Expr lam sel t) [Expr lam sel t]
+
+data Lambda3 t sel lam = Lambda3 {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Expr lam sel t)] {- body -} (Expr lam sel t)
+data Lambda1 t lam = Lambda1 {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Expr lam (Selection_ (Lambda1_ t) t) t)] {- body -} (Expr lam (Selection_ (Lambda1_ t) t) t)
+data Lambda2 t lam = Lambda2 {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Expr lam (FoldedSelection_ (Lambda2_ t) t) t)] {- body -} (Expr lam (FoldedSelection_ (Lambda2_ t) t) t)
+
+type Lambda1_ t = Mu (Lambda1 t)
+type Lambda2_ t = Mu (Lambda2 t)
+
+type Selection_ lam t = Mu (Selection lam t)
+type FoldedSelection_ lam t = Mu (FoldedSelection lam t)
+
+type ExprSel t       = Expr (Lambda1_ t) (Selection_ (Lambda1_ t) t) t
+type ExprFoldedSel t = Expr (Lambda2_ t) (FoldedSelection_ (Lambda2_ t) t) t
 
 type FoldSelectionsM t = StackM (t, ExprSel t) Identity (ExprFoldedSel t)
 
