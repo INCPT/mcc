@@ -8,6 +8,7 @@ module OSC.Expr.Comp where
 import Data.Comp
 import Data.Comp.Ops
 import Data.Comp.Derive
+import qualified Data.Comp.Multi.Derive as MD
 
 import Control.Monad.State
 
@@ -35,7 +36,6 @@ $(derive
     , makeFoldable
     , makeEqF
     , makeShowF
-    , makeHFunctor
     , smartConstructors
     , smartAConstructors
     ]
