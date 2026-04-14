@@ -51,9 +51,7 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
       }
 
     gatherAlg :: AlgM (State GatherState) Sig (Term Sig')
-    gatherAlg (Inl exp) = gatherExp exp
-    gatherAlg (Inr (Inl val)) = gatherValue val
-    gatherAlg (Inr (Inr lam)) = gatherLam lam
+    gatherAlg = caseF gatherExp (caseF gatherValue gatherLam)
 
     gatherExp :: Exp (Term Sig') -> State GatherState (Term Sig')
     gatherExp (Op e1 e2) = return $ iOp e1 e2
