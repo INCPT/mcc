@@ -71,15 +71,15 @@ makeSum prefix sumName typeNames = do
 
   pure [sumDataDec, plateInst, biPlateInst]
 
-makeDiff :: String -> String -> Name -> Name -> Q [Dec]
-makeDiff prefix diffName sumTypeName subsetTypeName = do
-  -- Get info about the sum type and subset type
-  sumInfo <- reify sumTypeName
-  subsetInfo <- reify subsetTypeName
+makeDiff :: String -> String -> [(Name, [BangType])] -> [Name] -> Q [Dec]
+makeDiff prefix diffName allCons subsetTypeNames = do
+  -- Get info about the subset types
+  subsetInfos <- forM subsetTypeNames $ \typeName -> do
+    info <- reify typeName
+    pure (typeName, info)
 
-  -- Get constructors
-  let allCons = getConstructors sumInfo
-  let subsetCons = getConstructors subsetInfo
+  -- Get constructors from subset types
+  let subsetCons = mconcat [ getConstructors info | (_, info) <- subsetInfos ]
 
   -- Diff constructors = all - subset
   let diffCons = [ c | c <- allCons, c `notElem` subsetCons ]
@@ -97,10 +97,7 @@ makeDiff prefix diffName sumTypeName subsetTypeName = do
   -- Create the data declaration
   let diffDataDec = DataD [] diffTypeName [PlainTV expVar undefined] Nothing diffConsDecls []
 
-  -- Create BiPlate instance for Sum -> Subset via Diff
-  biPlateInst <- makeBiPlateInstance prefix sumTypeName subsetTypeName diffTypeName allCons
-
-  pure [diffDataDec, biPlateInst]
+  pure [diffDataDec]
 
 --------------------------------------------------------------------------------
 -- Helper functions
