@@ -10,8 +10,13 @@
 module OSC.Expr.TH where
 
 import Language.Haskell.TH
-import Control.Monad (forM)
+import Control.Monad (forM, foldM)
 import Data.Traversable (traverse)
+
+foldl1M :: Monad m => (a -> a -> m a) -> [a] -> m a
+foldl1M _ [] = error "foldl1M: empty list"
+foldl1M _ [x] = pure x
+foldl1M f (x:xs) = foldM f x xs
 
 class Plate expr where
   descend :: Monad m
@@ -271,7 +276,8 @@ makeDescendBody fields fieldVars unwrapVar extractVar = do
           then [| fmap mconcat $ traverse (descend $(varE unwrapVar) $(varE extractVar)) $(varE var) |]
           else [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
       
-      pure $ foldl1 (\a b -> [| $a <> $b |]) exprs
+      let combineExprs a b = [| $(pure a) <> $(pure b) |]
+      foldl1M combineExprs exprs
 
 makeBiPlateInstanceSelf :: String -> Name -> [(Name, [BangType])] -> Q Dec
 makeBiPlateInstanceSelf prefix sumTypeName cons = do
