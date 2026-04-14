@@ -49,14 +49,6 @@ instance (ShowF f, ShowF g) => ShowF (f :+: g) where
   showF (Inl x) = showF x
   showF (Inr x) = showF x
 
--- Derive Show instances for terms
--- These are automatically available via Data.Comp.Show once ShowF instances exist
-instance (ShowF f) => Show (Term f) where
-  show = showTerm
-
-instance (ShowF f, Show a) => Show (Cxt h f a) where
-  show = showCxt
-
 --------------------------------------------------------------------------------
 
 data GatherState = GatherState
