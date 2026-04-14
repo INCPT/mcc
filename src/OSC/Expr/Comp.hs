@@ -35,6 +35,7 @@ $(derive
     , makeFoldable
     , makeEqF
     , makeShowF
+    , makeHFunctor
     , smartConstructors
     , smartAConstructors
     ]
@@ -50,20 +51,12 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
       , collectedFuncs = []
       }
 
+    -- Default case: use homomorphism to preserve structure
     gatherAlg :: AlgM (State GatherState) Sig (Term Sig')
-    gatherAlg = caseF gatherExp (caseF gatherValue gatherLam)
-
-    gatherExp :: Exp (Term Sig') -> State GatherState (Term Sig')
-    gatherExp (Op e1 e2) = return $ iOp e1 e2
-    gatherExp (Var name) = return $ iVar name
-    gatherExp (App func args) = return $ iApp func args
-    gatherExp (Select arr idx) = return $ iSelect arr idx
-
-    gatherValue :: Value (Term Sig') -> State GatherState (Term Sig')
-    gatherValue (Const n) = return $ iConst n
-    gatherValue (Arr elems) = return $ iArr elems
-
-    gatherLam :: Lam (Term Sig') -> State GatherState (Term Sig')
+    gatherAlg = gatherLam `compAlg` hom
+    
+    -- Only handle Lam specially, everything else is preserved via homomorphism
+    gatherLam :: AlgM (State GatherState) Lam (Term Sig')
     gatherLam (Lam params locals body) = do
       -- Get current function ID and increment
       funcId <- gets nextFuncId
@@ -74,6 +67,10 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
       
       -- Return a function reference
       return $ inject (FuncRef funcId)
+    
+    -- Homomorphism: inject the functor into the target signature
+    hom :: (f :<: Sig') => AlgM (State GatherState) f (Term Sig')
+    hom = return . inject
 
 data GatherState = GatherState
   { nextFuncId :: Int
