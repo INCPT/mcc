@@ -53,7 +53,7 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
 
     -- Algebra that handles all cases
     gatherAlg :: AlgM (State GatherState) Sig (Term Sig')
-    gatherAlg = preserveExp & preserveValue & handleLam
+    gatherAlg = (preserveExp :&: preserveValue :&: handleLam)
     
     -- Preserve Exp by injecting into Sig'
     preserveExp :: Exp (Term Sig') -> State GatherState (Term Sig')
