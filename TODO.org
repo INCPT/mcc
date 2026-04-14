@@ -1,3 +1,4 @@
+* TODO test things like typechecking illegal selections
 * TODO !!! unique identifiers, shadowing etc
 * TODO propagate KR computations and compute them once per 128-sample frame
 ** for example, having fn f(a: slow i32, b: slow i32) ... then every subexpression that depends on a and b only can be floated to the be a binding in f

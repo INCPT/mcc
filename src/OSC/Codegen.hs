@@ -569,20 +569,19 @@ choiceTree (ESelect t e idx) = do
 
 --------------------------------------------------------------------------------
 
-data Mu f = Mu (f (Mu f))
+data Selection lam = Selection (Expr lam (Selection lam) Type) (Expr lam (Selection lam) Type)
 
-data Selection lam sel = Selection (Expr lam sel Type) (Expr lam sel Type)
-type Selection_ lam    = Mu (Selection lam)
+data FoldedSelection lam
+  = FoldedSelectionLHS [Expr lam (FoldedSelection lam) Type] (Expr lam (FoldedSelection lam) Type)
+  | FoldedSelectionRHS (Expr lam (FoldedSelection lam) Type) [Expr lam (FoldedSelection lam) Type]
 
-data FoldedSelection lam sel
-  = FoldedSelectionLHS [Expr lam sel Type] (Expr lam sel Type)
-  | FoldedSelectionRHS (Expr lam sel Type) [Expr lam sel Type]
-type FoldedSelection_ lam = Mu (FoldedSelection lam)
+data Lambda sel = Lambda
+  { params :: [Ident]
+  , bindings :: [(Ident, AllocRegion, Expr (Lambda sel) (sel (Lambda sel)) Type)]
+  , body :: Expr (Lambda sel) (sel (Lambda sel)) Type
+  }
 
-data Lambda sel lam = Lambda {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Expr lam (Mu (sel lam)) Type)] {- body -} (Expr lam (Mu (sel lam)) Type)
-type Lambda_ sel    = Mu (Lambda sel)
-
-type ExprSel sel = Expr (Lambda_ sel) (Mu (sel (Lambda_ sel))) Type
+type ExprSel sel = Expr (Lambda sel) (sel (Lambda sel)) Type
 
 type FoldSelectionsM = StackM (Type, ExprSel Selection) Identity (ExprSel FoldedSelection)
 
@@ -593,7 +592,8 @@ foldSelections = runStack . expr
     rhs expr = do
       idxs <- ST.get
       case idxs of
-        [] -> pure $ ESelect2 undefined (Mu $ FoldedSelectionRHS expr (fmap (foldSelections . snd) idxs))
+        -- TODO: type
+        [] -> pure $ ESelect2 undefined (FoldedSelectionRHS expr (fmap (foldSelections . snd) idxs))
         _ -> pure expr
 
     expr :: ExprSel Selection -> FoldSelectionsM
@@ -602,7 +602,7 @@ foldSelections = runStack . expr
     expr (EVar t n) = rhs $ EVar t n
     expr (EApp t f as) = rhs $ EApp t (foldSelections f) (fmap foldSelections as)
     expr (EAbs _ _ _ _) = undefined
-    expr (EAbs2 t (Mu (Lambda params bindings body))) = pure $ EAbs2 t $ Mu $ Lambda params
+    expr (EAbs2 t (Lambda params bindings body)) = pure $ EAbs2 t $ Lambda params
       [ (n, region, foldSelections bbody)
       | (n, region, bbody) <- bindings
       ]
@@ -613,13 +613,13 @@ foldSelections = runStack . expr
         Just (t, idx) -> do
           elems <- traverse expr elems
           push (t, idx)
-          pure $ ESelect2 t (Mu $ FoldedSelectionLHS elems (foldSelections idx))
+          pure $ ESelect2 t (FoldedSelectionLHS elems (foldSelections idx))
         _ -> pure $ EArr t (fmap foldSelections elems)
     expr (ERec t d param bindings body) = rhs $ ERec t d param
       [ (n, region, foldSelections bbody) | (n, region, bbody) <- bindings ]
       (foldSelections body)
     expr (ESelect _ _ _) = undefined
-    expr (ESelect2 t (Mu (Selection sel idx))) = do
+    expr (ESelect2 t (Selection sel idx)) = do
       push (t, idx)
       sel' <- expr sel
       _ <- pop
