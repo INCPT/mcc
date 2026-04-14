@@ -51,30 +51,19 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
       , collectedFuncs = []
       }
 
-    -- Algebra that handles all cases
-    gatherAlg :: AlgM (State GatherState) Sig (Term Sig')
-    gatherAlg = caseF preserveExp (caseF preserveValue handleLam)
-    
-    -- Preserve Exp by injecting into Sig'
-    preserveExp :: Exp (Term Sig') -> State GatherState (Term Sig')
-    preserveExp = return . inject
-    
-    -- Preserve Value by injecting into Sig'
-    preserveValue :: Value (Term Sig') -> State GatherState (Term Sig')
-    preserveValue = return . inject
-    
-    -- Handle Lam specially
-    handleLam :: Lam (Term Sig') -> State GatherState (Term Sig')
-    handleLam (Lam params locals body) = do
-      -- Get current function ID and increment
-      funcId <- gets nextFuncId
-      modify $ \s -> s { nextFuncId = nextFuncId s + 1 }
-      
-      -- Store the lambda for later
-      modify $ \s -> s { collectedFuncs = (funcId, params, locals, body) : collectedFuncs s }
-      
-      -- Return a function reference
-      return $ inject (FuncRef funcId)
+    -- Algebra that handles all cases - order independent
+    gatherAlg :: Sig (Term Sig') -> State GatherState (Term Sig')
+    gatherAlg = algLam `compAlg` algDefault
+      where
+        algLam :: Lam (Term Sig') -> Maybe (State GatherState (Term Sig'))
+        algLam (Lam params locals body) = Just $ do
+          funcId <- gets nextFuncId
+          modify $ \s -> s { nextFuncId = nextFuncId s + 1 }
+          modify $ \s -> s { collectedFuncs = (funcId, params, locals, body) : collectedFuncs s }
+          return $ inject (FuncRef funcId)
+        
+        algDefault :: Sig (Term Sig') -> State GatherState (Term Sig')
+        algDefault = return . Term . fmap unTerm
 
 data GatherState = GatherState
   { nextFuncId :: Int
