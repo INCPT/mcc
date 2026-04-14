@@ -41,25 +41,7 @@ class BiPlate a b c | a c -> b, b c -> a where
 
 makePlate :: Name -> Q [Dec]
 makePlate typeName = do
-  info <- reify typeName
-  let cons = getConstructors info
-  
-  -- Extract the prefix from the first constructor
-  -- Assumes all constructors share the same prefix pattern
-  let prefix = case cons of
-        ((conName, _):_) -> 
-          let baseName = nameBase conName
-              -- Find the prefix by looking for the first uppercase after initial chars
-              -- For "S_Const", we want "S_"
-              findPrefix [] = ""
-              findPrefix (c:cs) = 
-                if c == '_' 
-                  then [c]
-                  else c : findPrefix cs
-          in takeWhile (/= '_') baseName ++ "_"
-        [] -> ""
-  
-  plateInst <- makePlateInstance prefix typeName cons
+  plateInst <- makePlateInstance typeName
   pure [plateInst]
 
 makeSum :: String -> String -> [Name] -> Q [Dec]
@@ -86,13 +68,6 @@ makeSum prefix sumName typeNames = do
   let sumDataDec = DataD [] sumTypeName [PlainTV expVar BndrReq] Nothing sumCons
         [DerivClause Nothing [ConT ''Functor, ConT ''Foldable, ConT ''Traversable]]
 
-  -- -- Create Plate instance
-  -- plateInst <- makePlateInstance prefix sumTypeName allCons
-
-  -- -- Create BiPlate instance for Sum -> Sum (self-instance)
-  -- biPlateInst <- makeBiPlateInstance prefix sumTypeName sumTypeName sumTypeName allCons
-
-  -- pure [sumDataDec, plateInst, biPlateInst]
   pure [sumDataDec]
 
 makeDiff :: String -> String -> [(Name, [BangType])] -> [Name] -> Q [Dec]
@@ -142,8 +117,11 @@ replaceInType expVar typ = case typ of
   ConT name -> ConT name
   _ -> typ
 
-makePlateInstance :: String -> Name -> [(Name, [BangType])] -> Q Dec
-makePlateInstance prefix sumTypeName cons = do
+makePlateInstance :: Name -> Q Dec
+makePlateInstance typeName = do
+  info <- reify typeName
+  let cons = getConstructors info
+  
   let unwrapVar = mkName "unwrap"
   let extractVar = mkName "extract"
   let exprVar = mkName "expr"
@@ -152,8 +130,7 @@ makePlateInstance prefix sumTypeName cons = do
 
   -- Build pattern matches for each constructor
   matches <- forM cons $ \(conName, fields) -> do
-    let newConName = mkName (prefix ++ nameBase conName)
-    makeDescendMatch newConName fields unwrapVar extractVar
+    makeDescendMatch conName fields unwrapVar extractVar
 
   let descendBody = DoE Nothing
         [ BindS (VarP innerVar) (AppE (VarE unwrapVar) (VarE exprVar))
@@ -172,7 +149,7 @@ makePlateInstance prefix sumTypeName cons = do
         []
 
   pure $ InstanceD Nothing [] 
-    (AppT (ConT ''Plate) (ConT sumTypeName))
+    (AppT (ConT ''Plate) (ConT typeName))
     [FunD 'descend [descendClause]]
 
 makeDescendMatch :: Name -> [BangType] -> Name -> Name -> Q Match
