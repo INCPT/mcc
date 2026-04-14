@@ -58,8 +58,10 @@ class GatherAlg f where
 instance GatherAlg Lam where
   gatherAlg (Lam params locals body) = do
     funcId <- gets nextFuncId
-    modify $ \s -> s { nextFuncId = nextFuncId s + 1 }
-    modify $ \s -> s { collectedFuncs = (funcId, params, locals, body) : collectedFuncs s }
+    modify $ \s -> s
+      { nextFuncId = nextFuncId s + 1
+      , collectedFuncs = (funcId, params, locals, body) : collectedFuncs s
+      }
     return $ inject (FuncRef funcId)
 
 instance {-# OVERLAPPABLE #-} (f :<: Sig') => GatherAlg f where
