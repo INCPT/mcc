@@ -51,11 +51,19 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
       , collectedFuncs = []
       }
 
-    -- Default case: use homomorphism to preserve structure
+    -- Algebra that handles Lam specially and preserves everything else
     gatherAlg :: AlgM (State GatherState) Sig (Term Sig')
-    gatherAlg = gatherLam `compAlg` hom
+    gatherAlg = caseF homExp (caseF homValue gatherLam)
     
-    -- Only handle Lam specially, everything else is preserved via homomorphism
+    -- Preserve Exp via homomorphism
+    homExp :: AlgM (State GatherState) Exp (Term Sig')
+    homExp = return . inject
+    
+    -- Preserve Value via homomorphism
+    homValue :: AlgM (State GatherState) Value (Term Sig')
+    homValue = return . inject
+    
+    -- Only handle Lam specially
     gatherLam :: AlgM (State GatherState) Lam (Term Sig')
     gatherLam (Lam params locals body) = do
       -- Get current function ID and increment
@@ -67,10 +75,6 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
       
       -- Return a function reference
       return $ inject (FuncRef funcId)
-    
-    -- Homomorphism: inject the functor into the target signature
-    hom :: (f :<: Sig') => AlgM (State GatherState) f (Term Sig')
-    hom = return . inject
 
 data GatherState = GatherState
   { nextFuncId :: Int
