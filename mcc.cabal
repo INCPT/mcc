@@ -60,6 +60,7 @@ library
     , base >=4.7 && <5
     , bytestring
     , cereal
+    , compdata
     , containers
     , deepseq
     , directory
@@ -97,6 +98,7 @@ executable mcc
     , base >=4.7 && <5
     , bytestring
     , cereal
+    , compdata
     , containers
     , deepseq
     , directory
