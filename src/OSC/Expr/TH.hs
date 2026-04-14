@@ -13,6 +13,7 @@ import Language.Haskell.TH
 import Control.Monad (forM, foldM, liftM2)
 import Control.Applicative (liftA2)
 import Data.Traversable (traverse)
+import qualified Data.Foldable as F
 
 foldl1M :: Monad m => (a -> a -> m a) -> [a] -> m a
 foldl1M _ [] = error "foldl1M: empty list"
@@ -121,6 +122,14 @@ isRecursiveType typ = case typ of
   AppT f a -> isRecursiveType a  -- Only check the argument, not the constructor
   _ -> False
 
+-- Count the nesting depth of containers before reaching the recursive type variable
+-- e.g., Maybe exp -> 1, Maybe (Maybe exp) -> 2, [Maybe exp] -> 2
+containerDepth :: Type -> Int
+containerDepth typ = case typ of
+  VarT _ -> 0
+  AppT _ a -> 1 + containerDepth a
+  _ -> 0
+
 makePlateInstance :: Name -> Q [Dec]
 makePlateInstance typeName = do
   info <- reify typeName
@@ -175,23 +184,28 @@ makeDescendMatch conName fields unwrapVar extractVar = do
 
 makeDescendBody :: [((Bang, Type), Name)] -> Name -> Name -> Q Exp
 makeDescendBody recursiveFields unwrapVar extractVar = do
-  -- Check if a type is a container (wrapped in a type constructor)
-  let isContainer typ = case typ of
-        AppT _ _ -> True
-        _ -> False
+  -- Generate unwrapping expression based on container depth
+  let makeUnwrapExpr depth var =
+        if depth == 0
+          then [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
+          else if depth == 1
+            then [| (fmap mconcat . traverse (descend $(varE unwrapVar) $(varE extractVar))) (F.toList $(varE var)) |]
+            else
+              -- For depth > 1, we need to stack: mconcat $ F.toList $ sequenceA $ F.toList
+              let unwrapLayer e = [| mconcat $ F.toList $ sequenceA $ F.toList $(pure e) |]
+                  innerExpr = [| (fmap mconcat . traverse (descend $(varE unwrapVar) $(varE extractVar))) |]
+              in foldr (\_ acc -> [| $(pure acc) . $(unwrapLayer (VarE var)) |]) innerExpr [1..depth-1]
 
   if length recursiveFields == 1
     then do
       let ((bang, typ), var) = head recursiveFields
-      if isContainer typ
-        then [| fmap mconcat $ sequenceA $ fmap (descend $(varE unwrapVar) $(varE extractVar)) $(varE var) |]
-        else [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
+      let depth = containerDepth typ
+      makeUnwrapExpr depth var
     else do
       -- Multiple fields: combine with <> using liftA2
-      exprs <- forM recursiveFields $ \((bang, typ), var) ->
-        if isContainer typ
-          then [| fmap mconcat $ sequenceA $ fmap (descend $(varE unwrapVar) $(varE extractVar)) $(varE var) |]
-          else [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
+      exprs <- forM recursiveFields $ \((bang, typ), var) -> do
+        let depth = containerDepth typ
+        makeUnwrapExpr depth var
       
       let combineExprs a b = [| liftA2 (<>) $(pure a) $(pure b) |]
       foldl1M combineExprs exprs
