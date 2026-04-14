@@ -6,7 +6,10 @@
 module OSC.Expr.Comp where
 
 import Data.Comp
+import Data.Comp.Ops
 import Data.Comp.Derive
+
+import Control.Monad.State
 
 data Value val = Const Int | Arr [val]
   deriving Functor
