@@ -145,8 +145,8 @@ makeSum prefix sumName typeNames = do
   -- Create Plate instance
   plateInst <- makePlateInstance prefix sumTypeName allCons
 
-  -- Create BiPlate instance for Sum -> Sum
-  biPlateInst <- makeBiPlateInstanceSelf prefix sumTypeName allCons
+  -- Create BiPlate instance for Sum -> Sum (self-instance)
+  biPlateInst <- makeBiPlateInstance prefix sumTypeName sumTypeName sumTypeName allCons
 
   pure [sumDataDec, plateInst, biPlateInst]
 
@@ -176,8 +176,8 @@ makeDiff prefix diffName sumTypeName subsetTypeName = do
   -- Create the data declaration
   let diffDataDec = DataD [] diffTypeName [PlainTV expVar undefined] Nothing diffConsDecls []
 
-  -- Create BiPlate instance for Sum -> Target via Diff
-  biPlateInst <- makeBiPlateInstanceDiff prefix sumTypeName subsetTypeName diffTypeName allCons subsetCons
+  -- Create BiPlate instance for Sum -> Subset via Diff
+  biPlateInst <- makeBiPlateInstance prefix sumTypeName subsetTypeName diffTypeName allCons
 
   pure [diffDataDec, biPlateInst]
 
@@ -268,55 +268,40 @@ makeDescendBody fields fieldVars unwrapVar extractVar = do
       let combineExprs a b = [| $(pure a) <> $(pure b) |]
       foldl1M combineExprs exprs
 
-makeBiPlateInstanceSelf :: String -> Name -> [(Name, [BangType])] -> Q Dec
-makeBiPlateInstanceSelf prefix sumTypeName cons = do
+makeBiPlateInstance :: String -> Name -> Name -> Name -> [(Name, [BangType])] -> Q Dec
+makeBiPlateInstance prefix sourceTypeName destTypeName commonTypeName sourceCons = do
+  -- Get constructors of common type
+  commonInfo <- reify commonTypeName
+  let commonCons = getConstructors commonInfo
+  
+  -- Determine which constructors are in common vs diff
+  let diffCons = [ c | c <- sourceCons, c `notElem` commonCons ]
+  
   let unwrapVar = mkName "unwrap"
   let wrapVar = mkName "wrap"
   let fVar = mkName "f"
   let exprVar = mkName "expr"
   let innerVar = mkName "inner"
 
-  matches <- forM cons $ \(conName, fields) -> do
-    let newConName = mkName (prefix ++ nameBase conName)
-    makeTransformMatch newConName fields unwrapVar wrapVar fVar True
+  -- Determine if this is a self-instance (source == dest == common)
+  let isSelfInstance = sourceTypeName == destTypeName && destTypeName == commonTypeName
 
-  let transformBody = DoE Nothing
-        [ BindS (VarP innerVar) (AppE (VarE unwrapVar) (VarE exprVar))
-        , NoBindS (CaseE (VarE innerVar) matches)
-        ]
-
-  let transformClause = Clause 
-        [VarP unwrapVar, VarP wrapVar, VarP fVar, VarP exprVar]
-        (NormalB transformBody)
-        []
-
-  pure $ InstanceD Nothing [] 
-    (AppT (AppT (AppT (ConT ''BiPlate) (ConT sumTypeName)) (ConT sumTypeName)) (ConT sumTypeName))
-    [FunD 'transformBi [transformClause]]
-
-makeBiPlateInstanceDiff :: String -> Name -> Name -> Name -> [(Name, [BangType])] -> [(Name, [BangType])] -> Q Dec
-makeBiPlateInstanceDiff prefix sumTypeName targetTypeName diffTypeName allCons subsetCons = do
-  let unwrapVar = mkName "unwrap"
-  let wrapVar = mkName "wrap"
-  let fVar = mkName "f"
-  let exprVar = mkName "expr"
-  let innerVar = mkName "inner"
-
-  -- Create matches for subset constructors (direct mapping)
-  subsetMatches <- forM subsetCons $ \(conName, fields) -> do
-    let sumConName = mkName (prefix ++ nameBase conName)
-    makeTransformMatchDirect sumConName conName fields unwrapVar wrapVar fVar
+  -- Create matches for common constructors (direct mapping to dest type)
+  commonMatches <- forM commonCons $ \(conName, fields) -> do
+    let sourceConName = mkName (prefix ++ nameBase conName)
+    if isSelfInstance
+      then makeTransformMatch sourceConName fields unwrapVar wrapVar fVar True
+      else makeTransformMatchDirect sourceConName conName fields unwrapVar wrapVar fVar
 
   -- Create matches for diff constructors (apply f)
-  let diffCons = [ c | c <- allCons, c `notElem` subsetCons ]
   diffMatches <- forM diffCons $ \(conName, fields) -> do
-    let sumConName = mkName (prefix ++ nameBase conName)
+    let sourceConName = mkName (prefix ++ nameBase conName)
     let diffConName = mkName (prefix ++ nameBase conName)
-    makeTransformMatchDiff sumConName diffConName fields unwrapVar wrapVar fVar
+    makeTransformMatchDiff sourceConName diffConName fields unwrapVar wrapVar fVar
 
   let transformBody = DoE Nothing
         [ BindS (VarP innerVar) (AppE (VarE unwrapVar) (VarE exprVar))
-        , NoBindS (CaseE (VarE innerVar) (subsetMatches ++ diffMatches))
+        , NoBindS (CaseE (VarE innerVar) (commonMatches ++ diffMatches))
         ]
 
   let transformClause = Clause 
@@ -324,8 +309,11 @@ makeBiPlateInstanceDiff prefix sumTypeName targetTypeName diffTypeName allCons s
         (NormalB transformBody)
         []
 
+  -- Determine the third type parameter for BiPlate instance
+  let thirdType = if isSelfInstance then sourceTypeName else commonTypeName
+
   pure $ InstanceD Nothing [] 
-    (AppT (AppT (AppT (ConT ''BiPlate) (ConT sumTypeName)) (ConT targetTypeName)) (ConT diffTypeName))
+    (AppT (AppT (AppT (ConT ''BiPlate) (ConT sourceTypeName)) (ConT destTypeName)) (ConT thirdType))
     [FunD 'transformBi [transformClause]]
 
 makeTransformMatch :: Name -> [BangType] -> Name -> Name -> Name -> Bool -> Q Match
