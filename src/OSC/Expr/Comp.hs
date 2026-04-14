@@ -5,6 +5,7 @@
 
 module OSC.Expr.Comp where
 
+import Data.Function ((&))
 import Data.Comp
 import Data.Comp.Derive
 import Data.Comp.Term
