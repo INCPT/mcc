@@ -50,22 +50,26 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
       , collectedFuncs = []
       }
 
-    -- Algebra that handles Lam specially and preserves everything else
+    -- Algebra that handles all cases using disjointAlgM
     gatherAlg :: AlgM (State GatherState) Sig (Term Sig')
-    gatherAlg = gatherLam `compAlgM` hom
+    gatherAlg = disjointAlgM preserveExp (disjointAlgM preserveValue handleLam)
     
-    -- Homomorphism: preserve structure by injecting into target signature
-    hom :: (Functor f, f :<: Sig') => f (Term Sig') -> State GatherState (Term Sig')
-    hom = return . inject
+    -- Preserve Exp by injecting into Sig'
+    preserveExp :: AlgM (State GatherState) Exp (Term Sig')
+    preserveExp = return . inject
     
-    -- Only handle Lam specially
-    gatherLam :: AlgM (State GatherState) Lam (Term Sig')
-    gatherLam (Lam params locals body) = do
+    -- Preserve Value by injecting into Sig'
+    preserveValue :: AlgM (State GatherState) Value (Term Sig')
+    preserveValue = return . inject
+    
+    -- Handle Lam specially
+    handleLam :: AlgM (State GatherState) Lam (Term Sig')
+    handleLam (Lam params locals body) = do
       -- Get current function ID and increment
       funcId <- gets nextFuncId
       modify $ \s -> s { nextFuncId = nextFuncId s + 1 }
       
-      -- Store the lambda for later (you might want to store it somewhere)
+      -- Store the lambda for later
       modify $ \s -> s { collectedFuncs = (funcId, params, locals, body) : collectedFuncs s }
       
       -- Return a function reference
