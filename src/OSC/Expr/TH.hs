@@ -175,24 +175,21 @@ makeDescendMatch conName fields unwrapVar extractVar = do
 
 makeDescendBody :: [((Bang, Type), Name)] -> Name -> Name -> Q Exp
 makeDescendBody recursiveFields unwrapVar extractVar = do
-  -- Check if a type needs traversal (is a Traversable container)
-  let needsTraversal typ = case typ of
-        AppT ListT _ -> True
-        AppT (ConT name) _ -> 
-          -- Check for common traversable types
-          nameBase name `elem` ["Maybe", "Either", "[]"]
+  -- Check if a type is a container (wrapped in a type constructor)
+  let isContainer typ = case typ of
+        AppT _ _ -> True
         _ -> False
 
   if length recursiveFields == 1
     then do
       let ((bang, typ), var) = head recursiveFields
-      if needsTraversal typ
+      if isContainer typ
         then [| fmap mconcat $ traverse (descend $(varE unwrapVar) $(varE extractVar)) $(varE var) |]
         else [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
     else do
       -- Multiple fields: combine with <> using liftA2
       exprs <- forM recursiveFields $ \((bang, typ), var) ->
-        if needsTraversal typ
+        if isContainer typ
           then [| fmap mconcat $ traverse (descend $(varE unwrapVar) $(varE extractVar)) $(varE var) |]
           else [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
       
@@ -268,11 +265,17 @@ makeTransformBody targetConName fields fieldVars unwrapVar wrapVar fVar mode = d
     else do
       -- Transform each field
       transformedFields <- forM (zip fields fieldVars) $ \((bang, typ), var) ->
-        case typ of
-          AppT ListT _ -> 
-            [| traverse (transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar)) $(varE var) |]
-          _ -> 
-            [| transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar) $(varE var) |]
+        if isRecursiveType typ
+          then case typ of
+            AppT _ _ -> 
+              -- Any container type (Maybe, [], etc.) - use traverse
+              [| traverse (transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar)) $(varE var) |]
+            _ -> 
+              -- Direct recursive type
+              [| transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar) $(varE var) |]
+          else
+            -- Non-recursive field, just return as-is
+            varE var
 
       conApp <- foldr (\acc field -> appE (pure acc) field) (conE targetConName) (transformedFields)
       
