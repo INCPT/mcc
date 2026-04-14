@@ -10,7 +10,8 @@
 module OSC.Expr.TH where
 
 import Language.Haskell.TH
-import Control.Monad (forM, foldM)
+import Control.Monad (forM, foldM, liftM2)
+import Control.Applicative (liftA2)
 import Data.Traversable (traverse)
 
 foldl1M :: Monad m => (a -> a -> m a) -> [a] -> m a
@@ -112,11 +113,12 @@ replaceInType expVar typ = case typ of
   ConT name -> ConT name
   _ -> typ
 
--- Check if a type contains a type variable (i.e., is recursive)
+-- Check if a type contains a type variable in positive position (i.e., is recursive)
+-- This handles cases like Maybe f, [f], Either a f, etc.
 isRecursiveType :: Type -> Bool
 isRecursiveType typ = case typ of
   VarT _ -> True
-  AppT f a -> isRecursiveType f || isRecursiveType a
+  AppT f a -> isRecursiveType a  -- Only check the argument, not the constructor
   _ -> False
 
 makePlateInstance :: Name -> Q [Dec]
@@ -173,24 +175,28 @@ makeDescendMatch conName fields unwrapVar extractVar = do
 
 makeDescendBody :: [((Bang, Type), Name)] -> Name -> Name -> Q Exp
 makeDescendBody recursiveFields unwrapVar extractVar = do
-  let isTraversable (_, typ) = case typ of
+  -- Check if a type needs traversal (is a Traversable container)
+  let needsTraversal typ = case typ of
         AppT ListT _ -> True
+        AppT (ConT name) _ -> 
+          -- Check for common traversable types
+          nameBase name `elem` ["Maybe", "Either", "[]"]
         _ -> False
 
   if length recursiveFields == 1
     then do
       let ((bang, typ), var) = head recursiveFields
-      if isTraversable (bang, typ)
+      if needsTraversal typ
         then [| fmap mconcat $ traverse (descend $(varE unwrapVar) $(varE extractVar)) $(varE var) |]
         else [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
     else do
-      -- Multiple fields: combine with <>
+      -- Multiple fields: combine with <> using liftA2
       exprs <- forM recursiveFields $ \((bang, typ), var) ->
-        if isTraversable (bang, typ)
+        if needsTraversal typ
           then [| fmap mconcat $ traverse (descend $(varE unwrapVar) $(varE extractVar)) $(varE var) |]
           else [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
       
-      let combineExprs a b = [| $(pure a) <> $(pure b) |]
+      let combineExprs a b = [| liftA2 (<>) $(pure a) $(pure b) |]
       foldl1M combineExprs exprs
 
 makeBiPlateInstance :: String -> Name -> Name -> Name -> [(Name, [BangType])] -> Q Dec
