@@ -39,11 +39,6 @@ class BiPlate a b c | a c -> b, b c -> a where
 
 --------------------------------------------------------------------------------
 
-makePlate :: Name -> Q [Dec]
-makePlate typeName = do
-  plateInst <- makePlateInstance typeName
-  pure [plateInst]
-
 makeSum :: String -> String -> [Name] -> Q [Dec]
 makeSum prefix sumName typeNames = do
   -- Get info about all the types
@@ -117,7 +112,7 @@ replaceInType expVar typ = case typ of
   ConT name -> ConT name
   _ -> typ
 
-makePlateInstance :: Name -> Q Dec
+makePlateInstance :: Name -> Q [Dec]
 makePlateInstance typeName = do
   info <- reify typeName
   let cons = getConstructors info
@@ -148,9 +143,11 @@ makePlateInstance typeName = do
         (NormalB descendBody)
         []
 
-  pure $ InstanceD Nothing [] 
-    (AppT (ConT ''Plate) (ConT typeName))
-    [FunD 'descend [descendClause]]
+  pure
+    [ InstanceD Nothing [] 
+        (AppT (ConT ''Plate) (ConT typeName))
+        [FunD 'descend [descendClause]]
+    ]
 
 makeDescendMatch :: Name -> [BangType] -> Name -> Name -> Q Match
 makeDescendMatch conName fields unwrapVar extractVar = do
