@@ -21,18 +21,24 @@ data Value val = Const Int | Arr [val]
 data Lam exp = Lam [String] [(String, exp)] exp
   deriving Functor
 
+data Select exp = Select exp exp
+  deriving Functor
+
+data FoldedSelect exp = FoldedSelectL [exp] exp | FoldedSelectR exp [exp]
+  deriving Functor
+
 data Exp exp
   = Op exp exp
   | Var String
   | App exp [exp]
-  | Select exp exp
   deriving Functor
 
 data FuncRef exp = FuncRef Int
   deriving Functor
 
-type Sig  = Exp :+: Value :+: Lam
-type Sig' = Exp :+: Value :+: FuncRef
+type Sig0 = Exp :+: Value :+: Select       :+: Lam
+type Sig1 = Exp :+: Value :+: FoldedSelect :+: Lam
+type Sig2 = Exp :+: Value :+: FoldedSelect :+: FuncRef
 
 $(derive
     [ makeTraversable
@@ -42,18 +48,23 @@ $(derive
     , smartConstructors
     , smartAConstructors
     ]
-    [''Value, ''Lam, ''Exp, ''FuncRef]
+    [''Value, ''Lam, ''Exp, ''FuncRef, ''Select, ''FoldedSelect]
   )
+
+--------------------------------------------------------------------------------
+
+foldSelections :: Term Sig0 -> Term Sig1
+foldSelections = undefined
 
 --------------------------------------------------------------------------------
 
 data GatherState = GatherState
   { nextFuncId :: Int
-  , collectedFuncs :: [(Int, [String], [(String, Term Sig')], Term Sig')]
+  , collectedFuncs :: [(Int, [String], [(String, Term Sig2)], Term Sig2)]
   } deriving Show
 
 class GatherAlg f where
-  gatherAlg :: AlgM (State GatherState) f (Term Sig')
+  gatherAlg :: AlgM (State GatherState) f (Term Sig2)
 
 instance GatherAlg Lam where
   gatherAlg (Lam params locals body) = do
@@ -64,14 +75,14 @@ instance GatherAlg Lam where
       }
     return $ inject (FuncRef funcId)
 
-instance {-# OVERLAPPABLE #-} (f :<: Sig') => GatherAlg f where
+instance {-# OVERLAPPABLE #-} (f :<: Sig2) => GatherAlg f where
   gatherAlg = return . inject
 
 instance (GatherAlg f, GatherAlg g) => GatherAlg (f :+: g) where
   gatherAlg (Inl x) = gatherAlg x
   gatherAlg (Inr x) = gatherAlg x
 
-gatherAbs :: Term Sig -> Term Sig'
+gatherAbs :: Term Sig1 -> Term Sig2
 gatherAbs term = evalState (cataM gatherAlg term) initialState
   where
     initialState :: GatherState
@@ -105,7 +116,7 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
 --    (1, ["y"], [], App (FuncRef 2) [Const 3]),
 --    (0, ["x"], [], App (FuncRef 1) [Const 2])]
 
-exampleTerm :: Term Sig
+exampleTerm :: Term Sig1
 exampleTerm = 
   iApp (iLam ["x"] [] 
          (iApp (iLam ["y"] []
@@ -115,7 +126,7 @@ exampleTerm =
               [iConst 2]))
        [iConst 1]
 
-exampleTransformed :: Term Sig'
+exampleTransformed :: Term Sig2
 exampleTransformed = gatherAbs exampleTerm
 -- Result: App (FuncRef 0) [Const 1]
 -- Where FuncRef 0 contains: App (FuncRef 1) [Const 2]
@@ -133,7 +144,7 @@ printExample = do
   print exampleWithFuncs
 
 -- To get the collected functions:
-exampleWithFuncs :: (Term Sig', GatherState)
+exampleWithFuncs :: (Term Sig2, GatherState)
 exampleWithFuncs = runState (cataM gatherAlg exampleTerm) initialState
   where
     initialState = GatherState { nextFuncId = 0, collectedFuncs = [] }
