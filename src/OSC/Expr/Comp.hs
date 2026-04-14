@@ -15,20 +15,20 @@ import Data.Comp.Term
 import Control.Monad.State
 
 data Value val = Const Int | Arr [val]
-  deriving Functor
+  deriving (Functor, Show)
 
 data Lam exp = Lam [String] [(String, exp)] exp
-  deriving Functor
+  deriving (Functor, Show)
 
 data Exp exp
   = Op exp exp
   | Var String
   | App exp [exp]
   | Select exp exp
-  deriving Functor
+  deriving (Functor, Show)
 
 data FuncRef exp = FuncRef Int
-  deriving Functor
+  deriving (Functor, Show)
 
 type Sig  = Exp :+: Value :+: Lam
 type Sig' = Exp :+: Value :+: FuncRef
@@ -43,11 +43,6 @@ $(derive
     ]
     [''Value, ''Lam, ''Exp, ''FuncRef]
   )
-
--- ShowF instance for sums is needed for Show (Term Sig)
-instance (ShowF f, ShowF g) => ShowF (f :+: g) where
-  showF (Inl x) = showF x
-  showF (Inr x) = showF x
 
 --------------------------------------------------------------------------------
 
