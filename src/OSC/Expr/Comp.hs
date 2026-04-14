@@ -76,3 +76,34 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
       { nextFuncId = 0
       , collectedFuncs = []
       }
+
+--------------------------------------------------------------------------------
+-- Example usage
+--------------------------------------------------------------------------------
+
+-- Example: Transform a term with lambda abstractions into one with function references
+--
+-- Input term (Sig):
+--   App (Lam ["x"] [] (Op (Var "x") (Const 1))) [Const 5]
+--
+-- This represents: (λx. x + 1)(5)
+--
+-- After gatherAbs, the lambda is extracted and replaced with a FuncRef:
+--   App (FuncRef 0) [Const 5]
+--
+-- The extracted function is stored in the state's collectedFuncs:
+--   [(0, ["x"], [], Op (Var "x") (Const 1))]
+
+exampleTerm :: Term Sig
+exampleTerm = iApp (iLam ["x"] [] (iOp (iVar "x") (iConst 1))) [iConst 5]
+
+exampleTransformed :: Term Sig'
+exampleTransformed = gatherAbs exampleTerm
+-- Result: App (FuncRef 0) [Const 5]
+
+-- To get the collected functions:
+exampleWithFuncs :: (Term Sig', [(Int, [String], [(String, Term Sig')], Term Sig')])
+exampleWithFuncs = runState (cataM gatherAlg exampleTerm) initialState
+  where
+    initialState = GatherState { nextFuncId = 0, collectedFuncs = [] }
+-- Result: (App (FuncRef 0) [Const 5], GatherState { nextFuncId = 1, collectedFuncs = [(0, ["x"], [], Op (Var "x") (Const 1))] })
