@@ -102,7 +102,7 @@ exampleTransformed = gatherAbs exampleTerm
 -- Result: App (FuncRef 0) [Const 5]
 
 -- To get the collected functions:
-exampleWithFuncs :: (Term Sig', [(Int, [String], [(String, Term Sig')], Term Sig')])
+exampleWithFuncs :: (Term Sig', GatherState)
 exampleWithFuncs = runState (cataM gatherAlg exampleTerm) initialState
   where
     initialState = GatherState { nextFuncId = 0, collectedFuncs = [] }
