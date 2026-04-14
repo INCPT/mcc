@@ -21,7 +21,7 @@ foldl1M f (x:xs) = foldM f x xs
 class Plate expr where
   descend :: Monad m
     => (forall y. mu y -> m (y (mu y)))  -- | Unrwap
-
+ 
     -> (expr (mu expr) -> m (Maybe a))   -- | Gather
     -> mu expr
     -> m [a]
