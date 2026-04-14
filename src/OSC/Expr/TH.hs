@@ -246,7 +246,7 @@ makeDescendMatch conName fields unwrapVar extractVar = do
   let pat = ConP conName [] (fmap VarP fieldVars)
   
   body <- if null fields
-    then pure $ AppE (VarE 'pure) (ListE [])
+    then [| pure [] |]
     else makeDescendBody fields fieldVars unwrapVar extractVar
 
   pure $ Match pat (NormalB body) []
@@ -262,22 +262,16 @@ makeDescendBody fields fieldVars unwrapVar extractVar = do
       let (bang, typ) = head fields
       let var = head fieldVars
       if isTraversable (bang, typ)
-        then pure $ AppE (AppE (VarE 'fmap) (VarE 'mconcat))
-               (AppE (AppE (VarE 'traverse) 
-                 (AppE (AppE (VarE 'descend) (VarE unwrapVar)) (VarE extractVar)))
-                 (VarE var))
-        else pure $ AppE (AppE (AppE (VarE 'descend) (VarE unwrapVar)) (VarE extractVar)) (VarE var)
+        then [| fmap mconcat $ traverse (descend $(varE unwrapVar) $(varE extractVar)) $(varE var) |]
+        else [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
     else do
       -- Multiple fields: combine with <>
       exprs <- forM (zip fields fieldVars) $ \((bang, typ), var) ->
         if isTraversable (bang, typ)
-          then pure $ AppE (AppE (VarE 'fmap) (VarE 'mconcat))
-                 (AppE (AppE (VarE 'traverse) 
-                   (AppE (AppE (VarE 'descend) (VarE unwrapVar)) (VarE extractVar)))
-                   (VarE var))
-          else pure $ AppE (AppE (AppE (VarE 'descend) (VarE unwrapVar)) (VarE extractVar)) (VarE var)
+          then [| fmap mconcat $ traverse (descend $(varE unwrapVar) $(varE extractVar)) $(varE var) |]
+          else [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
       
-      pure $ foldl1 (\a b -> InfixE (Just a) (VarE '(<>)) (Just b)) exprs
+      pure $ foldl1 (\a b -> [| $a <> $b |]) exprs
 
 makeBiPlateInstanceSelf :: String -> Name -> [(Name, [BangType])] -> Q Dec
 makeBiPlateInstanceSelf prefix sumTypeName cons = do
@@ -352,32 +346,21 @@ makeTransformMatch conName fields unwrapVar wrapVar fVar applyF = do
 makeTransformBody :: Name -> [BangType] -> [Name] -> Name -> Name -> Name -> Bool -> Q Exp
 makeTransformBody conName fields fieldVars unwrapVar wrapVar fVar applyF = do
   if null fields
-    then pure $ InfixE 
-           (Just (VarE wrapVar)) 
-           (VarE '(=<<)) 
-           (Just (AppE (VarE 'pure) (ConE conName)))
+    then [| $(varE wrapVar) =<< pure $(conE conName) |]
     else do
       -- Transform each field
       transformedFields <- forM (zip fields fieldVars) $ \((bang, typ), var) ->
         case typ of
           AppT ListT _ -> 
-            pure $ AppE (AppE (VarE 'traverse) 
-                     (AppE (AppE (AppE (VarE 'transformBi) (VarE unwrapVar)) (VarE wrapVar)) (VarE fVar)))
-                   (VarE var)
+            [| traverse (transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar)) $(varE var) |]
           _ -> 
-            pure $ AppE (AppE (AppE (AppE (VarE 'transformBi) (VarE unwrapVar)) (VarE wrapVar)) (VarE fVar)) (VarE var)
+            [| transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar) $(varE var) |]
 
       let conApp = foldl AppE (ConE conName) transformedFields
       
       if applyF
-        then pure $ InfixE 
-               (Just (VarE wrapVar)) 
-               (VarE '(=<<)) 
-               (Just (InfixE (Just (VarE fVar)) (VarE '(=<<)) (Just conApp)))
-        else pure $ InfixE 
-               (Just (VarE wrapVar)) 
-               (VarE '(=<<)) 
-               (Just conApp)
+        then [| $(varE wrapVar) =<< $(varE fVar) =<< $(pure conApp) |]
+        else [| $(varE wrapVar) =<< $(pure conApp) |]
 
 makeTransformMatchDirect :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
 makeTransformMatchDirect sumConName targetConName fields unwrapVar wrapVar fVar = do
@@ -392,26 +375,18 @@ makeTransformMatchDirect sumConName targetConName fields unwrapVar wrapVar fVar 
 makeTransformBodyDirect :: Name -> [BangType] -> [Name] -> Name -> Name -> Name -> Q Exp
 makeTransformBodyDirect targetConName fields fieldVars unwrapVar wrapVar fVar = do
   if null fields
-    then pure $ InfixE 
-           (Just (VarE wrapVar)) 
-           (VarE '(=<<)) 
-           (Just (AppE (VarE 'pure) (ConE targetConName)))
+    then [| $(varE wrapVar) =<< pure $(conE targetConName) |]
     else do
       transformedFields <- forM (zip fields fieldVars) $ \((bang, typ), var) ->
         case typ of
           AppT ListT _ -> 
-            pure $ AppE (AppE (VarE 'traverse) 
-                     (AppE (AppE (AppE (VarE 'transformBi) (VarE unwrapVar)) (VarE wrapVar)) (VarE fVar)))
-                   (VarE var)
+            [| traverse (transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar)) $(varE var) |]
           _ -> 
-            pure $ AppE (AppE (AppE (AppE (VarE 'transformBi) (VarE unwrapVar)) (VarE wrapVar)) (VarE fVar)) (VarE var)
+            [| transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar) $(varE var) |]
 
       let conApp = foldl AppE (ConE targetConName) transformedFields
       
-      pure $ InfixE 
-        (Just (VarE wrapVar)) 
-        (VarE '(=<<)) 
-        (Just conApp)
+      [| $(varE wrapVar) =<< $(pure conApp) |]
 
 makeTransformMatchDiff :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
 makeTransformMatchDiff sumConName diffConName fields unwrapVar wrapVar fVar = do
@@ -426,23 +401,15 @@ makeTransformMatchDiff sumConName diffConName fields unwrapVar wrapVar fVar = do
 makeTransformBodyDiff :: Name -> [BangType] -> [Name] -> Name -> Name -> Name -> Q Exp
 makeTransformBodyDiff diffConName fields fieldVars unwrapVar wrapVar fVar = do
   if null fields
-    then pure $ InfixE 
-           (Just (VarE wrapVar)) 
-           (VarE '(=<<)) 
-           (Just (InfixE (Just (VarE fVar)) (VarE '(=<<)) (Just (AppE (VarE 'pure) (ConE diffConName)))))
+    then [| $(varE wrapVar) =<< $(varE fVar) =<< pure $(conE diffConName) |]
     else do
       transformedFields <- forM (zip fields fieldVars) $ \((bang, typ), var) ->
         case typ of
           AppT ListT _ -> 
-            pure $ AppE (AppE (VarE 'traverse) 
-                     (AppE (AppE (AppE (VarE 'transformBi) (VarE unwrapVar)) (VarE wrapVar)) (VarE fVar)))
-                   (VarE var)
+            [| traverse (transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar)) $(varE var) |]
           _ -> 
-            pure $ AppE (AppE (AppE (AppE (VarE 'transformBi) (VarE unwrapVar)) (VarE wrapVar)) (VarE fVar)) (VarE var)
+            [| transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar) $(varE var) |]
 
       let conApp = foldl AppE (ConE diffConName) transformedFields
       
-      pure $ InfixE 
-        (Just (VarE wrapVar)) 
-        (VarE '(=<<)) 
-        (Just (InfixE (Just (VarE fVar)) (VarE '(=<<)) (Just conApp)))
+      [| $(varE wrapVar) =<< $(varE fVar) =<< $(pure conApp) |]
