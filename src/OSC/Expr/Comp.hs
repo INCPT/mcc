@@ -82,25 +82,43 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
 -- Example usage
 --------------------------------------------------------------------------------
 
--- Example: Transform a term with lambda abstractions into one with function references
+-- Example: Transform a term with nested lambda abstractions into one with function references
 --
 -- Input term (Sig):
---   App (Lam ["x"] [] (Op (Var "x") (Const 1))) [Const 5]
+--   App (Lam ["x"] [] 
+--         (App (Lam ["y"] []
+--                (App (Lam ["z"] []
+--                       (Op (Op (Var "x") (Var "y")) (Var "z")))
+--                     [Const 3]))
+--              [Const 2]))
+--       [Const 1]
 --
--- This represents: (λx. x + 1)(5)
+-- This represents: (λx. (λy. (λz. (x + y) + z)(3))(2))(1)
 --
--- After gatherAbs, the lambda is extracted and replaced with a FuncRef:
---   App (FuncRef 0) [Const 5]
+-- After gatherAbs, all three lambdas are extracted and replaced with FuncRefs:
+--   App (FuncRef 0) [Const 1]
 --
--- The extracted function is stored in the state's collectedFuncs:
---   [(0, ["x"], [], Op (Var "x") (Const 1))]
+-- The extracted functions are stored in the state's collectedFuncs:
+--   [(2, ["z"], [], Op (Op (Var "x") (Var "y")) (Var "z")),
+--    (1, ["y"], [], App (FuncRef 2) [Const 3]),
+--    (0, ["x"], [], App (FuncRef 1) [Const 2])]
 
 exampleTerm :: Term Sig
-exampleTerm = iApp (iLam ["x"] [] (iOp (iVar "x") (iConst 1))) [iConst 5]
+exampleTerm = 
+  iApp (iLam ["x"] [] 
+         (iApp (iLam ["y"] []
+                 (iApp (iLam ["z"] []
+                        (iOp (iOp (iVar "x") (iVar "y")) (iVar "z")))
+                      [iConst 3]))
+              [iConst 2]))
+       [iConst 1]
 
 exampleTransformed :: Term Sig'
 exampleTransformed = gatherAbs exampleTerm
--- Result: App (FuncRef 0) [Const 5]
+-- Result: App (FuncRef 0) [Const 1]
+-- Where FuncRef 0 contains: App (FuncRef 1) [Const 2]
+-- And FuncRef 1 contains: App (FuncRef 2) [Const 3]
+-- And FuncRef 2 contains: Op (Op (Var "x") (Var "y")) (Var "z")
 
 -- To print a term, just use show:
 printExample :: IO ()
@@ -117,4 +135,14 @@ exampleWithFuncs :: (Term Sig', GatherState)
 exampleWithFuncs = runState (cataM gatherAlg exampleTerm) initialState
   where
     initialState = GatherState { nextFuncId = 0, collectedFuncs = [] }
--- Result: (App (FuncRef 0) [Const 5], GatherState { nextFuncId = 1, collectedFuncs = [(0, ["x"], [], Op (Var "x") (Const 1))] })
+-- Result: 
+-- ( App (FuncRef 0) [Const 1]
+-- , GatherState 
+--     { nextFuncId = 3
+--     , collectedFuncs = 
+--         [ (2, ["z"], [], Op (Op (Var "x") (Var "y")) (Var "z"))
+--         , (1, ["y"], [], App (FuncRef 2) [Const 3])
+--         , (0, ["x"], [], App (FuncRef 1) [Const 2])
+--         ]
+--     }
+-- )
