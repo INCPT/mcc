@@ -42,6 +42,23 @@ $(derive
     [''Value, ''Lam, ''Exp, ''FuncRef]
   )
 
+class GatherAlg f where
+  gatherAlg :: AlgM (State GatherState) f (Term Sig')
+
+instance GatherAlg Lam where
+  gatherAlg (Lam params locals body) = do
+    funcId <- gets nextFuncId
+    modify $ \s -> s { nextFuncId = nextFuncId s + 1 }
+    modify $ \s -> s { collectedFuncs = (funcId, params, locals, body) : collectedFuncs s }
+    return $ inject (FuncRef funcId)
+
+instance (f :<: Sig') => GatherAlg f where
+  gatherAlg = return . inject
+
+instance (GatherAlg f, GatherAlg g) => GatherAlg (f :+: g) where
+  gatherAlg (Inl x) = gatherAlg x
+  gatherAlg (Inr x) = gatherAlg x
+
 gatherAbs :: Term Sig -> Term Sig'
 gatherAbs term = evalState (cataM gatherAlg term) initialState
   where
@@ -50,22 +67,6 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
       { nextFuncId = 0
       , collectedFuncs = []
       }
-
-    -- Algebra that handles all cases - order independent
-    gatherAlg :: Sig (Term Sig') -> State GatherState (Term Sig')
-    gatherAlg sig = case proj sig of
-      Just (Lam params locals body) -> do
-        funcId <- gets nextFuncId
-        modify $ \s -> s { nextFuncId = nextFuncId s + 1 }
-        modify $ \s -> s { collectedFuncs = (funcId, params, locals, body) : collectedFuncs s }
-        return $ inject (FuncRef funcId)
-      Nothing -> 
-        -- If it's not Lam, it must be Exp or Value, both of which are in Sig'
-        case proj sig :: Maybe (Exp (Term Sig')) of
-          Just e -> return $ inject e
-          Nothing -> case proj sig :: Maybe (Value (Term Sig')) of
-            Just v -> return $ inject v
-            Nothing -> error "Impossible: signature must be Exp, Value, or Lam"
 
 data GatherState = GatherState
   { nextFuncId :: Int
