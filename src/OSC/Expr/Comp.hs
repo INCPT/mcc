@@ -54,6 +54,8 @@ $(derive
     [''Value, ''Lam, ''Exp, ''FuncRef, ''Select, ''FoldedSelect]
   )
 
+data Mu ann f = Mu (ann, f (Mu ann f))
+
 --------------------------------------------------------------------------------
 
 type FoldSelectionsM = Stack (Type, Term Sig0) (Term Sig1)

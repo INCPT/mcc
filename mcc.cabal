@@ -47,6 +47,7 @@ library
       OSC.Expr
       OSC.Expr.Comp
       OSC.Expr.Gen
+      OSC.Expr.TH
   other-modules:
       Paths_mcc
   hs-source-dirs:
@@ -74,6 +75,7 @@ library
     , prettyprinter
     , process
     , string-conversions
+    , template-haskell
     , text
     , transformers
     , uniplate
@@ -115,6 +117,7 @@ executable mcc
     , prettyprinter
     , process
     , string-conversions
+    , template-haskell
     , text
     , transformers
     , uniplate
