@@ -24,6 +24,8 @@ data Dag k f = Node (f (Dag k f)) | Key k
 data DagM k expr a = DagM ((k -> expr (Dag k expr)) -> a)
 -}
 
+data Mu f = Mu (f (Mu f))
+
 -- write a TH function that:
 
 ---- having the following types
@@ -31,7 +33,11 @@ data DagM k expr a = DagM ((k -> expr (Dag k expr)) -> a)
 data Value exp = Const Int | Arr [exp]
 data Expr exp = Add exp exp | Mul exp exp
 
-$(makeSum "S" "Sum1" [''Value, ''Expr])
+$(makeSum "S_" "Sum1" [''Value, ''Expr])
+
+bla :: Mu Sum1 -> Mu Sum1
+bla (Mu (S_Const n)) = Mu (S_Const n)
+bla _ = undefined
 
 {-
 

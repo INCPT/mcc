@@ -60,16 +60,17 @@ makeSum prefix sumName typeNames = do
     pure $ NormalC newConName newFields
 
   -- Create the data declaration
-  let sumDataDec = DataD [] sumTypeName [PlainTV expVar undefined] Nothing sumCons
+  let sumDataDec = DataD [] sumTypeName [PlainTV expVar BndrReq] Nothing sumCons
         [DerivClause Nothing [ConT ''Functor, ConT ''Foldable, ConT ''Traversable]]
 
-  -- Create Plate instance
-  plateInst <- makePlateInstance prefix sumTypeName allCons
+  -- -- Create Plate instance
+  -- plateInst <- makePlateInstance prefix sumTypeName allCons
 
-  -- Create BiPlate instance for Sum -> Sum (self-instance)
-  biPlateInst <- makeBiPlateInstance prefix sumTypeName sumTypeName sumTypeName allCons
+  -- -- Create BiPlate instance for Sum -> Sum (self-instance)
+  -- biPlateInst <- makeBiPlateInstance prefix sumTypeName sumTypeName sumTypeName allCons
 
-  pure [sumDataDec, plateInst, biPlateInst]
+  -- pure [sumDataDec, plateInst, biPlateInst]
+  pure [sumDataDec]
 
 makeDiff :: String -> String -> [(Name, [BangType])] -> [Name] -> Q [Dec]
 makeDiff prefix diffName allCons subsetTypeNames = do
@@ -95,7 +96,7 @@ makeDiff prefix diffName allCons subsetTypeNames = do
     pure $ NormalC newConName newFields
 
   -- Create the data declaration
-  let diffDataDec = DataD [] diffTypeName [PlainTV expVar undefined] Nothing diffConsDecls []
+  let diffDataDec = DataD [] diffTypeName [PlainTV expVar BndrReq] Nothing diffConsDecls []
 
   pure [diffDataDec]
 
