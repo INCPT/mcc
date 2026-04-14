@@ -39,6 +39,29 @@ class BiPlate a b c | a c -> b, b c -> a where
 
 --------------------------------------------------------------------------------
 
+makePlate :: Name -> Q [Dec]
+makePlate typeName = do
+  info <- reify typeName
+  let cons = getConstructors info
+  
+  -- Extract the prefix from the first constructor
+  -- Assumes all constructors share the same prefix pattern
+  let prefix = case cons of
+        ((conName, _):_) -> 
+          let baseName = nameBase conName
+              -- Find the prefix by looking for the first uppercase after initial chars
+              -- For "S_Const", we want "S_"
+              findPrefix [] = ""
+              findPrefix (c:cs) = 
+                if c == '_' 
+                  then [c]
+                  else c : findPrefix cs
+          in takeWhile (/= '_') baseName ++ "_"
+        [] -> ""
+  
+  plateInst <- makePlateInstance prefix typeName cons
+  pure [plateInst]
+
 makeSum :: String -> String -> [Name] -> Q [Dec]
 makeSum prefix sumName typeNames = do
   -- Get info about all the types

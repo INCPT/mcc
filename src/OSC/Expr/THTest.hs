@@ -35,6 +35,8 @@ data Expr exp = Add exp exp | Mul exp exp
 
 $(makeSum "S_" "Sum1" [''Value, ''Expr])
 
+$(makePlate ''Sum1)
+
 bla :: Mu Sum1 -> Mu Sum1
 bla (Mu (S_Const n)) = Mu (S_Const n)
 bla _ = undefined
