@@ -18,7 +18,6 @@ import Data.Functor.Identity (Identity (runIdentity))
 import Data.Bifunctor (first, second)
 import Data.Functor.Identity
 import Data.List (intercalate, intersperse)
-import Data.Data (Data)
 import qualified Data.Graph as G
 import Data.Map (Map)
 import Data.String (IsString)
@@ -34,10 +33,10 @@ import Prettyprinter.Render.Text (renderStrict)
 import qualified Data.Text as T
 
 data TNumber = TI32 | TF32 | TI64 | TF64
-  deriving (Eq, Show, Data)
+  deriving (Eq, Show)
 
 data Type = TNumber TNumber | TArr Type {- length -} Int | TAbs [Type] Type
-  deriving (Eq, Show, Data)
+  deriving (Eq, Show)
 
 sizeOfType :: Type -> Int
 sizeOfType (TNumber TI32) = 4
@@ -61,7 +60,7 @@ paramTypes _ (TAbs params _) = params
 paramTypes e _ = error $ "paramTypes: not an abs: " <> e
 
 data Number = I32 Int | I64 Int | F32 Float | F64 Double
-  deriving (Show, Data)
+  deriving Show
 
 numberType :: Number -> Type
 numberType (I32 _) = TNumber TI32
@@ -70,12 +69,12 @@ numberType (I64 _) = TNumber TI64
 numberType (F64 _) = TNumber TF64
 
 newtype Ident = Ident String
-  deriving (Eq, Ord, Show, IsString, Data)
+  deriving (Eq, Ord, Show, IsString)
 
 data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Rotl | Rotr 
         | Eq | Ne | Gt | Lt | GEt | LEt 
         | Min | Max | CopySign | Rem
-  deriving (Eq, Show, Data)
+  deriving (Eq, Show)
 
 data UOp = Sqrt | Abs' | Neg | Ceil | Floor | Trunc | Nearest 
          | Clz | Ctz | Popcnt | Eqz
@@ -87,8 +86,6 @@ data Selection lam t sel = Selection (Expr lam sel t) (Expr lam sel t)
 data FoldedSelection lam t sel
   = FoldedSelectionLHS [Expr lam sel t] (Expr lam sel t)
   | FoldedSelectionRHS (Expr lam sel t) [Expr lam sel t]
-
-data Lambda sel t lam = Lambda Type {- params -} [Ident] {- bindings -} [(Ident, Expr lam sel t)] {- body -} (Expr lam sel t)
 
 data Mu f = Mu (f (Mu f))
 
@@ -113,8 +110,8 @@ data Expr lam sel t
   -- much sense generally anyway.
 
   -- NOTE: Bindings will be in topsort order after typechecking
-  | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, Expr lam sel t)] {- body -} (Expr lam sel t)
-  deriving (Functor, Show, Data)
+  | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, AllocRegion, Expr lam sel t)] {- body -} (Expr lam sel t)
+  deriving (Functor, Show)
 
 exprType :: Expr lam sel Type -> Type
 exprType (EConst n) = numberType n
@@ -143,7 +140,7 @@ descendExpr f expr = case f expr of
     EApp _ func args -> descendExpr f func <> mconcat (fmap (descendExpr f) args)
     ESelect _ e idx -> descendExpr f e <> descendExpr f idx
     ESelect2 _ _ -> []
-    ERec _ _ _ bindings body -> mconcat (fmap (descendExpr f . snd) bindings) <> descendExpr f body
+    ERec _ _ _ bindings body -> mconcat (fmap (descendExpr f . (\(_, _, c) -> c)) bindings) <> descendExpr f body
 
 universeExpr :: (lam -> [Expr lam sel t]) -> (sel -> [Expr lam sel t]) -> Expr lam sel t -> [Expr lam sel t]
 universeExpr flam fsel = tailrec (universeExpr flam fsel) . mconcat . descendExpr expr
@@ -154,16 +151,13 @@ universeExpr flam fsel = tailrec (universeExpr flam fsel) . mconcat . descendExp
 
 transformExprGenM
   :: forall lam sel lam' sel' t m. Monad m
-  => ((Expr lam sel t -> m (Expr lam' sel' t)) -> lam -> m lam')
-  -> ((Expr lam sel t -> m (Expr lam' sel' t)) -> sel -> m sel')
-  -> ((Expr lam sel t -> m (Expr lam' sel' t)) -> Expr lam sel t -> m (Expr lam' sel' t))
+  => ((Expr lam sel t -> m (Expr lam' sel' t)) -> Expr lam sel t -> m (Expr lam' sel' t))
   -> (Expr lam' sel' t -> m (Expr lam' sel' t))
   -> Expr lam sel t
   -> m (Expr lam' sel' t)
-transformExprGenM flam fsel fdown fup = go
+transformExprGenM fdown fup = go
   where
-    y = transformExprGenM flam fsel fdown fup
-    yfdown = fdown y
+    yfdown = fdown (transformExprGenM fdown fup)
 
     go :: Expr lam sel t -> m (Expr lam' sel' t)
     go expr = case expr of
@@ -172,28 +166,33 @@ transformExprGenM flam fsel fdown fup = go
       EArr t exprs -> fup =<< (EArr t <$> traverse yfdown exprs)
       EVar t ident -> fup =<< (pure $ EVar t ident)
       EAbs t params bindings body -> fup =<< (EAbs t params <$> traverse (\(n, e) -> (n,) <$> yfdown e) bindings <*> yfdown body)
-      EAbs2 t lam -> fup =<< (EAbs2 t <$> flam y lam)
+      EAbs2 t lam -> fup =<< yfdown (EAbs2 t lam)
       EApp t f args -> fup =<< (EApp t <$> yfdown f <*> traverse yfdown args)
       ESelect t e idx -> fup =<< (ESelect t <$> yfdown e <*> yfdown idx)
-      ESelect2 t sel -> fup =<< (ESelect2 t <$> fsel y sel)
-      ERec t delay param bindings body -> fup =<< (ERec t delay param <$> traverse (\(n, e) -> (n,) <$> yfdown e) bindings <*> yfdown body)
+      ESelect2 t sel -> fup =<< yfdown (ESelect2 t sel)
+      ERec t delay param bindings body -> fup =<< (ERec t delay param <$> traverse (\(n, region, e) -> (n, region,) <$> yfdown e) bindings <*> yfdown body)
 
 transformExprM
   :: forall lam sel lam' sel' t m. Monad m
-  => ((Expr lam sel t -> m (Expr lam' sel' t)) -> lam -> m lam')
-  -> ((Expr lam sel t -> m (Expr lam' sel' t)) -> sel -> m sel')
+  => (lam -> m lam')
+  -> (sel -> m sel')
   -> (Expr lam' sel' t -> m (Expr lam' sel' t))
   -> Expr lam sel t
   -> m (Expr lam' sel' t)
-transformExprM flam fsel fexpr = transformExprGenM flam fsel ($) fexpr
+transformExprM flam fsel = transformExprGenM go
+  where
+    go :: (Expr lam sel t -> m (Expr lam' sel' t)) -> Expr lam sel t -> m (Expr lam' sel' t)
+    go _ (ESelect2 t sel) = ESelect2 t <$> (fsel sel)
+    go _ (EAbs2 t lam) = EAbs2 t <$> (flam lam)
+    go k expr = k expr
 
 transformExpr
-  :: ((Expr lam sel t -> Expr lam' sel' t) -> lam -> lam')
-  -> ((Expr lam sel t -> Expr lam' sel' t) -> sel -> sel')
+  :: (lam -> lam')
+  -> (sel -> sel')
   -> (Expr lam' sel' t -> Expr lam' sel' t)
   -> Expr lam sel t
   -> Expr lam' sel' t
-transformExpr flam fsel fexp = runIdentity . transformExprM (\k -> pure . flam (runIdentity . k)) (\k -> pure . fsel (runIdentity . k)) (pure . fexp)
+transformExpr flam fsel fexp = runIdentity . transformExprM (pure . flam) (pure . fsel) (pure . fexp)
 
 --------------------------------------------------------------------------------
 
@@ -244,10 +243,10 @@ ppApp f args = ppFunc f <> parens (hsep (punctuate comma (map ppExprInline args)
 ppSelect :: Expr lam sel Type -> Expr lam sel Type -> Doc ann
 ppSelect e idx = ppExprInline e <> brackets (ppExprInline idx)
 
-ppAbsBody :: [(Ident, Expr lam sel Type)] -> Expr lam sel Type -> Doc ann
+ppAbsBody :: [(Ident, AllocRegion, Expr lam sel Type)] -> Expr lam sel Type -> Doc ann
 ppAbsBody [] body = indent 2 $ "return" <+> ppReturnExpr body
 ppAbsBody bindings body = indent 2 $ vsep
-  [ vsep [ ppBinding n expr | (n, expr) <- bindings ]
+  [ vsep [ ppBinding n expr | (n, _, expr) <- bindings ]
   , mempty
   , "return" <+> ppReturnExpr body
   ]
@@ -317,9 +316,9 @@ ppExprL (ERec t delay param bs body) =
     ppParamName = case param of Ident n -> pretty n
     ppRetType = pretty (showType t)
 
-ppBindingsInline :: [(Ident, Expr lam sel Type)] -> Doc ann
+ppBindingsInline :: [(Ident, AllocRegion, Expr lam sel Type)] -> Doc ann
 ppBindingsInline [] = "{}"
-ppBindingsInline bs = braces (hsep (punctuate comma [ ppBinding n e | (n, e) <- bs ]))
+ppBindingsInline bs = braces (hsep (punctuate comma [ ppBinding n e | (n, _, e) <- bs ]))
   where
     ppBinding (Ident n) e = pretty n <+> ppExprL e
 
@@ -559,7 +558,7 @@ choiceTree (EAbs t params bs body) = do
   pure $ case idxs of
     [] -> CAbs t (Abs params [ (n, ALocal, toCExpr b) | (n, b) <- bs ] (toCExpr body))
     _ -> error "choiceTree: cannot index into an abstraction (this is a bug)"
-choiceTree (ERec t d param bs body) = toC (CRec t d param [ (n, ALocal, toCExpr b) | (n, b) <- bs ] (toCExpr body))
+choiceTree (ERec t d param bs body) = toC (CRec t d param [ (n, ALocal, toCExpr b) | (n, _, b) <- bs ] (toCExpr body))
 choiceTree (EArr t es) = do
   s <- pop
   case s of
@@ -576,38 +575,52 @@ choiceTree (ESelect t e idx) = do
 
 --------------------------------------------------------------------------------
 
-type ExprSel lam t       = Expr lam (Mu (Selection lam t)) t
-type ExprFoldedSel lam t = Expr lam (Mu (FoldedSelection lam t)) t
+data Lambda1 t lam = Lambda1 {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Expr lam (Mu (Selection (Mu (Lambda1 t)) t)) t)] {- body -} (Expr lam (Mu (Selection (Mu (Lambda1 t)) t)) t)
+data Lambda2 t lam = Lambda2 {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Expr lam (Mu (FoldedSelection (Mu (Lambda2 t)) t)) t)] {- body -} (Expr lam (Mu (FoldedSelection (Mu (Lambda2 t)) t)) t)
 
-type FoldSelectionsM lam t a = StackM (ExprSel lam t) Identity a
+type ExprSel t       = Expr (Mu (Lambda1 t)) (Mu (Selection (Mu (Lambda1 t)) t)) t
+type ExprFoldedSel t = Expr (Mu (Lambda2 t)) (Mu (FoldedSelection (Mu (Lambda2 t)) t)) t
 
-foldSelections
-  :: ExprSel lam t
-  -> ExprFoldedSel lam t
-foldSelections = runStack . transformExprGenM _ fsel expr pure
+type FoldSelectionsM t = StackM (t, ExprSel t) Identity (ExprFoldedSel t)
+
+foldSelections :: ExprSel t -> ExprFoldedSel t
+foldSelections = runStack . expr
   where
-    fsel :: (ExprSel lam t -> FoldSelectionsM lam t (ExprFoldedSel lam t)) -> Mu (Selection lam t) -> FoldSelectionsM lam t (Mu (FoldedSelection lam t))
-    fsel k (Mu (Selection expr idx)) = do
-      push idx
-      expr' <- k expr
-      _ <- pop
-      pure expr'
+    rhs :: ExprFoldedSel t -> FoldSelectionsM t
+    rhs expr = do
+      idxs <- ST.get
+      case idxs of
+        [] -> pure $ ESelect2 undefined (Mu $ FoldedSelectionRHS expr (fmap (foldSelections . snd) idxs))
+        _ -> pure expr
 
-    expr :: (ExprSel lam t -> FoldSelectionsM lam t (ExprFoldedSel lam t)) -> ExprSel lam t -> FoldSelectionsM lam t (ExprFoldedSel lam t)
-    expr k (EArr t elems) = do
+    expr :: ExprSel t -> FoldSelectionsM t
+    expr (EConst n) = rhs $ EConst n
+    expr (EOp t op a b) = rhs $ EOp t op (foldSelections a) (foldSelections b)
+    expr (EVar t n) = rhs $ EVar t n
+    expr (EApp t f as) = rhs $ EApp t (foldSelections f) (fmap foldSelections as)
+    expr (EAbs _ _ _ _) = undefined
+    expr (EAbs2 t (Mu (Lambda1 params bindings body))) = pure $ EAbs2 t $ Mu $ Lambda2 params
+      [ (n, region, foldSelections bbody)
+      | (n, region, bbody) <- bindings
+      ]
+      (foldSelections body)
+    expr (EArr t elems) = do
       s <- pop
       case s of
-        Just idx -> do
-          elems <- traverse k elems
-          push idx
-          pure $ ESelect2 undefined (Mu $ FoldedSelectionLHS elems (foldSelections idx))
+        Just (t, idx) -> do
+          elems <- traverse expr elems
+          push (t, idx)
+          pure $ ESelect2 t (Mu $ FoldedSelectionLHS elems (foldSelections idx))
         _ -> pure $ EArr t (fmap foldSelections elems)
-    expr k (ESelect2 t (Mu (Selection expr idx))) = do
-      push idx
-      expr' <- k expr
+    expr (ERec t d param bindings body) = rhs $ ERec t d param
+      [ (n, region, foldSelections bbody) | (n, region, bbody) <- bindings ]
+      (foldSelections body)
+    expr (ESelect _ _ _) = undefined
+    expr (ESelect2 t (Mu (Selection sel idx))) = do
+      push (t, idx)
+      sel' <- expr sel
       _ <- pop
-      pure expr'
-    expr k e = k e
+      pure sel'
 
 --------------------------------------------------------------------------------
 
