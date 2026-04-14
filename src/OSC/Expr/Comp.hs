@@ -7,6 +7,9 @@
 
 module OSC.Expr.Comp where
 
+import OSC.Codegen (Type (..), TNumber (..), Stack, push, pop, runStack)
+import qualified Control.Monad.State as ST
+
 import Data.Comp
 import Data.Comp.Derive
 import Data.Comp.Ops
