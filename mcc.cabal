@@ -45,6 +45,7 @@ library
       OSC.Codegen.Backend
       OSC.Codegen.Interpret
       OSC.Expr
+      OSC.Expr.Comp
       OSC.Expr.Gen
   other-modules:
       Paths_mcc
