@@ -5,6 +5,8 @@ packages:
 - '.'
 
 extra-deps:
+- github: pkamenarsky/compdata
+  commit: f655b264a9fc932aa0654b5becab1520ccfbbb4f
 # until they merge bugfix into hackage we need to use the version on github
 # - llvm-hs-pure-7.0.0
 # - github: llvm-hs/llvm-hs

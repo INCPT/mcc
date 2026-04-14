@@ -3,7 +3,18 @@
 # For more information, please see the documentation at:
 #   https://docs.haskellstack.org/en/stable/topics/lock_files
 
-packages: []
+packages:
+- completed:
+    name: compdata
+    pantry-tree:
+      sha256: f833bc122972beb6b51a483a64bf0c6d36e677ca566d1429341722bb20c5d7b9
+      size: 10273
+    sha256: 5c0e83a2488136c0d2585a82179189318dd60c7b1310ee6389ea700fc3523b01
+    size: 504275
+    url: https://github.com/pkamenarsky/compdata/archive/f655b264a9fc932aa0654b5becab1520ccfbbb4f.tar.gz
+    version: 0.13.1
+  original:
+    url: https://github.com/pkamenarsky/compdata/archive/f655b264a9fc932aa0654b5becab1520ccfbbb4f.tar.gz
 snapshots:
 - completed:
     sha256: a8cfaae441160430cdde558cb80d4f9d60746e7417b275250e4e0af57ee14f36

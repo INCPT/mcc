@@ -19,6 +19,7 @@ dependencies:
     - mtl
     - array
     - cereal
+    - compdata
     - containers
     - free
     - mmorph
