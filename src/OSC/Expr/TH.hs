@@ -27,6 +27,7 @@ class BiPlate a b c | a c -> b, b c -> a where
 
 --------------------------------------------------------------------------------
 
+{-
 -- Simple recursive functor (can be paired with Identity)
 data Mu f = Mu (f (Mu f))
 
@@ -37,6 +38,7 @@ data AnnM ann expr a = AnnM (Ann ann expr -> a)
 -- DAG recursive functor + monad
 data Dag k f = Node (f (Dag k f)) | Key k
 data DagM k expr a = DagM ((k -> expr (Dag k expr)) -> a)
+-}
 
 -- write a TH function that:
 
