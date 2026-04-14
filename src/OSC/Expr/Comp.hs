@@ -50,20 +50,20 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
       , collectedFuncs = []
       }
 
-    -- Algebra that handles all cases using disjointAlgM
+    -- Algebra that handles all cases
     gatherAlg :: AlgM (State GatherState) Sig (Term Sig')
-    gatherAlg = disjointAlgM preserveExp (disjointAlgM preserveValue handleLam)
+    gatherAlg = preserveExp & preserveValue & handleLam
     
     -- Preserve Exp by injecting into Sig'
-    preserveExp :: AlgM (State GatherState) Exp (Term Sig')
+    preserveExp :: Exp (Term Sig') -> State GatherState (Term Sig')
     preserveExp = return . inject
     
     -- Preserve Value by injecting into Sig'
-    preserveValue :: AlgM (State GatherState) Value (Term Sig')
+    preserveValue :: Value (Term Sig') -> State GatherState (Term Sig')
     preserveValue = return . inject
     
     -- Handle Lam specially
-    handleLam :: AlgM (State GatherState) Lam (Term Sig')
+    handleLam :: Lam (Term Sig') -> State GatherState (Term Sig')
     handleLam (Lam params locals body) = do
       -- Get current function ID and increment
       funcId <- gets nextFuncId
