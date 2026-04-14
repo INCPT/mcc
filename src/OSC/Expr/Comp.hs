@@ -7,6 +7,7 @@ module OSC.Expr.Comp where
 
 import Data.Comp
 import Data.Comp.Derive
+import Data.Comp.Term
 
 import Control.Monad.State
 
@@ -51,11 +52,11 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
 
     -- Algebra that handles Lam specially and preserves everything else
     gatherAlg :: AlgM (State GatherState) Sig (Term Sig')
-    gatherAlg = gatherLam `compAlgM'` hom
+    gatherAlg = gatherLam `compAlgM` hom
     
     -- Homomorphism: preserve structure by injecting into target signature
-    hom :: (Functor f, f :<: Sig') => AlgM (State GatherState) f (Term Sig')
-    hom = return . inject
+    hom :: (Functor f, f :<: Sig) => HomM (State GatherState) f Lam
+    hom = undefined
     
     -- Only handle Lam specially
     gatherLam :: AlgM (State GatherState) Lam (Term Sig')
