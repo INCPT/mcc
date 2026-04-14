@@ -569,24 +569,25 @@ choiceTree (ESelect t e idx) = do
 
 data Mu f = Mu (f (Mu f))
 
-data Selection lam t sel = Selection (Expr lam sel t) (Expr lam sel t)
+data Selection t lam sel = Selection (Expr lam sel t) (Expr lam sel t)
 
-data FoldedSelection lam t sel
+data FoldedSelection t lam sel
   = FoldedSelectionLHS [Expr lam sel t] (Expr lam sel t)
   | FoldedSelectionRHS (Expr lam sel t) [Expr lam sel t]
 
 data Lambda3 t sel lam = Lambda3 {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Expr lam sel t)] {- body -} (Expr lam sel t)
-data Lambda1 t lam = Lambda1 {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Expr lam (Selection_ (Lambda1_ t) t) t)] {- body -} (Expr lam (Selection_ (Lambda1_ t) t) t)
-data Lambda2 t lam = Lambda2 {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Expr lam (FoldedSelection_ (Lambda2_ t) t) t)] {- body -} (Expr lam (FoldedSelection_ (Lambda2_ t) t) t)
+data Lambda1 t lam = Lambda1 {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Expr lam (Selection_ t (Lambda1_ t)) t)] {- body -} (Expr lam (Selection_ t (Lambda1_ t)) t)
+data Lambda2 t lam = Lambda2 {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Expr lam (FoldedSelection_ t (Lambda2_ t)) t)] {- body -} (Expr lam (FoldedSelection_ t (Lambda2_ t)) t)
 
 type Lambda1_ t = Mu (Lambda1 t)
 type Lambda2_ t = Mu (Lambda2 t)
 
-type Selection_ lam t = Mu (Selection lam t)
-type FoldedSelection_ lam t = Mu (FoldedSelection lam t)
+type Selection_ t lam = Mu (Selection t lam)
+type FoldedSelection_ t lam = Mu (FoldedSelection t lam)
 
-type ExprSel t       = Expr (Lambda1_ t) (Selection_ (Lambda1_ t) t) t
-type ExprFoldedSel t = Expr (Lambda2_ t) (FoldedSelection_ (Lambda2_ t) t) t
+type ExprSel_ t       = Expr (Mu (Lambda3 (Mu (Selection t ())) t)) (Selection_ t (Lambda1_ t)) t
+type ExprSel t       = Expr (Lambda1_ t) (Selection_ t (Lambda1_ t)) t
+type ExprFoldedSel t = Expr (Lambda2_ t) (FoldedSelection_ t (Lambda2_ t)) t
 
 type FoldSelectionsM t = StackM (t, ExprSel t) Identity (ExprFoldedSel t)
 
