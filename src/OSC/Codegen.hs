@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
@@ -69,11 +70,8 @@ numberType (F32 _) = TNumber TF32
 numberType (I64 _) = TNumber TI64
 numberType (F64 _) = TNumber TF64
 
-data Ident = Ident String Int
-  deriving (Eq, Ord, Show)
-
-instance IsString Ident where
-  fromString n = Ident n 0
+newtype Ident = Ident String
+  deriving (Eq, Ord, Show, IsString)
 
 data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Rotl | Rotr 
         | Eq | Ne | Gt | Lt | GEt | LEt 
@@ -94,7 +92,7 @@ data Expr lam sel t
 
   -- NOTE: Bindings will be in topsort order after typechecking
   | EAbs Type {- params -} [Ident] {- bindings -} [(Ident, Expr lam sel t)] {- body -} (Expr lam sel t)
-  | EAbs2 Type lam
+  | EAbs2 t lam
 
   | EApp t (Expr lam sel t) [Expr lam sel t]
 
@@ -170,25 +168,25 @@ transformExprGenM fdown fup = go
 
 transformExprM
   :: forall lam sel lam' sel' t m. Monad m
-  => (lam -> m lam')
-  -> (sel -> m sel')
+  => (t -> lam -> m lam')
+  -> (t -> sel -> m sel')
   -> (Expr lam' sel' t -> m (Expr lam' sel' t))
   -> Expr lam sel t
   -> m (Expr lam' sel' t)
 transformExprM flam fsel = transformExprGenM go
   where
     go :: (Expr lam sel t -> m (Expr lam' sel' t)) -> Expr lam sel t -> m (Expr lam' sel' t)
-    go _ (ESelect2 t sel) = ESelect2 t <$> (fsel sel)
-    go _ (EAbs2 t lam) = EAbs2 t <$> (flam lam)
+    go _ (ESelect2 t sel) = ESelect2 t <$> (fsel t sel)
+    go _ (EAbs2 t lam) = EAbs2 t <$> (flam t lam)
     go k expr = k expr
 
 transformExpr
-  :: (lam -> lam')
-  -> (sel -> sel')
+  :: (t -> lam -> lam')
+  -> (t -> sel -> sel')
   -> (Expr lam' sel' t -> Expr lam' sel' t)
   -> Expr lam sel t
   -> Expr lam' sel' t
-transformExpr flam fsel fexp = runIdentity . transformExprM (pure . flam) (pure . fsel) (pure . fexp)
+transformExpr flam fsel fexp = runIdentity . transformExprM (\t -> pure . flam t) (\t -> pure . fsel t) (pure . fexp)
 
 --------------------------------------------------------------------------------
 
@@ -464,11 +462,11 @@ showAbs params bs body =
   "λ" <> showParams params <> " " <> showBindings bs <> " = " <> show body
   where
     showParams [] = "()"
-    showParams ps = "(" <> intercalate ", " (map (\(Ident n _) -> n) ps) <> ")"
+    showParams ps = "(" <> intercalate ", " (map (\(Ident n) -> n) ps) <> ")"
   
     showBindings [] = ""
     showBindings bindings = "{ " <> intercalate "; " (map showBinding bindings) <> " }"
-    showBinding (Ident n _, region, expr) = 
+    showBinding (Ident n, region, expr) = 
       n <> "@" <> showRegion region <> " = " <> show expr
     showRegion ALocal = "local"
     showRegion AGlobal = "global"
@@ -477,7 +475,7 @@ instance Show Abs where
   show (Abs params bs body) = showAbs params bs body
 
 instance Show abs => Show (CIndexable abs) where
-  show (CVar _ (Ident n _)) = n
+  show (CVar _ (Ident n)) = n
   show (CApp _ f a) = show f <> "(" <> intercalate ", " (map show a) <> ")"
   show (CRec t delay param bs body) = "rec[" <> showType t <> ", delay=" <> show delay <> "](" <> showAbs [param] bs body <> ")"
 
@@ -574,10 +572,12 @@ choiceTree (ESelect t e idx) = do
 --------------------------------------------------------------------------------
 
 data Selection lam = Selection (Expr lam (Selection lam) Type) (Expr lam (Selection lam) Type)
+  deriving Show
 
 data FoldedSelection lam
   = FoldedSelectionLHS [Expr lam (FoldedSelection lam) Type] (Expr lam (FoldedSelection lam) Type)
   | FoldedSelectionRHS (Expr lam (FoldedSelection lam) Type) [Expr lam (FoldedSelection lam) Type]
+  deriving Show
 
 data Lambda sel = Lambda
   { params :: [Ident]
@@ -635,13 +635,37 @@ foldSelections = runStack . expr
 
 --------------------------------------------------------------------------------
 
-ssa :: ExprSel Selection -> R.ReaderT (Map String Ident) Unique (ExprSel Selection)
-ssa = transformExprGenM go pure
+data Func' = Func'
+  { t :: Type
+  , params :: [Ident]
+  , bindings :: [(Ident, AllocRegion, ExprFuncRef)]
+  , body :: ExprFuncRef
+  } deriving Show
+
+data AbsEnv' = AbsEnv'
+  { funcRefMap :: Map FuncRef Func'
+  , nextFuncRef :: Int
+  } deriving Show
+
+type ExprFuncRef = Expr FuncRef (FoldedSelection FuncRef) Type
+
+gatherAbstractions' :: ExprSel FoldedSelection -> ST.State AbsEnv' ExprFuncRef
+gatherAbstractions' = transformExprM flam fsel pure
   where
-    go k (EAbs2 _ lam) = do
-      params' <- sequence [ (n,) <$> Ident n <$> lift freshIdx | Ident n _ <- lam.params ]
-      undefined
-    go k _ = undefined
+    fsel :: Type -> FoldedSelection (Lambda FoldedSelection) -> ST.State AbsEnv' (FoldedSelection FuncRef)
+    fsel _ (FoldedSelectionLHS exprs idx) = FoldedSelectionLHS <$> traverse gatherAbstractions' exprs <*> gatherAbstractions' idx
+    fsel _ (FoldedSelectionRHS expr idxs) = FoldedSelectionRHS <$> gatherAbstractions' expr <*> traverse gatherAbstractions' idxs
+
+    flam :: Type -> Lambda FoldedSelection -> ST.State AbsEnv' FuncRef
+    flam t lam = do
+      fr <- FuncRef <$> ST.gets (.nextFuncRef)
+      ST.modify $ \(AbsEnv' {..}) -> AbsEnv' { nextFuncRef = nextFuncRef + 1, .. }
+
+      bindings' <- sequenceA [ (n, region,) <$> gatherAbstractions' bbody | (n, region, bbody) <- lam.bindings ]
+      body' <- gatherAbstractions' lam.body
+
+      ST.modify $ \(AbsEnv' {..}) -> AbsEnv' { funcRefMap = M.insert fr (Func' t lam.params bindings' body') funcRefMap, .. }
+      pure fr
 
 --------------------------------------------------------------------------------
 
@@ -683,7 +707,7 @@ fresh :: Unique Ident
 fresh = Unique $ do
   n <- ST.get
   ST.put (n + 1)
-  pure $ Ident ("_captured_" <> show n) n
+  pure $ Ident ("_captured_" <> show n)
 
 --------------------------------------------------------------------------------
 
@@ -703,12 +727,12 @@ gatherAbstractions = transformCExprM transformAbs pure pure
     transformAbs :: Type -> Abs -> ST.State AbsEnv FuncRef
     transformAbs t (Abs params bindings body) = do
       fr <- FuncRef <$> ST.gets (.nextFuncRef)
-      ST.modify $ \st -> st { nextFuncRef = st.nextFuncRef + 1 }
+      ST.modify $ \(AbsEnv {..}) -> AbsEnv { nextFuncRef = nextFuncRef + 1, .. }
 
       bindings' <- sequenceA [ (n, region,) <$> gatherAbstractions bbody | (n, region, bbody) <- bindings ]
       body' <- gatherAbstractions body
 
-      ST.modify $ \st -> st { funcRefMap = M.insert fr (Func t params bindings' body') st.funcRefMap }
+      ST.modify $ \(AbsEnv {..}) -> AbsEnv { funcRefMap = M.insert fr (Func t params bindings' body') funcRefMap, .. }
       pure fr
 
 -- | Compute the free variables for each abstraction in the function map.
