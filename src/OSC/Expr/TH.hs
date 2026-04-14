@@ -343,7 +343,7 @@ makeTransformBody targetConName fields fieldVars unwrapVar wrapVar fVar mode = d
           _ -> 
             [| transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar) $(varE var) |]
 
-      conApp <- foldM (\acc field -> appE (pure acc) field) (conE targetConName) transformedFields
+      conApp <- foldM (\acc field -> appE acc field) (conE targetConName) transformedFields
       
       case mode of
         ApplyF -> [| $(varE wrapVar) =<< $(varE fVar) =<< $(pure conApp) |]
