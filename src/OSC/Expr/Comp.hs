@@ -53,7 +53,7 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
 
     -- Algebra that handles all cases - order independent
     gatherAlg :: Sig (Term Sig') -> State GatherState (Term Sig')
-    gatherAlg sig = case projectA sig of
+    gatherAlg sig = case proj sig of
       Just (Lam params locals body) -> do
         funcId <- gets nextFuncId
         modify $ \s -> s { nextFuncId = nextFuncId s + 1 }
