@@ -16,20 +16,20 @@ import Data.Comp.Show ()  -- Provides Show instances for Term
 import Control.Monad.State
 
 data Value val = Const Int | Arr [val]
-  deriving (Functor, Show)
+  deriving Functor
 
 data Lam exp = Lam [String] [(String, exp)] exp
-  deriving (Functor, Show)
+  deriving Functor
 
 data Exp exp
   = Op exp exp
   | Var String
   | App exp [exp]
   | Select exp exp
-  deriving (Functor, Show)
+  deriving Functor
 
 data FuncRef exp = FuncRef Int
-  deriving (Functor, Show)
+  deriving Functor
 
 type Sig  = Exp :+: Value :+: Lam
 type Sig' = Exp :+: Value :+: FuncRef
@@ -50,7 +50,7 @@ $(derive
 data GatherState = GatherState
   { nextFuncId :: Int
   , collectedFuncs :: [(Int, [String], [(String, Term Sig')], Term Sig')]
-  }
+  } deriving Show
 
 class GatherAlg f where
   gatherAlg :: AlgM (State GatherState) f (Term Sig')
