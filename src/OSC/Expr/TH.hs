@@ -289,9 +289,8 @@ makeBiPlateInstance prefix sourceTypeName destTypeName commonTypeName sourceCons
   -- Create matches for common constructors (direct mapping to dest type)
   commonMatches <- forM commonCons $ \(conName, fields) -> do
     let sourceConName = mkName (prefix ++ nameBase conName)
-    if isSelfInstance
-      then makeTransformMatch sourceConName fields unwrapVar wrapVar fVar True
-      else makeTransformMatchDirect sourceConName conName fields unwrapVar wrapVar fVar
+    let mode = if isSelfInstance then ApplyF else NoApplyF
+    makeTransformMatch sourceConName conName fields unwrapVar wrapVar fVar mode
 
   -- Create matches for diff constructors (apply f)
   diffMatches <- forM diffCons $ \(conName, fields) -> do
@@ -316,20 +315,25 @@ makeBiPlateInstance prefix sourceTypeName destTypeName commonTypeName sourceCons
     (AppT (AppT (AppT (ConT ''BiPlate) (ConT sourceTypeName)) (ConT destTypeName)) (ConT thirdType))
     [FunD 'transformBi [transformClause]]
 
-makeTransformMatch :: Name -> [BangType] -> Name -> Name -> Name -> Bool -> Q Match
-makeTransformMatch conName fields unwrapVar wrapVar fVar applyF = do
+data TransformMode = ApplyF | NoApplyF | ApplyFAfter
+
+makeTransformMatch :: Name -> Name -> [BangType] -> Name -> Name -> Name -> TransformMode -> Q Match
+makeTransformMatch patConName targetConName fields unwrapVar wrapVar fVar mode = do
   fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("a" ++ show i)
   
-  let pat = ConP conName [] (fmap VarP fieldVars)
+  let pat = ConP patConName [] (fmap VarP fieldVars)
   
-  body <- makeTransformBody conName fields fieldVars unwrapVar wrapVar fVar applyF
+  body <- makeTransformBody targetConName fields fieldVars unwrapVar wrapVar fVar mode
 
   pure $ Match pat (NormalB body) []
 
-makeTransformBody :: Name -> [BangType] -> [Name] -> Name -> Name -> Name -> Bool -> Q Exp
-makeTransformBody conName fields fieldVars unwrapVar wrapVar fVar applyF = do
+makeTransformBody :: Name -> [BangType] -> [Name] -> Name -> Name -> Name -> TransformMode -> Q Exp
+makeTransformBody targetConName fields fieldVars unwrapVar wrapVar fVar mode = do
   if null fields
-    then [| $(varE wrapVar) =<< pure $(conE conName) |]
+    then case mode of
+      ApplyF -> [| $(varE wrapVar) =<< $(varE fVar) =<< pure $(conE targetConName) |]
+      NoApplyF -> [| $(varE wrapVar) =<< pure $(conE targetConName) |]
+      ApplyFAfter -> [| $(varE wrapVar) =<< $(varE fVar) =<< pure $(conE targetConName) |]
     else do
       -- Transform each field
       transformedFields <- forM (zip fields fieldVars) $ \((bang, typ), var) ->
@@ -339,60 +343,17 @@ makeTransformBody conName fields fieldVars unwrapVar wrapVar fVar applyF = do
           _ -> 
             [| transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar) $(varE var) |]
 
-      let conApp = foldl AppE (ConE conName) transformedFields
+      conApp <- foldl (\acc field -> [| $acc $field |]) [| $(conE targetConName) |] transformedFields
       
-      if applyF
-        then [| $(varE wrapVar) =<< $(varE fVar) =<< $(pure conApp) |]
-        else [| $(varE wrapVar) =<< $(pure conApp) |]
+      case mode of
+        ApplyF -> [| $(varE wrapVar) =<< $(varE fVar) =<< $conApp |]
+        NoApplyF -> [| $(varE wrapVar) =<< $conApp |]
+        ApplyFAfter -> [| $(varE wrapVar) =<< $(varE fVar) =<< $conApp |]
 
 makeTransformMatchDirect :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
-makeTransformMatchDirect sumConName targetConName fields unwrapVar wrapVar fVar = do
-  fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("a" ++ show i)
-  
-  let pat = ConP sumConName [] (fmap VarP fieldVars)
-  
-  body <- makeTransformBodyDirect targetConName fields fieldVars unwrapVar wrapVar fVar
-
-  pure $ Match pat (NormalB body) []
-
-makeTransformBodyDirect :: Name -> [BangType] -> [Name] -> Name -> Name -> Name -> Q Exp
-makeTransformBodyDirect targetConName fields fieldVars unwrapVar wrapVar fVar = do
-  if null fields
-    then [| $(varE wrapVar) =<< pure $(conE targetConName) |]
-    else do
-      transformedFields <- forM (zip fields fieldVars) $ \((bang, typ), var) ->
-        case typ of
-          AppT ListT _ -> 
-            [| traverse (transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar)) $(varE var) |]
-          _ -> 
-            [| transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar) $(varE var) |]
-
-      let conApp = foldl AppE (ConE targetConName) transformedFields
-      
-      [| $(varE wrapVar) =<< $(pure conApp) |]
+makeTransformMatchDirect sumConName targetConName fields unwrapVar wrapVar fVar =
+  makeTransformMatch sumConName targetConName fields unwrapVar wrapVar fVar NoApplyF
 
 makeTransformMatchDiff :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
-makeTransformMatchDiff sumConName diffConName fields unwrapVar wrapVar fVar = do
-  fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("a" ++ show i)
-  
-  let pat = ConP sumConName [] (fmap VarP fieldVars)
-  
-  body <- makeTransformBodyDiff diffConName fields fieldVars unwrapVar wrapVar fVar
-
-  pure $ Match pat (NormalB body) []
-
-makeTransformBodyDiff :: Name -> [BangType] -> [Name] -> Name -> Name -> Name -> Q Exp
-makeTransformBodyDiff diffConName fields fieldVars unwrapVar wrapVar fVar = do
-  if null fields
-    then [| $(varE wrapVar) =<< $(varE fVar) =<< pure $(conE diffConName) |]
-    else do
-      transformedFields <- forM (zip fields fieldVars) $ \((bang, typ), var) ->
-        case typ of
-          AppT ListT _ -> 
-            [| traverse (transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar)) $(varE var) |]
-          _ -> 
-            [| transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar) $(varE var) |]
-
-      let conApp = foldl AppE (ConE diffConName) transformedFields
-      
-      [| $(varE wrapVar) =<< $(varE fVar) =<< $(pure conApp) |]
+makeTransformMatchDiff sumConName diffConName fields unwrapVar wrapVar fVar =
+  makeTransformMatch sumConName diffConName fields unwrapVar wrapVar fVar ApplyFAfter
