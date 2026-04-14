@@ -96,7 +96,7 @@ instance BiPlate Sum0 Sum0 Sum0 where
   
 ---- calling
 
------- makeDiff "D_" "Diff_Sum0_Expr" [''Value, ''Expr] [''Value]
+------ makeDiff "D_" "Diff_Sum0_Expr" ''Sum0 ''Value
 
 ---- will generate the following datatype:
 
@@ -150,20 +150,15 @@ makeSum prefix sumName typeNames = do
 
   pure [sumDataDec, plateInst, biPlateInst]
 
-makeDiff :: String -> String -> [Name] -> [Name] -> Q [Dec]
-makeDiff prefix diffName allTypeNames subsetTypeNames = do
-  -- Get info about all types
-  allTypeInfos <- forM allTypeNames $ \typeName -> do
-    info <- reify typeName
-    pure (typeName, info)
-
-  subsetTypeInfos <- forM subsetTypeNames $ \typeName -> do
-    info <- reify typeName
-    pure (typeName, info)
+makeDiff :: String -> String -> Name -> Name -> Q [Dec]
+makeDiff prefix diffName sumTypeName subsetTypeName = do
+  -- Get info about the sum type and subset type
+  sumInfo <- reify sumTypeName
+  subsetInfo <- reify subsetTypeName
 
   -- Get constructors
-  let allCons = mconcat [ getConstructors info | (_, info) <- allTypeInfos ]
-  let subsetCons = mconcat [ getConstructors info | (_, info) <- subsetTypeInfos ]
+  let allCons = getConstructors sumInfo
+  let subsetCons = getConstructors subsetInfo
 
   -- Diff constructors = all - subset
   let diffCons = [ c | c <- allCons, c `notElem` subsetCons ]
@@ -181,14 +176,8 @@ makeDiff prefix diffName allTypeNames subsetTypeNames = do
   -- Create the data declaration
   let diffDataDec = DataD [] diffTypeName [PlainTV expVar undefined] Nothing diffConsDecls []
 
-  -- Determine the sum and target types
-  -- Assume the sum type is named with the pattern from makeSum
-  -- For now, we'll need to construct the names
-  let sumTypeName = mkName $ "Sum0"  -- This should be derived from allTypeNames
-  let targetTypeName = head subsetTypeNames  -- First subset type
-
   -- Create BiPlate instance for Sum -> Target via Diff
-  biPlateInst <- makeBiPlateInstanceDiff prefix sumTypeName targetTypeName diffTypeName allCons subsetCons
+  biPlateInst <- makeBiPlateInstanceDiff prefix sumTypeName subsetTypeName diffTypeName allCons subsetCons
 
   pure [diffDataDec, biPlateInst]
 
