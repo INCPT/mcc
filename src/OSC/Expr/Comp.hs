@@ -53,17 +53,13 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
 
     -- Algebra that handles all cases - order independent
     gatherAlg :: Sig (Term Sig') -> State GatherState (Term Sig')
-    gatherAlg = algLam `compAlg` algDefault
-      where
-        algLam :: Lam (Term Sig') -> Maybe (State GatherState (Term Sig'))
-        algLam (Lam params locals body) = Just $ do
-          funcId <- gets nextFuncId
-          modify $ \s -> s { nextFuncId = nextFuncId s + 1 }
-          modify $ \s -> s { collectedFuncs = (funcId, params, locals, body) : collectedFuncs s }
-          return $ inject (FuncRef funcId)
-        
-        algDefault :: Sig (Term Sig') -> State GatherState (Term Sig')
-        algDefault = return . Term . fmap unTerm
+    gatherAlg sig = case projectA sig of
+      Just (Lam params locals body) -> do
+        funcId <- gets nextFuncId
+        modify $ \s -> s { nextFuncId = nextFuncId s + 1 }
+        modify $ \s -> s { collectedFuncs = (funcId, params, locals, body) : collectedFuncs s }
+        return $ inject (FuncRef funcId)
+      Nothing -> return $ inject sig
 
 data GatherState = GatherState
   { nextFuncId :: Int
