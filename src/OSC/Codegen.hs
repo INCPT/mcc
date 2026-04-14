@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -105,7 +106,7 @@ data Expr ident lam sel t
   -- much sense generally anyway.
 
   -- NOTE: Bindings will be in topsort order after typechecking
-  | ERec Type {- delay -} Int {- must be of type abstraction -} ident {- bindings -} [(ident, AllocRegion, Expr ident lam sel t)] {- body -} (Expr ident lam sel t)
+  | ERec Type {- delay -} Int lam
   deriving (Functor, Show)
 
 exprType :: Expr ident lam sel Type -> Type
@@ -118,7 +119,7 @@ exprType (EAbs2 t _) = t
 exprType (EApp t _ _) = t
 exprType (ESelect t _ _) = t
 exprType (ESelect2 t _) = t
-exprType (ERec t _ _ _ _) = t
+exprType (ERec t _ _) = t
 
 --- Expr traversals ------------------------------------------------------------
 
@@ -135,12 +136,13 @@ descendExpr f expr = case f expr of
     EApp _ func args -> descendExpr f func <> mconcat (fmap (descendExpr f) args)
     ESelect _ e idx -> descendExpr f e <> descendExpr f idx
     ESelect2 _ _ -> []
-    ERec _ _ _ bindings body -> mconcat (fmap (descendExpr f . (\(_, _, c) -> c)) bindings) <> descendExpr f body
+    ERec _ _ _ -> []
 
 universeExpr :: (lam -> [Expr ident lam sel t]) -> (sel -> [Expr ident lam sel t]) -> Expr ident lam sel t -> [Expr ident lam sel t]
 universeExpr flam fsel = tailrec (universeExpr flam fsel) . mconcat . descendExpr expr
   where
     expr (EAbs2 _ lam) = Just $ concatMap (universeExpr flam fsel) (flam lam)
+    expr (ERec _ _ lam) = Just $ concatMap (universeExpr flam fsel) (flam lam)
     expr (ESelect2 _ sel) = Just $ concatMap (universeExpr flam fsel) (fsel sel)
     expr e = Just [e]
 
@@ -148,32 +150,34 @@ transformExprGenM
   :: forall ident ident' lam sel lam' sel' t m. Monad m
   => ((Expr ident lam sel t -> m (Expr ident' lam' sel' t)) -> Expr ident lam sel t -> m (Expr ident' lam' sel' t))
   -> (Expr ident' lam' sel' t -> m (Expr ident' lam' sel' t))
+  -> (ident -> m ident')
   -> Expr ident lam sel t
   -> m (Expr ident' lam' sel' t)
-transformExprGenM fdown fup = go
+transformExprGenM fdown fup lkup = go
   where
-    yfdown = fdown (transformExprGenM fdown fup)
+    yfdown = fdown (transformExprGenM fdown fup lkup)
 
     go :: Expr ident lam sel t -> m (Expr ident' lam' sel' t)
     go expr = case expr of
       EConst n -> fup =<< pure (EConst n)
       EOp t op a b -> fup =<< (EOp t op <$> yfdown a <*> yfdown b)
       EArr t exprs -> fup =<< (EArr t <$> traverse yfdown exprs)
-      EVar t ident -> fup =<< (pure $ EVar t $ _ ident)
+      EVar t ident -> fup =<< (EVar t <$> lkup ident)
       EAbs _ _ _ _ -> undefined
       EAbs2 t lam -> fup =<< yfdown (EAbs2 t lam)
       EApp t f args -> fup =<< (EApp t <$> yfdown f <*> traverse yfdown args)
       ESelect t e idx -> fup =<< (ESelect t <$> yfdown e <*> yfdown idx)
       ESelect2 t sel -> fup =<< yfdown (ESelect2 t sel)
-      ERec t delay param bindings body -> fup =<< (ERec t delay (_ param) <$> traverse (\(n, region, e) -> (_ n, region,) <$> yfdown e) bindings <*> yfdown body)
+      ERec t delay lam -> fup =<< yfdown (ERec t delay lam)
 
 transformExprM
-  :: forall ident lam sel lam' sel' t m. Monad m
+  :: forall ident ident' lam sel lam' sel' t m. Monad m
   => (lam -> m lam')
   -> (sel -> m sel')
-  -> (Expr ident lam' sel' t -> m (Expr ident lam' sel' t))
+  -> (Expr ident' lam' sel' t -> m (Expr ident' lam' sel' t))
+  -> (ident -> m ident')
   -> Expr ident lam sel t
-  -> m (Expr ident lam' sel' t)
+  -> m (Expr ident' lam' sel' t)
 transformExprM flam fsel = transformExprGenM go
   where
     go :: (Expr ident lam sel t -> m (Expr ident' lam' sel' t)) -> Expr ident lam sel t -> m (Expr ident' lam' sel' t)
@@ -184,10 +188,11 @@ transformExprM flam fsel = transformExprGenM go
 transformExpr
   :: (lam -> lam')
   -> (sel -> sel')
-  -> (Expr ident lam' sel' t -> Expr ident lam' sel' t)
+  -> (Expr ident' lam' sel' t -> Expr ident' lam' sel' t)
+  -> (ident -> ident')
   -> Expr ident lam sel t
-  -> Expr ident lam' sel' t
-transformExpr flam fsel fexp = runIdentity . transformExprM (pure . flam) (pure . fsel) (pure . fexp)
+  -> Expr ident' lam' sel' t
+transformExpr flam fsel fexp lkup = runIdentity . transformExprM (pure . flam) (pure . fsel) (pure . fexp) (pure . lkup)
 
 --------------------------------------------------------------------------------
 
@@ -555,7 +560,7 @@ choiceTree (EAbs t params bs body) = do
   pure $ case idxs of
     [] -> CAbs t (Abs params [ (n, ALocal, toCExpr b) | (n, b) <- bs ] (toCExpr body))
     _ -> error "choiceTree: cannot index into an abstraction (this is a bug)"
-choiceTree (ERec t d param bs body) = toC (CRec t d param [ (n, ALocal, toCExpr b) | (n, _, b) <- bs ] (toCExpr body))
+-- choiceTree (ERec t d param bs body) = toC (CRec t d param [ (n, ALocal, toCExpr b) | (n, _, b) <- bs ] (toCExpr body))
 choiceTree (EArr t es) = do
   s <- pop
   case s of
@@ -579,8 +584,8 @@ data FoldedSelection ident lam
   | FoldedSelectionRHS (Expr ident lam (FoldedSelection ident lam) Type) [Expr ident lam (FoldedSelection ident lam) Type]
 
 data Lambda ident sel = Lambda
-  { params :: [Ident]
-  , bindings :: [(Ident, AllocRegion, Expr ident (Lambda ident sel) (sel ident (Lambda ident sel)) Type)]
+  { params :: [ident]
+  , bindings :: [(ident, AllocRegion, Expr ident (Lambda ident sel) (sel ident (Lambda ident sel)) Type)]
   , body :: Expr ident (Lambda ident sel) (sel ident (Lambda ident sel)) Type
   }
 
@@ -614,6 +619,11 @@ foldSelections = runStack . expr
       | (n, region, bbody) <- bindings
       ]
       (foldSelections body)
+    expr (ERec t delay (Lambda params bindings body)) = pure $ ERec t delay $ Lambda params
+      [ (n, region, foldSelections bbody)
+      | (n, region, bbody) <- bindings
+      ]
+      (foldSelections body)
     expr (EArr t elems) = do
       s <- pop
       case s of
@@ -622,9 +632,6 @@ foldSelections = runStack . expr
           push (t, idx)
           pure $ ESelect2 t $ FoldedSelectionLHS elems (foldSelections idx)
         _ -> pure $ EArr t (fmap foldSelections elems)
-    expr (ERec t d param bindings body) = rhs $ ERec t d param
-      [ (n, region, foldSelections bbody) | (n, region, bbody) <- bindings ]
-      (foldSelections body)
     expr (ESelect _ _ _) = undefined
     expr (ESelect2 t (Selection sel idx)) = do
       push (t, idx)
@@ -635,10 +642,13 @@ foldSelections = runStack . expr
 --------------------------------------------------------------------------------
 
 ssa :: ExprSel String Selection -> R.ReaderT (Map String Ident) Unique (ExprSel Ident Selection)
-ssa = transformExprGenM go undefined
+ssa = transformExprGenM go pure undefined
   where
     go k (EAbs2 _ lam) = do
+      params <- sequence [ (p,) <$> Ident p <$> lift freshIdx | p <- lam.params ]
+      bindings <- sequence [ (,,) <$> (Ident n <$> lift freshIdx) <*> pure region <*> k bbody | (n, region, bbody) <- lam.bindings ]
       undefined
+    go _ _ = undefined
 
 --------------------------------------------------------------------------------
 
@@ -675,6 +685,12 @@ fresh = Unique $ do
   n <- ST.get
   ST.put (n + 1)
   pure $ Ident ("_captured_" <> show n) n
+
+freshIdx :: Unique Int
+freshIdx = Unique $ do
+  n <- ST.get
+  ST.put (n + 1)
+  pure n
 
 --------------------------------------------------------------------------------
 
