@@ -184,13 +184,13 @@ makeDescendBody recursiveFields unwrapVar extractVar = do
     then do
       let ((bang, typ), var) = head recursiveFields
       if isContainer typ
-        then [| fmap mconcat $ traverse (descend $(varE unwrapVar) $(varE extractVar)) $(varE var) |]
+        then [| fmap mconcat $ sequenceA $ fmap (descend $(varE unwrapVar) $(varE extractVar)) $(varE var) |]
         else [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
     else do
       -- Multiple fields: combine with <> using liftA2
       exprs <- forM recursiveFields $ \((bang, typ), var) ->
         if isContainer typ
-          then [| fmap mconcat $ traverse (descend $(varE unwrapVar) $(varE extractVar)) $(varE var) |]
+          then [| fmap mconcat $ sequenceA $ fmap (descend $(varE unwrapVar) $(varE extractVar)) $(varE var) |]
           else [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
       
       let combineExprs a b = [| liftA2 (<>) $(pure a) $(pure b) |]
