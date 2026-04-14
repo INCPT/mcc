@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -84,20 +85,20 @@ data UOp = Sqrt | Abs' | Neg | Ceil | Floor | Trunc | Nearest
          | Extend | Wrap | Convert | Demote | Promote | Reinterpret
   deriving (Eq, Show)
 
-data Expr ident lam sel t
+data Expr lam sel t
   = EConst Number
-  | EOp t Op (Expr ident lam sel t) (Expr ident lam sel t) -- both args and the result are simple types
-  | EArr t [Expr ident lam sel t]
+  | EOp t Op (Expr lam sel t) (Expr lam sel t) -- both args and the result are simple types
+  | EArr t [Expr lam sel t]
 
-  | EVar t ident
+  | EVar t Ident
 
   -- NOTE: Bindings will be in topsort order after typechecking
-  | EAbs Type {- params -} [ident] {- bindings -} [(ident, Expr ident lam sel t)] {- body -} (Expr ident lam sel t)
+  | EAbs Type {- params -} [Ident] {- bindings -} [(Ident, Expr lam sel t)] {- body -} (Expr lam sel t)
   | EAbs2 Type lam
 
-  | EApp t (Expr ident lam sel t) [Expr ident lam sel t]
+  | EApp t (Expr lam sel t) [Expr lam sel t]
 
-  | ESelect t (Expr ident lam sel t) {- selector -} (Expr ident lam sel t)
+  | ESelect t (Expr lam sel t) {- selector -} (Expr lam sel t)
   | ESelect2 t sel
 
   -- NOTE: The (return) type of a recursive expression can not contain functions
@@ -105,10 +106,10 @@ data Expr ident lam sel t
   -- much sense generally anyway.
 
   -- NOTE: Bindings will be in topsort order after typechecking
-  | ERec Type {- delay -} Int {- must be of type abstraction -} ident {- bindings -} [(ident, AllocRegion, Expr ident lam sel t)] {- body -} (Expr ident lam sel t)
+  | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, AllocRegion, Expr lam sel t)] {- body -} (Expr lam sel t)
   deriving (Functor, Show)
 
-exprType :: Expr ident lam sel Type -> Type
+exprType :: Expr lam sel Type -> Type
 exprType (EConst n) = numberType n
 exprType (EOp t _ _ _) = t
 exprType (EArr t _) = t
@@ -122,7 +123,7 @@ exprType (ERec t _ _ _ _) = t
 
 --- Expr traversals ------------------------------------------------------------
 
-descendExpr :: (Expr ident lam sel t -> Maybe b) -> Expr ident lam sel t -> [b]
+descendExpr :: (Expr lam sel t -> Maybe b) -> Expr lam sel t -> [b]
 descendExpr f expr = case f expr of
   Just b -> [b]
   Nothing -> case expr of
@@ -137,7 +138,7 @@ descendExpr f expr = case f expr of
     ESelect2 _ _ -> []
     ERec _ _ _ bindings body -> mconcat (fmap (descendExpr f . (\(_, _, c) -> c)) bindings) <> descendExpr f body
 
-universeExpr :: (lam -> [Expr ident lam sel t]) -> (sel -> [Expr ident lam sel t]) -> Expr ident lam sel t -> [Expr ident lam sel t]
+universeExpr :: (lam -> [Expr lam sel t]) -> (sel -> [Expr lam sel t]) -> Expr lam sel t -> [Expr lam sel t]
 universeExpr flam fsel = tailrec (universeExpr flam fsel) . mconcat . descendExpr expr
   where
     expr (EAbs2 _ lam) = Just $ concatMap (universeExpr flam fsel) (flam lam)
@@ -145,38 +146,38 @@ universeExpr flam fsel = tailrec (universeExpr flam fsel) . mconcat . descendExp
     expr e = Just [e]
 
 transformExprGenM
-  :: forall ident ident' lam sel lam' sel' t m. Monad m
-  => ((Expr ident lam sel t -> m (Expr ident' lam' sel' t)) -> Expr ident lam sel t -> m (Expr ident' lam' sel' t))
-  -> (Expr ident' lam' sel' t -> m (Expr ident' lam' sel' t))
-  -> Expr ident lam sel t
-  -> m (Expr ident' lam' sel' t)
+  :: forall lam sel lam' sel' t m. Monad m
+  => ((Expr lam sel t -> m (Expr lam' sel' t)) -> Expr lam sel t -> m (Expr lam' sel' t))
+  -> (Expr lam' sel' t -> m (Expr lam' sel' t))
+  -> Expr lam sel t
+  -> m (Expr lam' sel' t)
 transformExprGenM fdown fup = go
   where
     yfdown = fdown (transformExprGenM fdown fup)
 
-    go :: Expr ident lam sel t -> m (Expr ident' lam' sel' t)
+    go :: Expr lam sel t -> m (Expr lam' sel' t)
     go expr = case expr of
       EConst n -> fup =<< pure (EConst n)
       EOp t op a b -> fup =<< (EOp t op <$> yfdown a <*> yfdown b)
       EArr t exprs -> fup =<< (EArr t <$> traverse yfdown exprs)
-      EVar t ident -> fup =<< (pure $ EVar t $ _ ident)
-      EAbs _ _ _ _ -> undefined
+      EVar t ident -> fup =<< (pure $ EVar t ident)
+      EAbs t params bindings body -> fup =<< (EAbs t params <$> traverse (\(n, e) -> (n,) <$> yfdown e) bindings <*> yfdown body)
       EAbs2 t lam -> fup =<< yfdown (EAbs2 t lam)
       EApp t f args -> fup =<< (EApp t <$> yfdown f <*> traverse yfdown args)
       ESelect t e idx -> fup =<< (ESelect t <$> yfdown e <*> yfdown idx)
       ESelect2 t sel -> fup =<< yfdown (ESelect2 t sel)
-      ERec t delay param bindings body -> fup =<< (ERec t delay (_ param) <$> traverse (\(n, region, e) -> (_ n, region,) <$> yfdown e) bindings <*> yfdown body)
+      ERec t delay param bindings body -> fup =<< (ERec t delay param <$> traverse (\(n, region, e) -> (n, region,) <$> yfdown e) bindings <*> yfdown body)
 
 transformExprM
-  :: forall ident lam sel lam' sel' t m. Monad m
+  :: forall lam sel lam' sel' t m. Monad m
   => (lam -> m lam')
   -> (sel -> m sel')
-  -> (Expr ident lam' sel' t -> m (Expr ident lam' sel' t))
-  -> Expr ident lam sel t
-  -> m (Expr ident lam' sel' t)
+  -> (Expr lam' sel' t -> m (Expr lam' sel' t))
+  -> Expr lam sel t
+  -> m (Expr lam' sel' t)
 transformExprM flam fsel = transformExprGenM go
   where
-    go :: (Expr ident lam sel t -> m (Expr ident' lam' sel' t)) -> Expr ident lam sel t -> m (Expr ident' lam' sel' t)
+    go :: (Expr lam sel t -> m (Expr lam' sel' t)) -> Expr lam sel t -> m (Expr lam' sel' t)
     go _ (ESelect2 t sel) = ESelect2 t <$> (fsel sel)
     go _ (EAbs2 t lam) = EAbs2 t <$> (flam lam)
     go k expr = k expr
@@ -184,9 +185,9 @@ transformExprM flam fsel = transformExprGenM go
 transformExpr
   :: (lam -> lam')
   -> (sel -> sel')
-  -> (Expr ident lam' sel' t -> Expr ident lam' sel' t)
-  -> Expr ident lam sel t
-  -> Expr ident lam' sel' t
+  -> (Expr lam' sel' t -> Expr lam' sel' t)
+  -> Expr lam sel t
+  -> Expr lam' sel' t
 transformExpr flam fsel fexp = runIdentity . transformExprM (pure . flam) (pure . fsel) (pure . fexp)
 
 --------------------------------------------------------------------------------
@@ -529,7 +530,7 @@ showOp Rem = "rem"
 
 --------------------------------------------------------------------------------
 
-toC :: CIndexable Abs -> Stack (Type, Expr Ident lam sel Type) (CExpr Abs)
+toC :: CIndexable Abs -> Stack (Type, Expr lam sel Type) (CExpr Abs)
 toC e = do
   idxs <- ST.get
   pure $ CIndexed (map (second toCExpr) idxs) e
@@ -537,7 +538,7 @@ toC e = do
 -- Pair each index with the appropriate array, so an an expression like
 -- `[[0, 1], [2, 3]][1][0]` turns into `[[0, 1][0], [2, 3][0]][1]`.
 -- This allows for easy constant index elimination and the generation of more efficient code.
-choiceTree :: Expr Ident abs sel Type -> Stack (Type, Expr Ident abs sel Type) (CExpr Abs)
+choiceTree :: Expr abs sel Type -> Stack (Type, Expr abs sel Type) (CExpr Abs)
 choiceTree (EConst n) = do
   idxs <- ST.get
   pure $ case idxs of
@@ -572,26 +573,26 @@ choiceTree (ESelect t e idx) = do
 
 --------------------------------------------------------------------------------
 
-data Selection ident lam = Selection (Expr ident lam (Selection ident lam) Type) (Expr ident lam (Selection ident lam) Type)
+data Selection lam = Selection (Expr lam (Selection lam) Type) (Expr lam (Selection lam) Type)
 
-data FoldedSelection ident lam
-  = FoldedSelectionLHS [Expr ident lam (FoldedSelection ident lam) Type] (Expr ident lam (FoldedSelection ident lam) Type)
-  | FoldedSelectionRHS (Expr ident lam (FoldedSelection ident lam) Type) [Expr ident lam (FoldedSelection ident lam) Type]
+data FoldedSelection lam
+  = FoldedSelectionLHS [Expr lam (FoldedSelection lam) Type] (Expr lam (FoldedSelection lam) Type)
+  | FoldedSelectionRHS (Expr lam (FoldedSelection lam) Type) [Expr lam (FoldedSelection lam) Type]
 
-data Lambda ident sel = Lambda
+data Lambda sel = Lambda
   { params :: [Ident]
-  , bindings :: [(Ident, AllocRegion, Expr ident (Lambda ident sel) (sel ident (Lambda ident sel)) Type)]
-  , body :: Expr ident (Lambda ident sel) (sel ident (Lambda ident sel)) Type
+  , bindings :: [(Ident, AllocRegion, Expr (Lambda sel) (sel (Lambda sel)) Type)]
+  , body :: Expr (Lambda sel) (sel (Lambda sel)) Type
   }
 
-type ExprSel ident sel = Expr ident (Lambda ident sel) (sel ident (Lambda ident sel)) Type
+type ExprSel sel = Expr (Lambda sel) (sel (Lambda sel)) Type
 
-type FoldSelectionsM ident = Stack (Type, ExprSel ident Selection) (ExprSel ident FoldedSelection)
+type FoldSelectionsM = Stack (Type, ExprSel Selection) (ExprSel FoldedSelection)
 
-foldSelections :: ExprSel ident Selection -> ExprSel ident FoldedSelection
+foldSelections :: ExprSel Selection -> ExprSel FoldedSelection
 foldSelections = runStack . expr
   where
-    rhs :: ExprSel ident FoldedSelection -> FoldSelectionsM ident
+    rhs :: ExprSel FoldedSelection -> FoldSelectionsM
     rhs expr = do
       idxs <- ST.get
       case idxs of
@@ -603,7 +604,7 @@ foldSelections = runStack . expr
           peelOffIndices n (TArr t _) = peelOffIndices (n - 1) t
           peelOffIndices n t = error $ "cexprType: cannot peel " <> show n <> " indices from type " <> show t <> " (this is a bug)"
 
-    expr :: ExprSel ident Selection -> FoldSelectionsM ident
+    expr :: ExprSel Selection -> FoldSelectionsM
     expr (EConst n) = rhs $ EConst n
     expr (EOp t op a b) = rhs $ EOp t op (foldSelections a) (foldSelections b)
     expr (EVar t n) = rhs $ EVar t n
@@ -634,11 +635,13 @@ foldSelections = runStack . expr
 
 --------------------------------------------------------------------------------
 
-ssa :: ExprSel String Selection -> R.ReaderT (Map String Ident) Unique (ExprSel Ident Selection)
-ssa = transformExprGenM go undefined
+ssa :: ExprSel Selection -> R.ReaderT (Map String Ident) Unique (ExprSel Selection)
+ssa = transformExprGenM go pure
   where
     go k (EAbs2 _ lam) = do
+      params' <- sequence [ (n,) <$> Ident n <$> lift freshIdx | Ident n _ <- lam.params ]
       undefined
+    go k _ = undefined
 
 --------------------------------------------------------------------------------
 
@@ -659,7 +662,7 @@ elimConstIndices = transformCExpr (\_ -> id) id go
 optimize :: CExpr Abs -> CExpr Abs
 optimize = elimConstIndices
 
-toCExpr :: Expr Ident abs sel Type -> CExpr Abs
+toCExpr :: Expr abs sel Type -> CExpr Abs
 toCExpr = optimize . flip ST.evalState [] . choiceTree
 
 --------------------------------------------------------------------------------
@@ -669,6 +672,12 @@ newtype Unique a = Unique (ST.State Int a)
 
 runUnique :: Unique a -> a
 runUnique (Unique m) = ST.evalState m 0
+
+freshIdx :: Unique Int
+freshIdx = Unique $ do
+  n <- ST.get
+  ST.put (n + 1)
+  pure n
 
 fresh :: Unique Ident
 fresh = Unique $ do
