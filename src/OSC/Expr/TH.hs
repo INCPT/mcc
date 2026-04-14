@@ -68,7 +68,7 @@ instance Plate Sum0 where
       Just a' -> pure [a']
       Nothing -> case inner of
         S_Const _ -> pure []
-        -- if field is of type `h (g (f exp)) ...` (like `[exp]` or `[Maybe exp]`) then just traverse (not sure if mconcat etc is needed for more complicated traversls) - we'll throw a type error if f isn't a Traversable
+        -- if field is of type `h (g (f exp)) ...` (like `[exp]` or `[Maybe exp]`) then just traverse (and figure out how to do nested traversls) - we'll throw a type error if f isn't a Traversable
         S_Arr exprs -> fmap mconcat $ traverse (descend unwrap extract) exprs
         S_Add exp1 exp2 -> (<>) <$> descend unwrap extract exp1 <*> descend unwrap extract exp2
         S_Mul exp1 exp2 -> (<>) <$> descend unwrap extract exp1 <*> descend unwrap extract exp2
