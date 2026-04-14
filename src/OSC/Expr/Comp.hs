@@ -59,7 +59,7 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
         modify $ \s -> s { nextFuncId = nextFuncId s + 1 }
         modify $ \s -> s { collectedFuncs = (funcId, params, locals, body) : collectedFuncs s }
         return $ inject (FuncRef funcId)
-      Nothing -> return $ inject sig
+      Nothing -> return $ Term $ deepInject sig
 
 data GatherState = GatherState
   { nextFuncId :: Int
