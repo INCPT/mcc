@@ -188,6 +188,7 @@ transformExpr flam fsel fexp = runIdentity . transformExprM (pure . flam) (pure 
 
 --------------------------------------------------------------------------------
 
+{-
 showExpr :: Expr lam sel Type -> String
 showExpr = T.unpack . renderStrict . layoutPretty defaultLayoutOptions . ppExpr
 
@@ -323,6 +324,7 @@ ppBindingsMultiline bs = indent 2 $ vsep
   ]
   where
     ppBinding (Ident n) e = pretty n <+> ppExprL e
+-}
 
 --------------------------------------------------------------------------------
 
@@ -569,45 +571,38 @@ choiceTree (ESelect t e idx) = do
 
 data Mu f = Mu (f (Mu f))
 
-data Selection t lam sel = Selection (Expr lam sel t) (Expr lam sel t)
+data Selection lam sel = Selection (Expr lam sel Type) (Expr lam sel Type)
+type Selection_ lam    = Mu (Selection lam)
 
-data FoldedSelection t lam sel
-  = FoldedSelectionLHS [Expr lam sel t] (Expr lam sel t)
-  | FoldedSelectionRHS (Expr lam sel t) [Expr lam sel t]
+data FoldedSelection lam sel
+  = FoldedSelectionLHS [Expr lam sel Type] (Expr lam sel Type)
+  | FoldedSelectionRHS (Expr lam sel Type) [Expr lam sel Type]
+type FoldedSelection_ lam = Mu (FoldedSelection lam)
 
-data Lambda3 t sel lam = Lambda3 {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Expr lam sel t)] {- body -} (Expr lam sel t)
-data Lambda1 t lam = Lambda1 {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Expr lam (Selection_ t (Lambda1_ t)) t)] {- body -} (Expr lam (Selection_ t (Lambda1_ t)) t)
-data Lambda2 t lam = Lambda2 {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Expr lam (FoldedSelection_ t (Lambda2_ t)) t)] {- body -} (Expr lam (FoldedSelection_ t (Lambda2_ t)) t)
+data Lambda sel lam = Lambda {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, Expr lam (Mu (sel lam)) Type)] {- body -} (Expr lam (Mu (sel lam)) Type)
+type Lambda_ sel    = Mu (Lambda sel)
 
-type Lambda1_ t = Mu (Lambda1 t)
-type Lambda2_ t = Mu (Lambda2 t)
+type ExprSel sel = Expr (Lambda_ sel) (Mu (sel (Lambda_ sel))) Type
 
-type Selection_ t lam = Mu (Selection t lam)
-type FoldedSelection_ t lam = Mu (FoldedSelection t lam)
+type FoldSelectionsM = StackM (Type, ExprSel Selection) Identity (ExprSel FoldedSelection)
 
-type ExprSel_ t       = Expr (Mu (Lambda3 (Mu (Selection t ())) t)) (Selection_ t (Lambda1_ t)) t
-type ExprSel t       = Expr (Lambda1_ t) (Selection_ t (Lambda1_ t)) t
-type ExprFoldedSel t = Expr (Lambda2_ t) (FoldedSelection_ t (Lambda2_ t)) t
-
-type FoldSelectionsM t = StackM (t, ExprSel t) Identity (ExprFoldedSel t)
-
-foldSelections :: ExprSel t -> ExprFoldedSel t
+foldSelections :: ExprSel Selection -> ExprSel FoldedSelection
 foldSelections = runStack . expr
   where
-    rhs :: ExprFoldedSel t -> FoldSelectionsM t
+    rhs :: ExprSel FoldedSelection -> FoldSelectionsM
     rhs expr = do
       idxs <- ST.get
       case idxs of
         [] -> pure $ ESelect2 undefined (Mu $ FoldedSelectionRHS expr (fmap (foldSelections . snd) idxs))
         _ -> pure expr
 
-    expr :: ExprSel t -> FoldSelectionsM t
+    expr :: ExprSel Selection -> FoldSelectionsM
     expr (EConst n) = rhs $ EConst n
     expr (EOp t op a b) = rhs $ EOp t op (foldSelections a) (foldSelections b)
     expr (EVar t n) = rhs $ EVar t n
     expr (EApp t f as) = rhs $ EApp t (foldSelections f) (fmap foldSelections as)
     expr (EAbs _ _ _ _) = undefined
-    expr (EAbs2 t (Mu (Lambda1 params bindings body))) = pure $ EAbs2 t $ Mu $ Lambda2 params
+    expr (EAbs2 t (Mu (Lambda params bindings body))) = pure $ EAbs2 t $ Mu $ Lambda params
       [ (n, region, foldSelections bbody)
       | (n, region, bbody) <- bindings
       ]
