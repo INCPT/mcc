@@ -134,7 +134,7 @@ makeSum prefix sumName typeNames = do
     pure $ NormalC newConName newFields
 
   -- Create the data declaration
-  let sumDataDec = DataD [] sumTypeName [PlainTV expVar ()] Nothing sumCons
+  let sumDataDec = DataD [] sumTypeName [PlainTV expVar undefined] Nothing sumCons
         [DerivClause Nothing [ConT ''Functor, ConT ''Foldable, ConT ''Traversable]]
 
   -- Create Plate instance
@@ -174,7 +174,7 @@ makeDiff prefix diffName allTypeNames subsetTypeNames = do
     pure $ NormalC newConName newFields
 
   -- Create the data declaration
-  let diffDataDec = DataD [] diffTypeName [PlainTV expVar ()] Nothing diffConsDecls []
+  let diffDataDec = DataD [] diffTypeName [PlainTV expVar undefined] Nothing diffConsDecls []
 
   -- Determine the sum and target types
   -- Assume the sum type is named with the pattern from makeSum
@@ -200,7 +200,7 @@ replaceExpType expVar (bang, typ) = (bang, replaceInType expVar typ)
 
 replaceInType :: Name -> Type -> Type
 replaceInType expVar typ = case typ of
-  AppT (AppT ListT innerType) -> AppT ListT (replaceInType expVar innerType)
+  AppT _ (AppT ListT innerType) -> AppT ListT (replaceInType expVar innerType)
   AppT f a -> AppT (replaceInType expVar f) (replaceInType expVar a)
   VarT _ -> VarT expVar
   ConT name -> ConT name
