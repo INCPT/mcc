@@ -44,6 +44,13 @@ $(derive
     [''Value, ''Lam, ''Exp, ''FuncRef]
   )
 
+--------------------------------------------------------------------------------
+
+data GatherState = GatherState
+  { nextFuncId :: Int
+  , collectedFuncs :: [(Int, [String], [(String, Term Sig')], Term Sig')]
+  }
+
 class GatherAlg f where
   gatherAlg :: AlgM (State GatherState) f (Term Sig')
 
@@ -54,7 +61,7 @@ instance GatherAlg Lam where
     modify $ \s -> s { collectedFuncs = (funcId, params, locals, body) : collectedFuncs s }
     return $ inject (FuncRef funcId)
 
-instance (f :<: Sig') => GatherAlg f where
+instance {-# OVERLAPPABLE #-} (f :<: Sig') => GatherAlg f where
   gatherAlg = return . inject
 
 instance (GatherAlg f, GatherAlg g) => GatherAlg (f :+: g) where
@@ -69,8 +76,3 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
       { nextFuncId = 0
       , collectedFuncs = []
       }
-
-data GatherState = GatherState
-  { nextFuncId :: Int
-  , collectedFuncs :: [(Int, [String], [(String, Term Sig')], Term Sig')]
-  }
