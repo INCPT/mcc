@@ -33,31 +33,49 @@ data Mu f = Mu (f (Mu f))
 
 ---- having the following types
 
-data Value exp = Const exp Int | Arr [exp]
-data Expr exp = Single | Add (Maybe exp) exp | Mul (Maybe (Either String [exp])) exp exp | Exp (Maybe (Maybe (Maybe exp)))
+data Value exp = Const Int | Arr [exp]
+data Expr exp = Single | Add (Maybe exp) exp | Mul (Maybe (Either String [exp])) exp | Exp (Maybe (Maybe (Maybe exp)))
 data Lambda exp = Lambda String [(String, exp)] exp
 
 $(makeSum "S1_" "Sum1" [''Value, ''Expr])
 $(makeSum "S2_" "Sum2" [''Value, ''Expr, ''Lambda])
 
-$(makePlateInstance ''Sum1)
-$(makePlateInstance ''Sum2)
+-- $(makePlateInstance ''Sum1)
+-- $(makePlateInstance ''Sum2)
 
 $(makeDiff "D1_" "Diff1" ''Sum1 ''Value)
 $(makeDiff "D2_" "Diff2" ''Sum2 ''Sum1)
 
--- instance Plate Sum1 where
---   descend unwrap extract expr = do
---     inner <- unwrap expr
---     a <- extract inner
---     case a of
---       Just a' -> pure [a']
---       Nothing -> case inner of
---         S_Const _ -> pure []
---         S_Arr exprs -> (fmap mconcat . traverse (descend unwrap extract)) (F.toList exprs)
---         S_Add exp1 exp2 -> (<>) <$> (fmap mconcat . traverse (descend unwrap extract)) (F.toList exp1) <*> descend unwrap extract exp2
---         S_Mul exp1 exp2 -> (<>) <$> (fmap mconcat . traverse (descend unwrap extract)) (mconcat $ F.toList $ sequenceA $ F.toList exp1) <*> descend unwrap extract exp2
---         S_Exp exp1 -> (fmap mconcat . traverse (descend unwrap extract)) (mconcat $ F.toList $ sequenceA $ F.toList $ mconcat $ F.toList $ sequenceA $ F.toList exp1)
+instance BiPlate Sum1 Value Diff1 where
+  transformBi unwrap wrap f expr = do
+    inner <- unwrap expr
+    case inner of
+      S1_Const n -> wrap =<< (Const <$> pure n)
+      S1_Arr as  -> wrap =<< (Arr <$> traverse (transformBi unwrap wrap f) as)
+
+      S1_Add a b -> wrap =<< f =<< (D1_S1_Add <$> (traverse (transformBi unwrap wrap f)) a <*> transformBi unwrap wrap f b)
+      S1_Mul a b -> wrap =<< f =<< (D1_S1_Mul <$> (traverse (traverse (traverse (transformBi unwrap wrap f)))) a <*> transformBi unwrap wrap f b)
+      _ -> undefined
+
+instance Plate Sum1 where
+  descend unwrap extract expr = do
+    inner <- unwrap expr
+    a <- extract inner
+    case a of
+      Just a' -> pure [a']
+      Nothing -> case inner of
+        S1_Const _ -> pure []
+        S1_Arr exprs -> (foldMapM (descend unwrap extract)) (F.toList exprs)
+        S1_Add exp1 exp2 -> (<>) <$> (foldMapM (descend unwrap extract)) (F.toList exp1) <*> descend unwrap extract exp2
+        S1_Mul exp1 exp2 -> (<>) <$> (foldMapM (descend unwrap extract)) (foldList $ F.toList $ foldList $ F.toList exp1) <*> descend unwrap extract exp2
+        S1_Exp exp1 -> (foldMapM (descend unwrap extract)) (foldList $ F.toList $ foldList $ F.toList exp1)
+        _ -> undefined
+
+foldMapM :: Applicative f => Monoid b => (a -> f b) -> [a] -> f b
+foldMapM f = fmap mconcat . traverse f
+
+foldList :: Foldable t => Applicative t => [t a] -> [a]
+foldList = mconcat . F.toList . sequenceA
 
 -- $(do
 --   decs <- makePlateInstance ''Sum1
@@ -120,7 +138,7 @@ instance BiPlate Sum0 Value Diff_Sum0_Expr where
   transformBi unwrap wrap f expr = do
     inner <- unwrap expr
     case inner of
-      S_Const n -> wrap =<< pure (Const n)
+      S_Const n -> wrap =<< (Const <$> n)
       S_Arr as  -> wrap =<< (Arr <$> traverse (transformBi unwrap wrap f) as)
 
       S_Add a b -> wrap =<< f =<< (D_Add <$> transformBi unwrap wrap f a <*> transformBi unwrap wrap f b)
