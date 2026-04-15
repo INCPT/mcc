@@ -46,6 +46,7 @@ makeSum prefix sumName typeNames = do
   -- Get info about all the types
   typeInfos <- forM typeNames $ \typeName -> do
     info <- reify typeName
+    validateTypeParams typeName info
     pure (typeName, info)
 
   -- Collect all constructors from all types
@@ -72,6 +73,7 @@ makeDiff prefix diffName allCons subsetTypeNames = do
   -- Get info about the subset types
   subsetInfos <- forM subsetTypeNames $ \typeName -> do
     info <- reify typeName
+    validateTypeParams typeName info
     pure (typeName, info)
 
   -- Get constructors from subset types
@@ -97,6 +99,14 @@ makeDiff prefix diffName allCons subsetTypeNames = do
 
 --------------------------------------------------------------------------------
 -- Helper functions
+
+validateTypeParams :: Name -> Info -> Q ()
+validateTypeParams typeName (TyConI (DataD _ _ tvbs _ _ _)) =
+  case length tvbs of
+    1 -> pure ()
+    n -> fail $ "Type " ++ nameBase typeName ++ " must have exactly 1 type parameter, but has " ++ show n
+validateTypeParams typeName _ = 
+  fail $ "Expected a data type declaration for " ++ nameBase typeName
 
 getConstructors :: Info -> [(Name, [BangType])]
 getConstructors (TyConI (DataD _ _ _ _ cons _)) = 
