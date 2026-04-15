@@ -265,31 +265,44 @@ makeBiPlateInstance sumTypeName destTypeName diffTypeName = do
   destInfo <- reify destTypeName
   let subsetCons = getConstructors destInfo
   
+  -- Get constructors of diff type to get the prefix
+  diffInfo <- reify diffTypeName
+  let diffCons = getConstructors diffInfo
+  
   let unwrapVar = mkName "unwrap"
   let wrapVar = mkName "wrap"
   let fVar = mkName "f"
   let exprVar = mkName "expr"
   let innerVar = mkName "inner"
 
-  -- Create matches for subset constructors (direct mapping, no f)
-  -- Get the prefix from the sum type constructors
-  let prefix = case sumCons of
+  -- Get the sum prefix from the sum type constructors
+  let sumPrefix = case sumCons of
         ((firstSumCon, _):_) -> 
           let sumName = nameBase firstSumCon
               baseName = nameBase (fst $ head subsetCons)
           in take (length sumName - length baseName) sumName
         _ -> ""
   
+  -- Get the diff prefix from the diff type constructors
+  let diffPrefix = case diffCons of
+        ((firstDiffCon, _):_) -> 
+          let diffName = nameBase firstDiffCon
+              -- The diff constructor name is like D1_S1_Single
+              -- We need to extract D1_ prefix
+              baseName = nameBase (fst $ head [ c | c <- sumCons, not (consInByFields c subsetCons) ])
+          in take (length diffName - length baseName) diffName
+        _ -> ""
+  
   subsetMatches <- forM subsetCons $ \(conName, fields) -> do
-    let sumConName = mkName (prefix ++ nameBase conName)
+    let sumConName = mkName (sumPrefix ++ nameBase conName)
     makeSubsetMatch sumConName conName fields unwrapVar wrapVar fVar
 
   -- Create matches for diff constructors (apply f)
-  -- The diff constructors use the same names as the sum constructors
-  let diffCons = [ c | c <- sumCons, not (consInByFields c subsetCons) ]
-  diffMatches <- forM diffCons $ \(conName, fields) -> do
-    let sumConName = mkName (nameBase conName)
-    makeDiffMatch sumConName fields unwrapVar wrapVar fVar
+  let diffConsFromSum = [ c | c <- sumCons, not (consInByFields c subsetCons) ]
+  diffMatches <- forM diffConsFromSum $ \(conName, fields) -> do
+    let sumConName = mkName (sumPrefix ++ nameBase conName)
+    let diffConName = mkName (diffPrefix ++ sumPrefix ++ nameBase conName)
+    makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar
 
   let transformBody = DoE Nothing
         [ BindS (VarP innerVar) (AppE (VarE unwrapVar) (VarE exprVar))
@@ -334,19 +347,19 @@ makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar = do
   pure $ Match pat (NormalB body) []
 
 -- For diff constructors: wrap =<< f =<< (DiffCon <$> transform fields)
-makeDiffMatch :: Name -> [BangType] -> Name -> Name -> Name -> Q Match
-makeDiffMatch sumConName fields unwrapVar wrapVar fVar = do
+makeDiffMatch :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
+makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar = do
   fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_a" ++ show i)
   
   let pat = ConP sumConName [] (fmap VarP fieldVars)
   
   body <- if null fields
-    then [| $(varE wrapVar) =<< $(varE fVar) =<< pure $(conE sumConName) |]
+    then [| $(varE wrapVar) =<< $(varE fVar) =<< pure $(conE diffConName) |]
     else do
       transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
         makeFieldTransform typ var unwrapVar wrapVar fVar
       
-      conApp <- foldl appE (conE sumConName) (fmap pure transformedFields)
+      conApp <- foldl appE (conE diffConName) (fmap pure transformedFields)
       [| $(varE wrapVar) =<< $(varE fVar) =<< $(pure conApp) |]
 
   pure $ Match pat (NormalB body) []
