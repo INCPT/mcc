@@ -302,7 +302,7 @@ genSum prefix sumName typeNames = do
 
   -- Create the data declaration
   let sumDataDec = DataD [] sumTypeName [PlainTV expVar BndrReq] Nothing sumCons
-        [DerivClause Nothing [ConT ''Functor, ConT ''Foldable, ConT ''Traversable]]
+        [DerivClause Nothing [ConT ''Functor, ConT ''Foldable, ConT ''Traversable, ConT ''Show]]
 
   pure [sumDataDec]
 
@@ -444,7 +444,7 @@ genSmartConstructors typeName = do
   -- Generate a smart constructor for each constructor
   mconcat <$> forM cons (\(conName, fields) -> do
     let smartName = mkName (lowerFirst (nameBase conName))
-    genSmartConstructor typeName smartName conName fields expVar fVar)
+    genSmartConstructor typeName smartName conName fields fVar)
 
 -- Helper to lowercase the first character
 lowerFirst :: String -> String
@@ -452,8 +452,8 @@ lowerFirst [] = []
 lowerFirst (c:cs) = toLower c : cs
 
 -- Generate a single smart constructor
-genSmartConstructor :: Name -> Name -> Name -> [BangType] -> Name -> Name -> Q [Dec]
-genSmartConstructor typeName smartName conName fields expVar fVar = do
+genSmartConstructor :: Name -> Name -> Name -> [BangType] -> Name -> Q [Dec]
+genSmartConstructor typeName smartName conName fields fVar = do
   -- Generate parameter names
   paramVars <- forM [1..length fields] $ \i -> pure $ mkName ("a" ++ show i)
   
@@ -464,7 +464,7 @@ genSmartConstructor typeName smartName conName fields expVar fVar = do
   -- Replace exp with (f TypeName) in field types
   let paramTypes = [ replaceExpWithWrapped fVar typeName typ | (_, typ) <- fields ]
   
-  let funType = ForallT [PlainTV fVar BndrReq] [wrapConstraint] $
+  let funType = ForallT [PlainTV fVar SpecifiedSpec] [wrapConstraint] $
         foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) returnType paramTypes
   
   -- Build the function body: wrap (ConName a1 a2 ...)

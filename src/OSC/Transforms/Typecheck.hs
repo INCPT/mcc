@@ -24,8 +24,9 @@ import qualified OSC.Expr.Base as B
 foldMapM :: Applicative f => Monoid b => (a -> f b) -> [a] -> f b
 foldMapM f = fmap mconcat . traverse f
 
-$(genSum "" "Exp" [''B.Exp, ''B.Lam, ''B.Select, ''B.Rec])
-$(genPlateInstance ''Exp)
+$(genSum "" "Expr" [''B.Exp, ''B.Lam, ''B.Select, ''B.Rec])
+$(genPlateInstance ''Expr)
+$(genSmartConstructors ''Expr)
 
 --------------------------------------------------------------------------------
 
@@ -48,7 +49,7 @@ data TypeError pos
   | NotAFunction pos Type
   deriving Show
 
-type ExpA ann = Ann ann Exp
+type ExpA ann = Ann ann Expr
 type TypecheckM pos = R.ReaderT (Map B.Ident Type) (E.Except (TypeError pos))
 
 -- Helper functions
@@ -266,3 +267,15 @@ typecheck expr = case unAnn expr of
       E.throwError $ RecReturnTypeMismatch pos t bodyType
     
     pure $ Ann ((pos, t), Rec t param bindings' body')
+
+testTypecheck = do
+  print e1_t
+  where
+    cnst = OSC.Transforms.Typecheck.const
+
+    infer t = fmap (hoistAnn snd) $ E.runExcept $ R.runReaderT t mempty
+
+    e1 :: Ann () Expr
+    e1 = select (arr [(op Add (cnst $ B.I32 4) (cnst $ B.I32 8))]) (cnst $ B.I32 8)
+
+    e1_t = infer $ typecheck e1
