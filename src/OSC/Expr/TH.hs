@@ -342,7 +342,7 @@ makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar = do
         [field] -> [| $(destCon) <$> $(pure field) |]
         (field:rest) -> do
           let initial = [| $(destCon) <$> $(pure field) |]
-          foldr (\acc f -> [| $(pure acc) <*> $f |]) initial rest
+          foldM (\acc f -> [| $(pure acc) <*> $(pure f) |]) initial rest
       
       [| $(varE wrapVar) =<< $(pure conApp) |]
 
