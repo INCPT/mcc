@@ -86,10 +86,10 @@ checkCycles pos bindings = do
     Left scc -> E.throwError $ CyclicDependency pos scc
     Right sorted -> pure sorted
 
-typeContainsAbs :: Type -> Bool
-typeContainsAbs (TNumber _) = False
-typeContainsAbs (TArr t _) = typeContainsAbs t
-typeContainsAbs (TAbs _ _) = True
+typeContainsLam :: Type -> Bool
+typeContainsLam (TNumber _) = False
+typeContainsLam (TArr t _) = typeContainsLam t
+typeContainsLam (TLam _ _) = True
 
 -- Typecheck bindings with dependency ordering
 typecheckBindings :: pos -> [(B.Ident, ExpA pos)] -> TypecheckM pos [(B.Ident, ExpA (pos, Type))]
@@ -178,7 +178,7 @@ typecheck expr = case unAnn expr of
     
     -- Extract parameter types and return type from the function type
     case t of
-      TAbs paramTypes retType -> do
+      TLam paramTypes retType -> do
         -- Check parameter count matches
         when (length params /= length paramTypes) $
           E.throwError $ ArgumentCountMismatch pos (length paramTypes) (length params)
@@ -211,7 +211,7 @@ typecheck expr = case unAnn expr of
     let argTypes = fmap (snd . fst . unAnn) args'
     
     case funcType of
-      TAbs paramTypes retType -> do
+      TLam paramTypes retType -> do
         -- Check argument count
         when (length paramTypes /= length args) $
           E.throwError $ ArgumentCountMismatch pos (length paramTypes) (length args)
@@ -246,7 +246,7 @@ typecheck expr = case unAnn expr of
     checkDuplicates pos bindings
     
     -- Check that the type doesn't contain functions
-    when (typeContainsAbs t) $
+    when (typeContainsLam t) $
       E.throwError $ RecTypeContainsFunction pos t
     
     -- Build parameter environment (the recursive parameter has the delay type)

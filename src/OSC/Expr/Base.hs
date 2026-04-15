@@ -7,7 +7,7 @@ import Data.String (IsString)
 data TNumber = TI32 | TF32 | TI64 | TF64
   deriving (Eq, Show)
 
-data Type = TNumber TNumber | TArr Type {- length -} Int | TAbs [Type] Type
+data Type = TNumber TNumber | TArr Type {- length -} Int | TLam [Type] Type
   deriving (Eq, Show)
 
 sizeOfType :: Type -> Int
@@ -16,19 +16,19 @@ sizeOfType (TNumber TF32) = 4
 sizeOfType (TNumber TI64) = 8
 sizeOfType (TNumber TF64) = 8
 sizeOfType (TArr t dim) = sizeOfType t * dim
-sizeOfType (TAbs _ _) = sizeOfType (TNumber TI32) -- TODO PLATFORM: funcref is I32
+sizeOfType (TLam _ _) = sizeOfType (TNumber TI32) -- TODO PLATFORM: funcref is I32
 
 returnType :: Type -> Type
-returnType (TAbs _ t) = t
+returnType (TLam _ t) = t
 returnType _ = error "returnType: not an abs"
 
 peelType :: Type -> Type
 peelType (TArr t _) = t
-peelType (TAbs _ _) = error "peelType: abstraction"
+peelType (TLam _ _) = error "peelType: abstraction"
 peelType t = error $ "peelType: " <> show t
 
 paramTypes :: String -> Type -> [Type]
-paramTypes _ (TAbs params _) = params
+paramTypes _ (TLam params _) = params
 paramTypes e _ = error $ "paramTypes: not an abs: " <> e
 
 data Number = I32 Int | I64 Int | F32 Float | F64 Double
