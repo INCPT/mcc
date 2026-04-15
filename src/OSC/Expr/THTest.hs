@@ -7,6 +7,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TupleSections #-}
 
 module OSC.Expr.THTest where
 
@@ -27,6 +28,12 @@ type AnnM ann = R.Reader ann
 
 hoistAnn :: Functor f => (ann -> ann') -> Ann ann f -> Ann ann' f
 hoistAnn h (Ann (ann, f)) = Ann (h ann, fmap (hoistAnn h) f)
+
+hoistAnnM :: Traversable f => Monad m => (ann -> m ann') -> Ann ann f -> m (Ann ann' f)
+hoistAnnM h (Ann (ann, f)) = Ann <$> ((,) <$> h ann <*> traverse (hoistAnnM h) f)
+
+flowAnn :: (ann -> ann') -> AnnM ann (exp (Ann ann' exp)) -> AnnM ann (Ann ann' exp)
+flowAnn f m = R.ask >>= \ann -> Ann <$> (f ann,) <$> m
 
 -- DAG recursive functor + monad
 data Dag k f = Node (f (Dag k f)) | Key k
@@ -93,7 +100,7 @@ test3 = transformBi (\(Ann (ann, f)) -> R.local (const ann) (pure f)) wrap go su
     wrap :: Sum2 (ASum2 (pos, Type)) -> AnnM pos (ASum2 (pos, Type))
     wrap (S2_Const n) = R.ask >>= \pos -> pure $ Ann ((pos, TNumber), S2_Const n)
     wrap (S2_Add a@(Ann ((_, at), _)) b@(Ann ((_, bt), _)))
-      | at == bt = R.ask >>= \pos -> pure $ Ann ((pos, at), S2_Add a b)
+      | at == bt = flowAnn (,at) $ pure $ S2_Add a b
     wrap _ = undefined
 
     go = undefined
