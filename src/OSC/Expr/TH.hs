@@ -7,7 +7,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module OSC.Expr.TH (Plate (..), BiPlate (..), Empty, makeSum, makeDiff, makePlateInstance, makeBiPlateInstance) where
+module OSC.Expr.TH (Plate (..), BiPlate (..), Empty, makeSum, makeDiff, makePlateInstance, makeBiPlateInstance, universe, transform) where
 
 import Control.Monad (forM_, forM, foldM, unless, when)
 
@@ -15,7 +15,7 @@ import qualified Data.Foldable as F
 
 import Language.Haskell.TH
 
-import OSC.Expr.Plate (Plate (..), BiPlate (..), Empty)
+import OSC.Expr.Plate (Plate (..), BiPlate (..), Empty, universe, transform)
 
 -- Documentation ---------------------------------------------------------------
 --
@@ -38,7 +38,6 @@ data Expr exp
   = NoFields
   | Add exp exp
   | Mul (Maybe (Either String [exp])) exp
-  | Exp (Maybe (Maybe (Maybe exp))) (Maybe exp) (Maybe (Maybe exp))
 
 data FuncRef exp = FuncRef Int
 
@@ -245,8 +244,9 @@ foldMapM :: Applicative f => Monoid b => (a -> f b) -> [a] -> f b
 foldMapM f = fmap mconcat . traverse f
 
 {-# INLINE foldList #-}
-foldList :: Foldable t => Applicative t => [t a] -> [a]
-foldList = mconcat . F.toList . sequenceA
+foldList :: Foldable t => [t a] -> [a]
+foldList = mconcat . fmap F.toList
+
 
 --------------------------------------------------------------------------------
 

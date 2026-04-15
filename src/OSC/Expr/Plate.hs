@@ -4,6 +4,8 @@
 
 module OSC.Expr.Plate where
 
+import Data.Functor.Identity (Identity (runIdentity))
+
 data Empty exp
 
 class Plate expr where
@@ -14,6 +16,9 @@ class Plate expr where
 
     -> f expr
     -> m [a]
+
+universe :: Plate expr => (f expr -> expr (f expr)) -> f expr -> [f exrp]
+universe unwrap = runIdentity . descend (fmap pure unwrap) (const $ pure Nothing)
 
 class BiPlate a b c | a c -> b, b c -> a, a b -> c where
   transformBi :: Monad m

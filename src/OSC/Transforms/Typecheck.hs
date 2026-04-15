@@ -7,7 +7,6 @@
 module OSC.Transforms.Typecheck where
 
 import Control.Monad (when)
-import Control.Monad.Trans.Class (lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.Except as E
 
@@ -16,23 +15,17 @@ import qualified Data.Map as M
 import Data.Set (Set)
 import qualified Data.Set as S
 import qualified Data.Graph as G
-import Data.List (find)
-import Data.Generics.Uniplate.Data (universe)
 
 import OSC.Expr.Functors
 import OSC.Expr.TH
 import OSC.Expr.Base (TNumber (..), Type (..), Op (..))
 import qualified OSC.Expr.Base as B
 
--- Note: B.Lam and B.Rec contain type information in the original Expr
--- The Lam has: Lam [Ident] [(Ident, exp)] exp
--- The Rec has: Rec Ident [(Ident, exp)] exp
--- But EAbs has: EAbs Type [Ident] [(Ident, Expr t)] (Expr t)
--- And ERec has: ERec Type Int Ident [(Ident, Expr t)] (Expr t)
--- We need to handle the type annotation separately
+foldMapM :: Applicative f => Monoid b => (a -> f b) -> [a] -> f b
+foldMapM f = fmap mconcat . traverse f
 
 $(makeSum "" "Exp" [''B.Exp, ''B.Lam, ''B.Select, ''B.Rec])
-$(makeBiPlateInstance "" ''Exp "" ''Exp "" ''Empty)
+$(makePlateInstance ''Exp)
 
 --------------------------------------------------------------------------------
 
@@ -88,11 +81,10 @@ checkDuplicates pos bindings = do
 
 checkCycles :: pos -> [(B.Ident, ExpA (pos, Type))] -> TypecheckM pos [(B.Ident, ExpA (pos, Type))]
 checkCycles pos bindings = do
-  undefined
-  -- let nodeEdges expr = S.fromList [ n | Ann ((_, _), Var n) <- universe expr ]
-  -- case topsort nodeEdges bindings of
-  --   Left scc -> E.throwError $ CyclicDependency pos scc
-  --   Right sorted -> pure sorted
+  let nodeEdges expr = S.fromList [ n | Ann ((_, _), Var n) <- universe (snd . unAnn) expr ]
+  case topsort nodeEdges bindings of
+    Left scc -> E.throwError $ CyclicDependency pos scc
+    Right sorted -> pure sorted
 
 typeContainsAbs :: Type -> Bool
 typeContainsAbs (TNumber _) = False
