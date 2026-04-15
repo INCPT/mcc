@@ -6,6 +6,7 @@
 
 module OSC.Transforms.Typecheck where
 
+import Control.Monad (when)
 import Control.Monad.Trans.Class (lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.Except as E
@@ -169,31 +170,39 @@ typecheck = transform (\(Ann (ann, f)) -> R.local (const ann) (pure f)) f
         Just t -> flowAnn (,t) $ pure $ Var n
         Nothing -> E.throwError $ UnknownBinding pos n
     
-    f (Lam params bindings body) = do
+    f (Lam t params bindings body) = do
       pos <- R.ask
       
       -- Check for duplicate parameters  
       checkDuplicates pos [(p, ()) | p <- params]
       checkDuplicates pos bindings
       
-      -- For Lam, we expect the type to be annotated externally
-      -- The typical usage would be: Ann (pos, TAbs paramTypes retType) (Lam params bindings body)
-      -- But since we're inside the transform, we don't have access to that annotation
-      -- We need to infer or require type annotations
-      
-      -- For now, implement a version that requires all bindings to be typeable
-      -- and infers the function type from the body
-      bindings' <- typecheckBindings pos bindings
-      
-      -- Add bindings to environment for body
-      let bindingsEnv = M.fromList [(n, snd . fst . unAnn $ e) | (n, e) <- bindings']
-      body' <- lift $ R.local (bindingsEnv <>) $ R.runReaderT (typecheck body) pos
-      
-      let bodyType = snd . fst . unAnn $ body'
-      
-      -- We can't determine parameter types without annotations
-      -- Return error for now
-      E.throwError $ UnknownBinding pos (B.Ident "lambda-needs-parameter-types")
+      -- Extract parameter types and return type from the function type
+      case t of
+        TAbs paramTypes retType -> do
+          -- Check parameter count matches
+          when (length params /= length paramTypes) $
+            E.throwError $ ArgumentCountMismatch pos (length paramTypes) (length params)
+          
+          -- Build parameter environment
+          let paramsEnv = M.fromList (zip params paramTypes)
+          
+          -- Typecheck bindings in the context of parameters
+          bindings' <- lift $ R.local (paramsEnv <>) $ R.runReaderT (typecheckBindings pos bindings) pos
+          
+          -- Build full environment for body (params + bindings)
+          let bindingsEnv = M.fromList [(n, snd . fst . unAnn $ e) | (n, e) <- bindings']
+          body' <- lift $ R.local (bindingsEnv <> paramsEnv <>) $ R.runReaderT (typecheck body) pos
+          
+          let bodyType = snd . fst . unAnn $ body'
+          
+          -- Check return type matches
+          when (bodyType /= retType) $
+            E.throwError $ FunctionReturnTypeMismatch pos retType bodyType
+          
+          flowAnn (,t) $ pure $ Lam t params bindings' body'
+        
+        _ -> E.throwError $ NotAFunction pos t
     
     f (App func args) = do
       pos <- R.ask
@@ -229,15 +238,33 @@ typecheck = transform (\(Ann (ann, f)) -> R.local (const ann) (pure f)) f
             _ -> E.throwError $ InvalidIndexType (fst . fst . unAnn $ idx) idxType
         _ -> E.throwError $ NotAnArray (fst . fst . unAnn $ sel) selType
     
-    f (Rec param bindings body) = do
+    f (Rec t param bindings body) = do
       pos <- R.ask
       
       -- Check for duplicates
       checkDuplicates pos bindings
       
-      -- For Rec, we need the delay type to be annotated
-      -- Similar issue as Lam - we need external type information
-      E.throwError $ UnknownBinding pos (B.Ident "rec-needs-delay-type")
+      -- Check that the type doesn't contain functions
+      when (typeContainsAbs t) $
+        E.throwError $ RecTypeContainsFunction pos t
+      
+      -- Build parameter environment (the recursive parameter has the delay type)
+      let paramsEnv = M.singleton param t
+      
+      -- Typecheck bindings in the context of the recursive parameter
+      bindings' <- lift $ R.local (paramsEnv <>) $ R.runReaderT (typecheckBindings pos bindings) pos
+      
+      -- Build full environment for body (param + bindings)
+      let bindingsEnv = M.fromList [(n, snd . fst . unAnn $ e) | (n, e) <- bindings']
+      body' <- lift $ R.local (bindingsEnv <> paramsEnv <>) $ R.runReaderT (typecheck body) pos
+      
+      let bodyType = snd . fst . unAnn $ body'
+      
+      -- Check return type matches the delay type
+      when (bodyType /= t) $
+        E.throwError $ RecReturnTypeMismatch pos t bodyType
+      
+      flowAnn (,t) $ pure $ Rec t param bindings' body'
     
     f _ = do
       pos <- R.ask
