@@ -85,8 +85,8 @@ makeDiff prefix diffName sumTypeName subsetTypeName = do
   validateNoExistentials subsetTypeName subsetInfo
   let subsetCons = getConstructors subsetInfo
 
-  -- Diff constructors = all - subset
-  let diffCons = [ c | c <- allCons, c `notElem` subsetCons ]
+  -- Diff constructors = all - subset (comparing by fields only)
+  let diffCons = [ c | c <- allCons, not (consInByFields c subsetCons) ]
 
   -- Create the diff type
   let expVar = mkName "exp"
@@ -125,6 +125,14 @@ validateNoExistentials typeName (TyConI (DataD _ _ _ _ cons _)) = do
     ForallC _ _ _ -> fail $ "Type " ++ nameBase typeName ++ " has existentially quantified constructor, which is not supported"
     _ -> pure ()
 validateNoExistentials _ _ = pure ()
+
+-- Compare constructors by their fields only, ignoring names
+consEqualByFields :: (Name, [BangType]) -> (Name, [BangType]) -> Bool
+consEqualByFields (_, fields1) (_, fields2) = fields1 == fields2
+
+-- Check if a constructor (by fields) is in a list of constructors
+consInByFields :: (Name, [BangType]) -> [(Name, [BangType])] -> Bool
+consInByFields con = any (consEqualByFields con)
 
 replaceExpType :: Name -> BangType -> BangType
 replaceExpType expVar (bang, typ) = (bang, replaceInType expVar typ)
