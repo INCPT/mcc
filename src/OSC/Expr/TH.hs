@@ -190,11 +190,12 @@ makeDescendBody recursiveFields unwrapVar extractVar = do
           then [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
           else if depth == 1
             then [| (fmap mconcat . traverse (descend $(varE unwrapVar) $(varE extractVar))) (F.toList $(varE var)) |]
-            else
+            else do
               -- For depth > 1, we need to stack: mconcat $ F.toList $ sequenceA $ F.toList
-              let unwrapLayer e = [| mconcat $ F.toList $ sequenceA $ F.toList $(pure e) |]
-                  innerExpr = [| ((fmap mconcat . traverse (descend $(varE unwrapVar) $(varE extractVar))) $) |]
-              in foldr (\_ acc -> [| $acc $(unwrapLayer (VarE var)) |]) innerExpr [1..depth-1]
+              -- Build from the inside out
+              let buildLayers 0 = varE var
+                  buildLayers n = [| mconcat $ F.toList $ sequenceA $ F.toList $(buildLayers (n-1)) |]
+              [| (fmap mconcat . traverse (descend $(varE unwrapVar) $(varE extractVar))) $(buildLayers (depth - 1)) |]
 
   if length recursiveFields == 1
     then do
