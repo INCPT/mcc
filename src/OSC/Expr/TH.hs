@@ -77,6 +77,30 @@ stripPrefix prefix str
   | prefix == take (length prefix) str = Just (drop (length prefix) str)
   | otherwise = Nothing
 
+-- Match sum constructors to subset/dest constructors by name
+-- For each sum constructor, strips the sum prefix and looks up the base name
+-- in the subset map. Calls onSubset if found, onDiff if not found.
+matchSumConstructors
+  :: String                                    -- Sum prefix
+  -> [(Name, [BangType])]                      -- Sum constructors
+  -> [(String, (Name, [BangType]))]            -- Subset map (baseName -> (conName, fields))
+  -> ((Name, [BangType]) -> (Name, [BangType]) -> String -> Q a)  -- onSubset: sumCon -> subsetCon -> baseName -> result
+  -> ((Name, [BangType]) -> String -> Q a)     -- onDiff: sumCon -> baseName -> result
+  -> Q [a]
+matchSumConstructors sumPrefix sumCons subsetMap onSubset onDiff =
+  forM sumCons $ \sumCon@(sumConName, fields) -> do
+    let sumName = nameBase sumConName
+    
+    case stripPrefix sumPrefix sumName of
+      Nothing -> fail $ "Sum constructor " ++ sumName ++ " doesn't have expected prefix " ++ sumPrefix
+      Just baseName -> do
+        case lookup baseName subsetMap of
+          Just (subsetConName, subsetFields) -> do
+            unless (consEqualByFields sumCon (subsetConName, subsetFields)) $
+              fail $ "Constructor " ++ sumName ++ " has different fields than subset constructor " ++ nameBase subsetConName
+            onSubset sumCon (subsetConName, subsetFields) baseName
+          Nothing -> onDiff sumCon baseName
+
 replaceExpType :: Name -> BangType -> BangType
 replaceExpType expVar (bang, typ) = (bang, replaceInType expVar typ)
 
@@ -167,26 +191,13 @@ makeDiff prefix diffName sumPrefix sumTypeName subsetPrefix subsetTypeName = do
   
   -- Build constructors for the diff type
   -- Only include sum constructors that don't match any subset constructor
-  diffConsDecls <- forM sumCons $ \sumCon@(sumConName, fields) -> do
-    let sumName = nameBase sumConName
-    
-    -- Try to strip sum prefix to get base name
-    case stripPrefix sumPrefix sumName of
-      Nothing -> fail $ "Sum constructor " ++ sumName ++ " doesn't have expected prefix " ++ sumPrefix
-      Just baseName -> do
-        -- Check if this base name exists in subset constructors
-        case lookup baseName subsetMap of
-          Just (subsetConName, subsetFields) -> do
-            -- Validate that fields match
-            unless (consEqualByFields sumCon (subsetConName, subsetFields)) $
-              fail $ "Constructor " ++ sumName ++ " has different fields than subset constructor " ++ nameBase subsetConName
-            -- This is a subset constructor, skip it
-            pure Nothing
-          Nothing -> do
-            -- This is a diff constructor
-            let newConName = mkName (prefix ++ baseName)
-            let newFields = fmap (replaceExpType expVar) fields
-            pure $ Just $ NormalC newConName newFields
+  diffConsDecls <- matchSumConstructors sumPrefix sumCons subsetMap
+    (\_ _ _ -> pure Nothing)  -- Skip subset constructors
+    (\(_, fields) baseName -> do
+      let newConName = mkName (prefix ++ baseName)
+      let newFields = fmap (replaceExpType expVar) fields
+      pure $ Just $ NormalC newConName newFields
+    )
 
   let diffConsDecls' = [ c | Just c <- diffConsDecls ]
 
@@ -302,24 +313,14 @@ makeBiPlateInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefix dif
   let innerVar = mkName "inner"
   
   -- For each sum constructor, match it to dest or diff by name
-  matches <- forM sumCons $ \sumCon@(sumConName, fields) -> do
-    let sumName = nameBase sumConName
-    
-    -- Try to strip sum prefix to get base name
-    case stripPrefix sumPrefix sumName of
-      Nothing -> fail $ "Sum constructor " ++ sumName ++ " doesn't have expected prefix " ++ sumPrefix
-      Just baseName -> do
-        -- Check if this base name exists in dest constructors
-        case lookup baseName destMap of
-          Just (destConName, destFields) -> do
-            -- Validate that fields match
-            unless (consEqualByFields sumCon (destConName, destFields)) $
-              fail $ "Constructor " ++ sumName ++ " has different fields than dest constructor " ++ nameBase destConName
-            makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar
-          Nothing -> do
-            -- Must be a diff constructor
-            let diffConName = mkName (diffPrefix ++ baseName)
-            makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar
+  matches <- matchSumConstructors sumPrefix sumCons destMap
+    (\(sumConName, fields) (destConName, _) _ ->
+      makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar
+    )
+    (\(sumConName, fields) baseName -> do
+      let diffConName = mkName (diffPrefix ++ baseName)
+      makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar
+    )
   
   -- Validate that all constructors were matched
   when (length matches /= length sumCons) $
