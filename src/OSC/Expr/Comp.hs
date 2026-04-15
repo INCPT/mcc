@@ -1,63 +1,78 @@
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module OSC.Expr.Comp where
 
-import OSC.Codegen (Type (..), TNumber (..), Stack, push, pop, runStack)
-import qualified Control.Monad.State as ST
+import Data.String (IsString)
 
-import Data.Comp
-import Data.Comp.Derive
-import Data.Comp.Ops
-import Data.Comp.Term
-import Data.Comp.Show ()  -- Provides Show instances for Term
+data TNumber = TI32 | TF32 | TI64 | TF64
+  deriving (Eq, Show)
 
-import Control.Monad.State
+data Type = TNumber TNumber | TArr Type {- length -} Int | TAbs [Type] Type
+  deriving (Eq, Show)
 
-data Value val = Const Int | Arr [val]
-  deriving Functor
+sizeOfType :: Type -> Int
+sizeOfType (TNumber TI32) = 4
+sizeOfType (TNumber TF32) = 4
+sizeOfType (TNumber TI64) = 8
+sizeOfType (TNumber TF64) = 8
+sizeOfType (TArr t dim) = sizeOfType t * dim
+sizeOfType (TAbs _ _) = sizeOfType (TNumber TI32) -- TODO PLATFORM: funcref is I32
 
-data Lam exp = Lam [String] [(String, exp)] exp
-  deriving Functor
+returnType :: Type -> Type
+returnType (TAbs _ t) = t
+returnType _ = error "returnType: not an abs"
 
-data Select exp = Select exp exp
-  deriving Functor
+peelType :: Type -> Type
+peelType (TArr t _) = t
+peelType (TAbs _ _) = error "peelType: abstraction"
+peelType t = error $ "peelType: " <> show t
 
-data FoldedSelect exp = FoldedSelectL [exp] exp | FoldedSelectR exp [exp]
-  deriving Functor
+paramTypes :: String -> Type -> [Type]
+paramTypes _ (TAbs params _) = params
+paramTypes e _ = error $ "paramTypes: not an abs: " <> e
 
-data Exp exp
-  = Op exp exp
-  | Var String
-  | App exp [exp]
-  deriving Functor
+data Number = I32 Int | I64 Int | F32 Float | F64 Double
+  deriving Show
 
-data FuncRef exp = FuncRef Int
-  deriving Functor
+numberType :: Number -> Type
+numberType (I32 _) = TNumber TI32
+numberType (F32 _) = TNumber TF32
+numberType (I64 _) = TNumber TI64
+numberType (F64 _) = TNumber TF64
 
-type Sig0 = Exp :+: Value :+: Select       :+: Lam
-type Sig1 = Exp :+: Value :+: FoldedSelect :+: Lam
-type Sig2 = Exp :+: Value :+: FoldedSelect :+: FuncRef
+newtype Ident = Ident String
+  deriving (Eq, Ord, Show, IsString)
 
-$(derive
-    [ makeTraversable
-    , makeFoldable
-    , makeEqF
-    , makeShowF
-    , smartConstructors
-    , smartAConstructors
-    ]
-    [''Value, ''Lam, ''Exp, ''FuncRef, ''Select, ''FoldedSelect]
-  )
+data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Rotl | Rotr 
+        | Eq | Ne | Gt | Lt | GEt | LEt 
+        | Min | Max | CopySign | Rem
+  deriving (Eq, Show)
 
-data Mu ann f = Mu (ann, f (Mu ann f))
+data UOp = Sqrt | Abs | Neg | Ceil | Floor | Trunc | Nearest 
+         | Clz | Ctz | Popcnt | Eqz
+         | Extend | Wrap | Convert | Demote | Promote | Reinterpret
+  deriving (Eq, Show)
 
 --------------------------------------------------------------------------------
 
+data Lam exp = Lam [Ident] [(Ident, exp)] exp
+
+data Select exp = Select exp exp
+
+data FoldedSelect exp
+  = FoldedSelectL [exp] exp
+  | FoldedSelectR exp [exp]
+
+data Exp exp
+  = Const Number
+  | Arr [exp]
+  | Op Op exp exp
+  | Var String
+  | App exp [exp]
+
+--------------------------------------------------------------------------------
+
+{-
 type FoldSelectionsM = Stack (Type, Term Sig0) (Term Sig1)
 
 foldSelections :: Term Sig0 -> Term Sig1
@@ -157,72 +172,4 @@ gatherAbs term = evalState (cataM gatherAlg term) initialState
       { nextFuncId = 0
       , collectedFuncs = []
       }
-
---------------------------------------------------------------------------------
--- Example usage
---------------------------------------------------------------------------------
-
--- Example: Transform a term with nested lambda abstractions into one with function references
---
--- Input term (Sig):
---   App (Lam ["x"] [] 
---         (App (Lam ["y"] []
---                (App (Lam ["z"] []
---                       (Op (Op (Var "x") (Var "y")) (Var "z")))
---                     [Const 3]))
---              [Const 2]))
---       [Const 1]
---
--- This represents: (λx. (λy. (λz. (x + y) + z)(3))(2))(1)
---
--- After gatherAbs, all three lambdas are extracted and replaced with FuncRefs:
---   App (FuncRef 0) [Const 1]
---
--- The extracted functions are stored in the state's collectedFuncs:
---   [(2, ["z"], [], Op (Op (Var "x") (Var "y")) (Var "z")),
---    (1, ["y"], [], App (FuncRef 2) [Const 3]),
---    (0, ["x"], [], App (FuncRef 1) [Const 2])]
-
-exampleTerm :: Term Sig1
-exampleTerm = 
-  iApp (iLam ["x"] [] 
-         (iApp (iLam ["y"] []
-                 (iApp (iLam ["z"] []
-                        (iOp (iOp (iVar "x") (iVar "y")) (iVar "z")))
-                      [iConst 3]))
-              [iConst 2]))
-       [iConst 1]
-
-exampleTransformed :: Term Sig2
-exampleTransformed = gatherAbs exampleTerm
--- Result: App (FuncRef 0) [Const 1]
--- Where FuncRef 0 contains: App (FuncRef 1) [Const 2]
--- And FuncRef 1 contains: App (FuncRef 2) [Const 3]
--- And FuncRef 2 contains: Op (Op (Var "x") (Var "y")) (Var "z")
-
--- To print a term, just use show:
-printExample :: IO ()
-printExample = do
-  putStrLn "Original term:"
-  print exampleTerm
-  putStrLn "\nTransformed term:"
-  print exampleTransformed
-  putStrLn "\nWith collected functions:"
-  print exampleWithFuncs
-
--- To get the collected functions:
-exampleWithFuncs :: (Term Sig2, GatherState)
-exampleWithFuncs = runState (cataM gatherAlg exampleTerm) initialState
-  where
-    initialState = GatherState { nextFuncId = 0, collectedFuncs = [] }
--- Result: 
--- ( App (FuncRef 0) [Const 1]
--- , GatherState 
---     { nextFuncId = 3
---     , collectedFuncs = 
---         [ (2, ["z"], [], Op (Op (Var "x") (Var "y")) (Var "z"))
---         , (1, ["y"], [], App (FuncRef 2) [Const 3])
---         , (0, ["x"], [], App (FuncRef 1) [Const 2])
---         ]
---     }
--- )
+-}

@@ -1,0 +1,25 @@
+{-# LANGUAGE TupleSections #-}
+
+module OSC.Expr.Functors where
+
+import qualified Control.Monad.Reader as R
+
+-- Simple recursive functor (can be paired with Identity)
+newtype Mu f = Mu { unMu :: f (Mu f) }
+
+-- Annotated recursive functor + monad
+newtype Ann ann f = Ann { unAnn :: (ann, f (Ann ann f)) }
+type AnnM ann = R.Reader ann
+
+hoistAnn :: Functor f => (ann -> ann') -> Ann ann f -> Ann ann' f
+hoistAnn h (Ann (ann, f)) = Ann (h ann, fmap (hoistAnn h) f)
+
+hoistAnnM :: Traversable f => Monad m => (ann -> m ann') -> Ann ann f -> m (Ann ann' f)
+hoistAnnM h (Ann (ann, f)) = Ann <$> ((,) <$> h ann <*> traverse (hoistAnnM h) f)
+
+flowAnn :: (ann -> ann') -> AnnM ann (exp (Ann ann' exp)) -> AnnM ann (Ann ann' exp)
+flowAnn f m = R.ask >>= \ann -> Ann <$> (f ann,) <$> m
+
+-- DAG recursive functor + monad
+data Dag k f = Node (f (Dag k f)) | Key k
+type DagM k expr = R.Reader (k -> expr (Dag k expr))

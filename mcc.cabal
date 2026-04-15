@@ -46,6 +46,7 @@ library
       OSC.Codegen.Interpret
       OSC.Expr
       OSC.Expr.Comp
+      OSC.Expr.Functors
       OSC.Expr.Gen
       OSC.Expr.TH
       OSC.Expr.THTest

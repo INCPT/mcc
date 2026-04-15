@@ -1,3 +1,5 @@
+{-# OPTIONS -Wno-unused-binds #-}
+
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveTraversable #-}
@@ -5,7 +7,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module OSC.Expr.TH where
+module OSC.Expr.TH (Plate (..), BiPlate (..), makeSum, makeDiff, makePlateInstance, makeBiPlateInstance) where
 
 import Control.Monad (forM_, unless, when)
 
