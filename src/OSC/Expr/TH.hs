@@ -32,6 +32,84 @@ class BiPlate a b c | a c -> b, b c -> a, a b -> c where
     -> mu a
     -> m (mu' b)
 
+-- Documentation ---------------------------------------------------------------
+
+---- having the following types
+
+data Value exp  = Const Int | Arr [exp]
+
+data Expr exp
+  = NoFields
+  | Add exp exp
+  | Mul (Maybe (Either String [exp])) exp
+  | Exp (Maybe (Maybe (Maybe exp))) (Maybe exp) (Maybe (Maybe exp))
+
+data FuncRef exp = FuncRef Int
+
+data Lambda exp = Lambda String [(String, exp)] exp
+
+-- $(makeSum "S1_" "Sum1" [''Value, ''Expr, ''FuncRef])
+
+---- will generate the following datatype:
+
+data Sum1 exp
+  -- from Value
+  = S1_Const Int
+  | S1_Arr [exp]
+
+  -- from Expr
+  | S1_NoFields
+  | S1_Add exp exp
+  | S1_Mul (Maybe (Either String [exp])) exp
+
+  -- from FuncRef
+  | S1_FuncRef Int
+  deriving (Functor, Foldable, Traversable)
+
+-- $(makePlateInstance ''Sum1)
+
+---- will then generate the following Plate instance:
+
+instance Plate Sum1 where
+  descend unwrap extract expr = do
+    inner <- unwrap expr
+    a <- extract inner
+    case a of
+      Just a' -> pure [a']
+      Nothing -> case inner of
+        S1_Const _ -> pure []
+        S1_NoFields -> pure []
+        S1_Arr exprs -> (foldMapM (descend unwrap extract)) (F.toList exprs)
+        S1_Add exp1 exp2 -> (<>) <$> descend unwrap extract exp1 <*> descend unwrap extract exp2
+        S1_Mul exp1 exp2 -> (<>) <$> (foldMapM (descend unwrap extract)) (foldList $ F.toList $ foldList $ F.toList exp1) <*> descend unwrap extract exp2
+        S1_FuncRef _ -> pure []
+
+-- $(makeDiff "D1_" "Diff1" "S1_" ''Sum1 "" ''Value)
+
+---- will then generate the following datatype:
+
+data Diff1 exp
+  = D1_NoFields
+  | D1_Add exp exp
+  | D1_Mul (Maybe (Either String [exp])) exp
+  deriving (Functor, Foldable, Traversable)
+
+-- $(makeBiPlateInstance "S1_" ''Sum1 "" ''Value "D1_" ''Diff1)
+
+---- will then generate the following instance:
+
+instance BiPlate Sum1 Value Diff1 where
+  transformBi unwrap wrap f expr = do
+    inner <- unwrap expr
+    case inner of
+      S1_Const n -> wrap =<< (Const <$> pure n)
+      S1_Arr as  -> wrap =<< (Arr <$> traverse (transformBi unwrap wrap f) as)
+
+      S1_NoFields ->  f =<< pure D1_NoFields
+      S1_Add a b -> f =<< (D1_Add <$> (transformBi unwrap wrap f) a <*> transformBi unwrap wrap f b)
+      S1_Mul a b -> f =<< (D1_Mul <$> (traverse (traverse (traverse (transformBi unwrap wrap f)))) a <*> transformBi unwrap wrap f b)
+      _ -> undefined
+
 -- Helper functions ------------------------------------------------------------
 
 foldl1M :: Monad m => (a -> a -> m a) -> [a] -> m a
