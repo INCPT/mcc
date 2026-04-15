@@ -15,20 +15,22 @@ import qualified Data.Foldable as F
 
 class Plate expr where
   descend :: Monad m
-    => (mu expr -> m (expr (mu expr)))  -- | Unrwap
+    => (f expr -> m (expr (f expr)))   -- | Unrwap
  
-    -> (expr (mu expr) -> m (Maybe a))  -- | Gather
-    -> mu expr
+    -> (expr (f expr) -> m (Maybe a))  -- | Gather
+
+    -> f expr
     -> m [a]
 
 class BiPlate a b c | a c -> b, b c -> a, a b -> c where
   transformBi :: Monad m
-    => (mu a -> m (a (mu a)))   -- | Unwrap
-    -> (b (mu' b) -> m (mu' b)) -- | Wrap
+    => (f a -> m (a (f a)))   -- | Unwrap
+    -> (b (f' b) -> m (f' b)) -- | Wrap
 
-    -> (c (mu' b) -> m (mu' b)) -- | Transform
-    -> mu a
-    -> m (mu' b)
+    -> (c (f' b) -> m (f' b)) -- | Transform
+
+    -> f a
+    -> m (f' b)
 
 -- Documentation ---------------------------------------------------------------
 --
