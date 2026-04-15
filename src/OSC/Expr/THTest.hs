@@ -14,7 +14,6 @@ import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
 
 import Data.Functor.Identity
-import qualified Data.Foldable as F
 import qualified Data.Map as M
 
 import OSC.Expr.TH
@@ -24,7 +23,10 @@ newtype Mu f = Mu { unMu :: f (Mu f) }
 
 -- Annotated recursive functor + monad
 newtype Ann ann f = Ann { unAnn :: (ann, f (Ann ann f)) }
-type AnnM ann expr = R.Reader (Ann ann expr)
+type AnnM ann = R.Reader ann
+
+hoistAnn :: Functor f => (ann -> ann') -> Ann ann f -> Ann ann' f
+hoistAnn h (Ann (ann, f)) = Ann (h ann, fmap (hoistAnn h) f)
 
 -- DAG recursive functor + monad
 data Dag k f = Node (f (Dag k f)) | Key k
@@ -35,7 +37,7 @@ type DagM k expr = R.Reader (k -> expr (Dag k expr))
 ---- having the following types
 
 data Value exp = Const Int | Arr [exp]
-data Expr exp = Single | Add (Maybe exp) exp | Mul (Maybe (Either String [exp])) exp | Exp (Maybe (Maybe (Maybe exp))) (Maybe exp) (Maybe (Maybe exp))
+data Expr exp = Single | Add exp exp | Mul (Maybe (Either String [exp])) exp | Exp (Maybe (Maybe (Maybe exp))) (Maybe exp) (Maybe (Maybe exp))
 data Lambda exp = Lambda String [(String, exp)] exp
 data FuncRef exp = FuncRef Int
 data Empty exp
@@ -75,15 +77,28 @@ test2 = transformBi (pure . unMu) (pure . Node) go sum2
       nextId <- ST.state $ \(nextId, funcMap) -> (nextId, (nextId + 1, M.insert nextId (n, bindings, body) funcMap))
       pure $ Key nextId
 
-test3 :: FuncM (Ann Int Sum2)
-test3 = transformBi (pure . unMu) wrap go sum2
+data SourcePos
+
+data Type = TNumber | TArr [Type] | TAbs [Type] Type
+  deriving Eq
+
+type ASum2 ann = Ann ann Sum2
+
+sum2' :: Ann pos Sum2
+sum2' = undefined
+
+test3 :: AnnM pos (ASum2 (pos, Type))
+test3 = transformBi (\(Ann (ann, f)) -> R.local (const ann) (pure f)) wrap go sum2'
   where
-    wrap :: Sum2 (Ann Int Sum2) -> FuncM (Ann Int Sum2)
-    wrap (S2_Const n) = pure $ Ann (0, S2_Const n)
+    wrap :: Sum2 (ASum2 (pos, Type)) -> AnnM pos (ASum2 (pos, Type))
+    wrap (S2_Const n) = R.ask >>= \pos -> pure $ Ann ((pos, TNumber), S2_Const n)
+    wrap (S2_Add a@(Ann ((_, at), _)) b@(Ann ((_, bt), _)))
+      | at == bt = R.ask >>= \pos -> pure $ Ann ((pos, at), S2_Add a b)
     wrap _ = undefined
 
-    go :: Empty (Ann Int Sum2) -> FuncM (Ann Int Sum2)
-    go _ = undefined
+    go = undefined
+    -- go :: Empty (ASum2 (SourcePos, Type)) -> AnnM SourcePos (ASum2 (SourcePos, Type))
+    -- go _ = undefined
 
 -- instance BiPlate Sum1 Value Diff1 where
 --   transformBi unwrap wrap f expr = do

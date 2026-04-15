@@ -23,7 +23,7 @@ class Plate expr where
     -> mu expr
     -> m [a]
 
-class BiPlate a b c | a c -> b, b c -> a where
+class BiPlate a b c | a c -> b, b c -> a, a b -> c where
   transformBi :: Monad m
     => (mu a -> m (a (mu a)))   -- | Unwrap
     -> (b (mu' b) -> m (mu' b)) -- | Wrap
