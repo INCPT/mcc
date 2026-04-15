@@ -268,14 +268,12 @@ typecheck expr = case unAnn expr of
     
     pure $ Ann ((pos, t), Rec t param bindings' body')
 
-testTypecheck = do
-  print e1_t
+--------------------------------------------------------------------------------
+
+e1 :: ExpA ()
+e1 = select (arr [(op Add (cnst $ B.I32 4) (cnst $ B.I32 8))]) (cnst $ B.I32 8)
   where
     cnst = OSC.Transforms.Typecheck.const
 
-    infer t = fmap (hoistAnn snd) $ E.runExcept $ R.runReaderT t mempty
-
-    e1 :: Ann () Expr
-    e1 = select (arr [(op Add (cnst $ B.I32 4) (cnst $ B.I32 8))]) (cnst $ B.I32 8)
-
-    e1_t = infer $ typecheck e1
+infer :: ExpA pos -> Either (TypeError pos) (Ann Type Expr)
+infer = fmap (hoistAnn snd) . E.runExcept . flip R.runReaderT mempty . typecheck
