@@ -18,15 +18,13 @@ import qualified Data.Graph as G
 
 import OSC.Expr.Functors
 import OSC.Expr.TH
-import OSC.Expr.Base (TNumber (..), Type (..), Op (..))
+import OSC.Expr.Comp (Ident, TNumber (..), Type (..), Op (..))
+import qualified OSC.Expr.Comp as C
+import OSC.Expr.Base
 import qualified OSC.Expr.Base as B
 
 foldMapM :: Applicative f => Monoid b => (a -> f b) -> [a] -> f b
 foldMapM f = fmap mconcat . traverse f
-
-$(genSum "" "Expr" [''B.Exp, ''B.Lam, ''B.Select, ''B.Rec])
-$(genPlateInstance ''Expr)
-$(genSmartConstructors ''Expr)
 
 --------------------------------------------------------------------------------
 
@@ -35,7 +33,7 @@ data TypeError pos
   | BinOpInvalidTypes pos pos Op Type Type
   | EmptyArray pos
   | ArrayElementTypeMismatch pos [Type]
-  | UnknownBinding pos B.Ident
+  | UnknownBinding pos Ident
   | FunctionReturnTypeMismatch pos Type Type
   | ArgumentCountMismatch pos Int Int
   | ArgumentTypeMismatch pos Int Type Type
@@ -44,13 +42,13 @@ data TypeError pos
   | RecDelayNotPositive pos Int
   | RecTypeContainsFunction pos Type
   | RecReturnTypeMismatch pos Type Type
-  | DuplicateBindings pos [B.Ident]
+  | DuplicateBindings pos [Ident]
   | CyclicDependency pos [G.Tree G.Vertex]
   | NotAFunction pos Type
   deriving Show
 
 type ExpA ann = Ann ann Expr
-type TypecheckM pos = R.ReaderT (Map B.Ident Type) (E.Except (TypeError pos))
+type TypecheckM pos = R.ReaderT (Map Ident Type) (E.Except (TypeError pos))
 
 -- Helper functions
 lookupE :: Ord k => String -> M.Map k v -> k -> v
@@ -72,7 +70,7 @@ topsort nodeEdges nodes
         isCycle (G.Node _ []) = False  -- single node SCC = no cycle
         isCycle (G.Node _ _) = True    -- multi-node SCC = cycle
 
-checkDuplicates :: pos -> [(B.Ident, a)] -> TypecheckM pos ()
+checkDuplicates :: pos -> [(Ident, a)] -> TypecheckM pos ()
 checkDuplicates pos bindings = do
   let counts = M.fromListWith (+) ((, 1 :: Int) <$> fmap fst bindings)
   let dups = [ n | (n, x) <- M.toList counts, x > 1 ]
@@ -80,7 +78,7 @@ checkDuplicates pos bindings = do
     [] -> pure ()
     _ -> E.throwError $ DuplicateBindings pos dups
 
-checkCycles :: pos -> [(B.Ident, ExpA (pos, Type))] -> TypecheckM pos [(B.Ident, ExpA (pos, Type))]
+checkCycles :: pos -> [(Ident, ExpA (pos, Type))] -> TypecheckM pos [(Ident, ExpA (pos, Type))]
 checkCycles pos bindings = do
   let nodeEdges expr = S.fromList [ n | Ann ((_, _), Var n) <- universe (snd . unAnn) expr ]
   case topsort nodeEdges bindings of
@@ -93,7 +91,7 @@ typeContainsLam (TArr t _) = typeContainsLam t
 typeContainsLam (TLam _ _) = True
 
 -- Typecheck bindings with dependency ordering
-typecheckBindings :: pos -> [(B.Ident, ExpA pos)] -> TypecheckM pos [(B.Ident, ExpA (pos, Type))]
+typecheckBindings :: pos -> [(Ident, ExpA pos)] -> TypecheckM pos [(Ident, ExpA (pos, Type))]
 typecheckBindings pos bindings = do
   -- Check for duplicates
   checkDuplicates pos bindings
@@ -112,7 +110,7 @@ typecheckBindings pos bindings = do
 typecheck :: ExpA pos -> TypecheckM pos (ExpA (pos, Type))
 typecheck expr = case unAnn expr of
   (pos, Const n) -> 
-    pure $ Ann ((pos, B.numberType n), Const n)
+    pure $ Ann ((pos, C.numberType n), Const n)
   
   (pos, Op op a b) -> do
     a' <- typecheck a
@@ -125,32 +123,32 @@ typecheck expr = case unAnn expr of
     
     case (op, at, bt) of
       -- Arithmetic operations: return same type as operands
-      (B.Add, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (B.Sub, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (B.Mul, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (B.Div, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (B.Mod, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (B.Rem, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (B.Min, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (B.Max, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (B.CopySign, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (Add, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (Sub, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (Mul, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (Div, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (Mod, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (Rem, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (Min, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (Max, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (CopySign, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
       
       -- Bitwise operations: integer types only
-      (B.And, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (B.Or, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (B.Xor, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (B.Shl, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (B.Shr, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (B.Rotl, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (B.Rotr, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (And, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (Or, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (Xor, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (Shl, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (Shr, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (Rotl, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (Rotr, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
       
       -- Comparison operations: return I32 (boolean)
-      (B.Eq, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
-      (B.Ne, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
-      (B.Gt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
-      (B.Lt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
-      (B.GEt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
-      (B.LEt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
+      (Eq, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
+      (Ne, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
+      (Gt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
+      (Lt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
+      (GEt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
+      (LEt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
       
       -- Type mismatch error
       (_, TNumber t, TNumber u) | t /= u -> E.throwError $ BinOpTypeMismatch apos bpos op at bt
@@ -271,9 +269,9 @@ typecheck expr = case unAnn expr of
 --------------------------------------------------------------------------------
 
 e1 :: ExpA ()
-e1 = select (arr [(op Add (cnst $ B.I32 4) (cnst $ B.I32 8))]) (cnst $ B.I32 8)
+e1 = select (arr [(op Add (cnst $ C.I32 4) (cnst $ C.I32 8))]) (cnst $ C.I32 8)
   where
-    cnst = OSC.Transforms.Typecheck.const
+    cnst = B.const
 
 infer :: ExpA pos -> Either (TypeError pos) (Ann Type Expr)
 infer = fmap (hoistAnn snd) . E.runExcept . flip R.runReaderT mempty . typecheck
