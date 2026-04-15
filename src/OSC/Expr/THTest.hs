@@ -48,8 +48,8 @@ $(makePlateInstance ''Sum2)
 $(makeDiff "D1_" "Diff1" ''Sum1 ''Value)
 $(makeDiff "D2_" "Diff2" ''Sum2 ''Sum1)
 
-$(makeBiPlateInstance "S1_" ''Sum1 "" ''Value "D1_S1_")
-$(makeBiPlateInstance "S2_" ''Sum2 "S1_" ''Sum1 "D2_S2_")
+$(makeBiPlateInstance "S1_" ''Sum1 "" ''Value "D1_S1_" ''Diff1)
+$(makeBiPlateInstance "S2_" ''Sum2 "S1_" ''Sum1 "D2_S2_" ''Diff2)
 
 sum2 :: Mu Sum2
 sum2 = undefined

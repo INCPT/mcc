@@ -9,7 +9,7 @@
 
 module OSC.Expr.TH where
 
-import Control.Monad (forM_)
+import Control.Monad (forM_, unless, when)
 
 import Language.Haskell.TH
 import Control.Monad (forM, foldM)
@@ -261,8 +261,8 @@ makeDescendBody recursiveFields unwrapVar extractVar = do
 
 --------------------------------------------------------------------------------
 
-makeBiPlateInstance :: String -> Name -> String -> Name -> String -> Q [Dec]
-makeBiPlateInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefix = do
+makeBiPlateInstance :: String -> Name -> String -> Name -> String -> Name -> Q [Dec]
+makeBiPlateInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefix diffTypeName = do
   -- Get constructors of sum type
   sumInfo <- reify sumTypeName
   let sumCons = getConstructors sumInfo
