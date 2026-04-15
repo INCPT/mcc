@@ -48,6 +48,7 @@ library
       OSC.Expr.Base
       OSC.Expr.Functors
       OSC.Expr.Gen
+      OSC.Expr.Plate
       OSC.Expr.TH
       OSC.Expr.THTest
       OSC.Transforms.Typecheck

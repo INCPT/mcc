@@ -1,6 +1,6 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
-module OSC.Expr.Comp where
+module OSC.Expr.Base where
 
 import Data.String (IsString)
 
