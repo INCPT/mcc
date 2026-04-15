@@ -15,11 +15,6 @@ import Language.Haskell.TH
 import Control.Monad (forM, foldM)
 import qualified Data.Foldable as F
 
-foldl1M :: Monad m => (a -> a -> m a) -> [a] -> m a
-foldl1M _ [] = error "foldl1M: empty list"
-foldl1M _ [x] = pure x
-foldl1M f (x:xs) = foldM f x xs
-
 class Plate expr where
   descend :: Monad m
     => (forall y. mu y -> m (y (mu y)))  -- | Unrwap
@@ -38,6 +33,11 @@ class BiPlate a b c | a c -> b, b c -> a where
     -> m (mu' b)
 
 -- Helper functions ------------------------------------------------------------
+
+foldl1M :: Monad m => (a -> a -> m a) -> [a] -> m a
+foldl1M _ [] = error "foldl1M: empty list"
+foldl1M _ [x] = pure x
+foldl1M f (x:xs) = foldM f x xs
 
 validateTypeParams :: Name -> Info -> Q ()
 validateTypeParams typeName (TyConI (DataD _ _ tvbs _ _ _)) =
@@ -70,10 +70,6 @@ consEqualByFields (_, fields1) (_, fields2) =
     normalizeType (VarT _) = VarT (mkName "a")
     normalizeType (AppT f a) = AppT (normalizeType f) (normalizeType a)
     normalizeType t = t
-
--- Check if a constructor (by fields) is in a list of constructors
-consInByFields :: (Name, [BangType]) -> [(Name, [BangType])] -> Bool
-consInByFields con = any (consEqualByFields con)
 
 -- Strip a prefix from a string if present
 stripPrefix :: String -> String -> Maybe String
