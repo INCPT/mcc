@@ -255,14 +255,8 @@ makeDescendBody recursiveFields unwrapVar extractVar = do
 
 --------------------------------------------------------------------------------
 
--- makeBiPlateInstance takes:
--- - prefix: constructor prefix (e.g., "S1_")
--- - sumTypeName: the sum type (e.g., Sum1)
--- - destTypeName: the destination type (e.g., Value) 
--- - diffTypeName: the diff type (e.g., Diff1)
--- The subset type is the same as destTypeName
-makeBiPlateInstance :: String -> Name -> Name -> Name -> Q Dec
-makeBiPlateInstance prefix sumTypeName destTypeName diffTypeName = do
+makeBiPlateInstance :: Name -> Name -> Name -> Q [Dec]
+makeBiPlateInstance sumTypeName destTypeName diffTypeName = do
   -- Get constructors of sum type
   sumInfo <- reify sumTypeName
   let sumCons = getConstructors sumInfo
@@ -279,14 +273,14 @@ makeBiPlateInstance prefix sumTypeName destTypeName diffTypeName = do
 
   -- Create matches for subset constructors (direct mapping, no f)
   subsetMatches <- forM subsetCons $ \(conName, fields) -> do
-    let sumConName = mkName (prefix ++ nameBase conName)
+    let sumConName = mkName (nameBase conName)
     makeSubsetMatch sumConName conName fields unwrapVar wrapVar fVar
 
   -- Create matches for diff constructors (apply f)
   -- The diff constructors use the same names as the sum constructors
   let diffCons = [ c | c <- sumCons, not (consInByFields c subsetCons) ]
   diffMatches <- forM diffCons $ \(conName, fields) -> do
-    let sumConName = mkName (prefix ++ nameBase conName)
+    let sumConName = mkName (nameBase conName)
     makeDiffMatch sumConName fields unwrapVar wrapVar fVar
 
   let transformBody = DoE Nothing
@@ -299,9 +293,11 @@ makeBiPlateInstance prefix sumTypeName destTypeName diffTypeName = do
         (NormalB transformBody)
         []
 
-  pure $ InstanceD Nothing [] 
-     (AppT (AppT (AppT (ConT ''BiPlate) (ConT sumTypeName)) (ConT destTypeName)) (ConT diffTypeName))
-     [FunD 'transformBi [transformClause]]
+  pure
+    [ InstanceD Nothing [] 
+        (AppT (AppT (AppT (ConT ''BiPlate) (ConT sumTypeName)) (ConT destTypeName)) (ConT diffTypeName))
+        [FunD 'transformBi [transformClause]]
+    ]
 
 -- For subset constructors: wrap =<< (DestCon <$> transform fields)
 makeSubsetMatch :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
@@ -316,7 +312,7 @@ makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar = do
       transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
         makeFieldTransform typ var unwrapVar wrapVar fVar
       
-      conApp <- foldl appE (conE destConName) transformedFields
+      conApp <- foldl appE (conE destConName) (fmap pure transformedFields)
       [| $(varE wrapVar) =<< $(pure conApp) |]
 
   pure $ Match pat (NormalB body) []
@@ -334,7 +330,7 @@ makeDiffMatch sumConName fields unwrapVar wrapVar fVar = do
       transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
         makeFieldTransform typ var unwrapVar wrapVar fVar
       
-      conApp <- foldl appE (conE sumConName) transformedFields
+      conApp <- foldl appE (conE sumConName) (fmap pure transformedFields)
       [| $(varE wrapVar) =<< $(varE fVar) =<< $(pure conApp) |]
 
   pure $ Match pat (NormalB body) []
