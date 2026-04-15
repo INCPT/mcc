@@ -39,16 +39,7 @@ flowAnn f m = R.ask >>= \ann -> Ann <$> (f ann,) <$> m
 data Dag k f = Node (f (Dag k f)) | Key k
 type DagM k expr = R.Reader (k -> expr (Dag k expr))
 
--- write a TH function that:
-
----- having the following types
-
-data Value exp = Const Int | Arr [exp]
-data Expr exp = Single | Add exp exp | Mul (Maybe (Either String [exp])) exp | Exp (Maybe (Maybe (Maybe exp))) (Maybe exp) (Maybe (Maybe exp))
-data Lambda exp = Lambda String [(String, exp)] exp
-data FuncRef exp = FuncRef Int
-data Empty exp
-
+{-
 $(makeSum "S1_" "Sum1" [''Value, ''Expr, ''FuncRef])
 $(makeSum "S2_" "Sum2" [''Value, ''Expr, ''Lambda])
 $(makeSum "S3_" "Sum3" [''Value, ''Expr])
@@ -106,32 +97,8 @@ test3 = transformBi (\(Ann (ann, f)) -> R.local (const ann) (pure f)) wrap go su
     go = undefined
     -- go :: Empty (ASum2 (SourcePos, Type)) -> AnnM SourcePos (ASum2 (SourcePos, Type))
     -- go _ = undefined
+-}
 
--- instance BiPlate Sum1 Value Diff1 where
---   transformBi unwrap wrap f expr = do
---     inner <- unwrap expr
---     case inner of
---       S1_Const n -> wrap =<< (Const <$> pure n)
---       S1_Arr as  -> wrap =<< (Arr <$> traverse (transformBi unwrap wrap f) as)
--- 
---       S1_Single ->  f =<< pure D1_Single
---       S1_Add a b -> f =<< (D1_Add <$> (traverse (transformBi unwrap wrap f)) a <*> transformBi unwrap wrap f b)
---       S1_Mul a b -> f =<< (D1_Mul <$> (traverse (traverse (traverse (transformBi unwrap wrap f)))) a <*> transformBi unwrap wrap f b)
---       _ -> undefined
-
--- instance Plate Sum1 where
---   descend unwrap extract expr = do
---     inner <- unwrap expr
---     a <- extract inner
---     case a of
---       Just a' -> pure [a']
---       Nothing -> case inner of
---         S1_Const _ -> pure []
---         S1_Arr exprs -> (foldMapM (descend unwrap extract)) (F.toList exprs)
---         S1_Add exp1 exp2 -> (<>) <$> (foldMapM (descend unwrap extract)) (F.toList exp1) <*> descend unwrap extract exp2
---         S1_Mul exp1 exp2 -> (<>) <$> (foldMapM (descend unwrap extract)) (foldList $ F.toList $ foldList $ F.toList exp1) <*> descend unwrap extract exp2
---         S1_Exp exp1 -> (foldMapM (descend unwrap extract)) (foldList $ F.toList $ foldList $ F.toList exp1)
---         _ -> undefined
 
 -- $(do
 --   decs <- makePlateInstance ''Sum1

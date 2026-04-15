@@ -3,8 +3,6 @@
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module OSC.Expr.TH where
@@ -116,6 +114,7 @@ data Diff1 exp
   = D1_NoFields
   | D1_Add exp exp
   | D1_Mul (Maybe (Either String [exp])) exp
+  | D1_FuncRef Int
   deriving (Functor, Foldable, Traversable)
 
 -- Generating a BiPlate Instance:
@@ -140,8 +139,8 @@ instance BiPlate Sum1 Value Diff1 where
       S1_Add a b -> f =<< (D1_Add <$> (transformBi unwrap wrap f) a <*> transformBi unwrap wrap f b)
       S1_Mul a b -> f =<< (D1_Mul <$> (traverse (traverse (traverse (transformBi unwrap wrap f)))) a <*> transformBi unwrap wrap f b)
 
-      -- Constructors from FuncRef: not handled in this instance
-      _ -> undefined
+      -- Constructors from FuncRef
+      S1_FuncRef a ->  f =<< pure (D1_FuncRef a)
 
 -- Helper functions ------------------------------------------------------------
 
