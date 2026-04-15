@@ -19,7 +19,7 @@ class Plate expr where
     -> m [f expr]
 
 universe :: Plate expr => (f expr -> expr (f expr)) -> f expr -> [f expr]
-universe unwrap = (\children -> children <> concatMap (universe unwrap) children) . runIdentity . descend (fmap pure unwrap)
+universe unwrap expr = expr:((\children -> children <> concatMap (universe unwrap) children) $ runIdentity $ descend (fmap pure unwrap) expr)
 
 class BiPlate a b c | a c -> b, b c -> a, a b -> c where
   transformBi :: Monad m

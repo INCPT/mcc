@@ -71,9 +71,9 @@ checkDuplicates pos bindings = do
     [] -> pure ()
     _ -> E.throwError $ DuplicateBindings pos dups
 
-checkCycles :: pos -> [(Ident, ExpA ann)] -> TypecheckM pos [(Ident, ExpA ann)]
+checkCycles :: Show ann => pos -> [(Ident, ExpA ann)] -> TypecheckM pos [(Ident, ExpA ann)]
 checkCycles pos bindings = do
-  let nodeEdges expr = S.fromList [ n | Ann (_, Var n) <- universe (snd . unAnn) expr ]
+  let nodeEdges expr = S.fromList [ {- (\x -> trace ("VAR :" <> show x) x) $ -} n | Ann (_, Var n) <- universe (snd . unAnn) expr ]
   case topsort nodeEdges bindings of
     Left scc -> E.throwError $ CyclicDependency pos scc
     Right sorted -> pure sorted
@@ -84,13 +84,13 @@ typeContainsLam (TArr t _) = typeContainsLam t
 typeContainsLam (TLam _ _) = True
 
 -- Typecheck bindings with dependency ordering
-typecheckBindings :: pos -> [(Ident, ExpA pos)] -> TypecheckM pos [(Ident, ExpA (pos, Type))]
+typecheckBindings :: Show pos => pos -> [(Ident, ExpA pos)] -> TypecheckM pos [(Ident, ExpA (pos, Type))]
 typecheckBindings pos bindings = do
   -- Check for duplicates
   checkDuplicates pos bindings
   
   -- Check for cycles
-  bindings' <- checkCycles pos bindings
+  bindings' <- {- fmap (\x -> trace ("SORTED BINDINGS: " <> show x) x) $ -} checkCycles pos bindings
   go bindings'
   where
     go [] = pure []
@@ -100,7 +100,7 @@ typecheckBindings pos bindings = do
       bs' <- R.local (M.insert n exprType) $ go bs
       return $ (n, expr'):bs'
 
-typecheck :: ExpA pos -> TypecheckM pos (ExpA (pos, Type))
+typecheck :: Show pos => ExpA pos -> TypecheckM pos (ExpA (pos, Type))
 typecheck expr = case unAnn expr of
   (pos, Const n) -> 
     pure $ Ann ((pos, C.numberType n), Const n)
@@ -271,7 +271,7 @@ e2 = Ann {unAnn = ((),Lam (TLam [] (TNumber TF32)) [] [(Ident "g756",Ann {unAnn 
 
 e3 = Ann {unAnn = ((),Lam (TLam [] (TNumber TF32)) [] [(Ident "x568",Ann {unAnn = ((),Const (F32 (-1.0)))}),(Ident "f477",Ann {unAnn = ((),Var (Ident "x568"))}),(Ident "a193",Ann {unAnn = ((),Const (F64 0.9879229879464689))})] (Ann {unAnn = ((),Const (F32 (-1.0)))}))}
 
-infer :: ExpA pos -> Either (TypeError pos) (Ann Type Expr)
+infer :: Show pos => ExpA pos -> Either (TypeError pos) (Ann Type Expr)
 infer = fmap (hoistAnn snd) . E.runExcept . flip R.runReaderT mempty . typecheck
 
 dbgInfer :: Show pos => ExpA pos -> Ann Type Expr
