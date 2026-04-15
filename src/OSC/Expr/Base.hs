@@ -57,6 +57,8 @@ data UOp = Sqrt | Abs | Neg | Ceil | Floor | Trunc | Nearest
 
 data Lam exp = Lam [Ident] [(Ident, exp)] exp
 
+data Rec exp = Rec Ident [(Ident, exp)] exp
+
 data Select exp = Select exp exp
 
 data FoldedSelect exp
@@ -67,7 +69,7 @@ data Exp exp
   = Const Number
   | Arr [exp]
   | Op Op exp exp
-  | Var String
+  | Var Ident
   | App exp [exp]
 
 --------------------------------------------------------------------------------

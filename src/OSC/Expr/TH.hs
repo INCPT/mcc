@@ -7,7 +7,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module OSC.Expr.TH (Plate (..), BiPlate (..), makeSum, makeDiff, makePlateInstance, makeBiPlateInstance) where
+module OSC.Expr.TH (Plate (..), BiPlate (..), Empty, makeSum, makeDiff, makePlateInstance, makeBiPlateInstance) where
 
 import Control.Monad (forM_, forM, foldM, unless, when)
 
@@ -15,7 +15,7 @@ import qualified Data.Foldable as F
 
 import Language.Haskell.TH
 
-import OSC.Expr.Plate (Plate (..), BiPlate (..))
+import OSC.Expr.Plate (Plate (..), BiPlate (..), Empty)
 
 -- Documentation ---------------------------------------------------------------
 --

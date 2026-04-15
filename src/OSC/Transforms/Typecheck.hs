@@ -15,7 +15,7 @@ import qualified Data.Map as M
 import OSC.Expr.Plate (transform)
 import OSC.Expr.Functors
 import OSC.Expr.TH
-import OSC.Expr.Base (TNumber (..), Type (..))
+import OSC.Expr.Base (TNumber (..), Type (..), Op (..))
 import qualified OSC.Expr.Base as B
 
 $(makeSum "B_" "Exp" [''B.Exp, ''B.Lam, ''B.Select, ''B.Rec])
@@ -96,7 +96,8 @@ typecheck = transform (\(Ann (ann, f)) -> R.local (const ann) (pure f)) f
     
     f (B_Var n) = do
       pos <- R.ask
-      env <- lift $ lift R.ask
+      -- env <- lift $ lift R.ask
+      env <- undefined
       case M.lookup n env of
         Just t -> flowAnn (,t) $ pure $ B_Var n
         Nothing -> E.throwError $ UnknownBinding pos n
@@ -127,6 +128,3 @@ typecheck = transform (\(Ann (ann, f)) -> R.local (const ann) (pure f)) f
     f _ = do
       pos <- R.ask
       E.throwError $ UnknownBinding pos (B.Ident "unknown-constructor")
-
-unAnn :: Ann ann f -> (ann, f (Ann ann f))
-unAnn (Ann x) = x

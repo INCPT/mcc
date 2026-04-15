@@ -9,7 +9,7 @@ newtype Mu f = Mu { unMu :: f (Mu f) }
 
 -- Annotated recursive functor + monad
 newtype Ann ann f = Ann { unAnn :: (ann, f (Ann ann f)) }
-type AnnM ann = R.Reader ann
+type AnnM = R.ReaderT
 
 hoistAnn :: Functor f => (ann -> ann') -> Ann ann f -> Ann ann' f
 hoistAnn h (Ann (ann, f)) = Ann (h ann, fmap (hoistAnn h) f)
@@ -17,7 +17,7 @@ hoistAnn h (Ann (ann, f)) = Ann (h ann, fmap (hoistAnn h) f)
 hoistAnnM :: Traversable f => Monad m => (ann -> m ann') -> Ann ann f -> m (Ann ann' f)
 hoistAnnM h (Ann (ann, f)) = Ann <$> ((,) <$> h ann <*> traverse (hoistAnnM h) f)
 
-flowAnn :: (ann -> ann') -> AnnM ann (exp (Ann ann' exp)) -> AnnM ann (Ann ann' exp)
+flowAnn :: Monad m => (ann -> ann') -> AnnM ann m (exp (Ann ann' exp)) -> AnnM ann m (Ann ann' exp)
 flowAnn f m = R.ask >>= \ann -> Ann <$> (f ann,) <$> m
 
 -- DAG recursive functor + monad

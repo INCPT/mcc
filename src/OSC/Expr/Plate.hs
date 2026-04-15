@@ -1,7 +1,10 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 
 module OSC.Expr.Plate where
+
+data Empty exp
 
 class Plate expr where
   descend :: Monad m
@@ -21,3 +24,10 @@ class BiPlate a b c | a c -> b, b c -> a, a b -> c where
 
     -> f a
     -> m (f' b)
+  
+transform :: Monad m => BiPlate a a Empty
+  => (f a -> m (a (f a)))
+  -> (a (f' a) -> m (f' a))
+  -> f a
+  -> m (f' a)
+transform unwrap f = transformBi unwrap f undefined
