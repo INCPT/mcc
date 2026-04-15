@@ -232,13 +232,12 @@ makeDescendBody recursiveFields unwrapVar extractVar = do
         if depth == 0
           then [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
           else if depth == 1
-            then [| (fmap mconcat . traverse (descend $(varE unwrapVar) $(varE extractVar))) (F.toList $(varE var)) |]
+            then [| foldMapM (descend $(varE unwrapVar) $(varE extractVar)) (F.toList $(varE var)) |]
             else do
-              -- For depth > 1, we need to stack: mconcat $ F.toList $ sequenceA $ F.toList
-              -- Build from the inside out
+              -- For depth > 1, use foldList to flatten nested containers
               let buildLayers 0 = varE var
-                  buildLayers n = [| mconcat $ F.toList $ sequenceA $ F.toList $(buildLayers (n-1)) |]
-              [| (fmap mconcat . traverse (descend $(varE unwrapVar) $(varE extractVar))) $(buildLayers (depth - 1)) |]
+                  buildLayers n = [| foldList $ F.toList $(buildLayers (n-1)) |]
+              [| foldMapM (descend $(varE unwrapVar) $(varE extractVar)) $(buildLayers (depth - 1)) |]
 
   case recursiveFields of
     [] -> error "recursiveFields"
