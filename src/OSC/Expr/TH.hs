@@ -33,8 +33,19 @@ class BiPlate a b c | a c -> b, b c -> a, a b -> c where
     -> m (mu' b)
 
 -- Documentation ---------------------------------------------------------------
-
----- having the following types
+--
+-- This module provides Template Haskell functions for generating boilerplate
+-- code for working with recursive expression types. It supports:
+--
+-- 1. Creating sum types that combine multiple expression types
+-- 2. Generating Plate instances for generic traversal
+-- 3. Creating difference types (sum minus a subset)
+-- 4. Generating BiPlate instances for transformations between types
+--
+-- Example Usage:
+-- ==============
+--
+-- Given the following input types:
 
 data Value exp  = Const Int | Arr [exp]
 
@@ -48,9 +59,13 @@ data FuncRef exp = FuncRef Int
 
 data Lambda exp = Lambda String [(String, exp)] exp
 
+-- Creating a Sum Type:
+-- --------------------
+--
 -- $(makeSum "S1_" "Sum1" [''Value, ''Expr, ''FuncRef])
-
----- will generate the following datatype:
+--
+-- This generates a sum type that combines all constructors from Value, Expr,
+-- and FuncRef, prefixing each constructor name with "S1_":
 
 data Sum1 exp
   -- from Value
@@ -66,9 +81,14 @@ data Sum1 exp
   | S1_FuncRef Int
   deriving (Functor, Foldable, Traversable)
 
+-- Generating a Plate Instance:
+-- -----------------------------
+--
 -- $(makePlateInstance ''Sum1)
-
----- will then generate the following Plate instance:
+--
+-- This generates a Plate instance that enables generic traversal over the
+-- recursive structure. The descend function unwraps each expression, attempts
+-- to extract a value, and recursively descends into subexpressions:
 
 instance Plate Sum1 where
   descend unwrap extract expr = do
@@ -84,9 +104,13 @@ instance Plate Sum1 where
         S1_Mul exp1 exp2 -> (<>) <$> (foldMapM (descend unwrap extract)) (foldList $ F.toList $ foldList $ F.toList exp1) <*> descend unwrap extract exp2
         S1_FuncRef _ -> pure []
 
+-- Creating a Difference Type:
+-- ----------------------------
+--
 -- $(makeDiff "D1_" "Diff1" "S1_" ''Sum1 "" ''Value)
-
----- will then generate the following datatype:
+--
+-- This generates a type containing all constructors from Sum1 that are NOT
+-- in Value. The result is Sum1 minus Value, with constructors prefixed by "D1_":
 
 data Diff1 exp
   = D1_NoFields
@@ -94,20 +118,29 @@ data Diff1 exp
   | D1_Mul (Maybe (Either String [exp])) exp
   deriving (Functor, Foldable, Traversable)
 
+-- Generating a BiPlate Instance:
+-- -------------------------------
+--
 -- $(makeBiPlateInstance "S1_" ''Sum1 "" ''Value "D1_" ''Diff1)
-
----- will then generate the following instance:
+--
+-- This generates a BiPlate instance that transforms between Sum1 and Value,
+-- using Diff1 for constructors not in Value. Constructors from Value are
+-- wrapped, while others are passed to the transformation function:
 
 instance BiPlate Sum1 Value Diff1 where
   transformBi unwrap wrap f expr = do
     inner <- unwrap expr
     case inner of
+      -- Constructors from Value: wrap the result
       S1_Const n -> wrap =<< (Const <$> pure n)
       S1_Arr as  -> wrap =<< (Arr <$> traverse (transformBi unwrap wrap f) as)
 
+      -- Constructors from Diff1: apply transformation function
       S1_NoFields ->  f =<< pure D1_NoFields
       S1_Add a b -> f =<< (D1_Add <$> (transformBi unwrap wrap f) a <*> transformBi unwrap wrap f b)
       S1_Mul a b -> f =<< (D1_Mul <$> (traverse (traverse (traverse (transformBi unwrap wrap f)))) a <*> transformBi unwrap wrap f b)
+
+      -- Constructors from FuncRef: not handled in this instance
       _ -> undefined
 
 -- Helper functions ------------------------------------------------------------
