@@ -169,7 +169,7 @@ makePlateInstance typeName = do
 
 makeDescendMatch :: Name -> [BangType] -> Name -> Name -> Q Match
 makeDescendMatch conName fields unwrapVar extractVar = do
-  fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("exp" ++ show i)
+  fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_exp" ++ show i)
   
   let pat = ConP conName [] (fmap VarP fieldVars)
   
@@ -262,7 +262,7 @@ data TransformMode = ApplyF | NoApplyF | ApplyFAfter
 
 makeTransformMatch :: Name -> Name -> [BangType] -> Name -> Name -> Name -> TransformMode -> Q Match
 makeTransformMatch patConName targetConName fields unwrapVar wrapVar fVar mode = do
-  fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("a" ++ show i)
+  fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_a" ++ show i)
   
   let pat = ConP patConName [] (fmap VarP fieldVars)
   
