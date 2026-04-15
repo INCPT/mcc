@@ -75,6 +75,13 @@ consEqualByFields (_, fields1) (_, fields2) =
 consInByFields :: (Name, [BangType]) -> [(Name, [BangType])] -> Bool
 consInByFields con = any (consEqualByFields con)
 
+-- Calculate the length of the common suffix between two strings
+commonSuffixLength :: String -> String -> Int
+commonSuffixLength s1 s2 = go (reverse s1) (reverse s2) 0
+  where
+    go (c1:cs1) (c2:cs2) n | c1 == c2 = go cs1 cs2 (n + 1)
+    go _ _ n = n
+
 replaceExpType :: Name -> BangType -> BangType
 replaceExpType expVar (bang, typ) = (bang, replaceInType expVar typ)
 
@@ -276,18 +283,49 @@ makeBiPlateInstance sumTypeName destTypeName diffTypeName = do
   let innerVar = mkName "inner"
   
   -- For each sum constructor, determine if it's a subset or diff constructor
-  matches <- forM sumCons $ \sumCon@(sumConName, fields) -> do
-    if consInByFields sumCon destCons
-      then do
-        -- Find the matching dest constructor
-        case [ destConName | (destConName, destFields) <- destCons, consEqualByFields sumCon (destConName, destFields) ] of
-          [destConName] -> makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar
-          _ -> fail $ "Could not find matching dest constructor for " ++ nameBase sumConName
-      else do
-        -- Find the matching diff constructor
-        case [ diffConName | (diffConName, diffFields) <- diffCons, consEqualByFields sumCon (diffConName, diffFields) ] of
-          [diffConName] -> makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar
-          _ -> fail $ "Could not find matching diff constructor for " ++ nameBase sumConName
+  -- Track which dest/diff constructors have been used
+  (matches, _, _) <- foldM 
+    (\(accMatches, usedDest, usedDiff) sumCon@(sumConName, fields) -> do
+      if consInByFields sumCon destCons
+        then do
+          -- Find all matching dest constructors that haven't been used
+          let candidates = [ (destConName, destFields) 
+                           | (destConName, destFields) <- destCons
+                           , consEqualByFields sumCon (destConName, destFields)
+                           , destConName `notElem` usedDest
+                           ]
+          case candidates of
+            [] -> fail $ "Could not find unused matching dest constructor for " ++ nameBase sumConName
+            _ -> do
+              -- Use longest common suffix heuristic
+              let sumName = nameBase sumConName
+              let bestMatch = fst $ maximum 
+                    [ (commonSuffixLength sumName (nameBase destConName), destConName)
+                    | (destConName, _) <- candidates
+                    ]
+              match <- makeSubsetMatch sumConName bestMatch fields unwrapVar wrapVar fVar
+              pure (accMatches ++ [match], bestMatch : usedDest, usedDiff)
+        else do
+          -- Find all matching diff constructors that haven't been used
+          let candidates = [ (diffConName, diffFields)
+                           | (diffConName, diffFields) <- diffCons
+                           , consEqualByFields sumCon (diffConName, diffFields)
+                           , diffConName `notElem` usedDiff
+                           ]
+          case candidates of
+            [] -> fail $ "Could not find unused matching diff constructor for " ++ nameBase sumConName
+            _ -> do
+              -- Use longest common suffix heuristic
+              let sumName = nameBase sumConName
+              let bestMatch = fst $ maximum
+                    [ (commonSuffixLength sumName (nameBase diffConName), diffConName)
+                    | (diffConName, _) <- candidates
+                    ]
+              match <- makeDiffMatch sumConName bestMatch fields unwrapVar wrapVar fVar
+              pure (accMatches ++ [match], usedDest, bestMatch : usedDiff)
+    )
+    ([], [], [])
+    sumCons
 
   let transformBody = DoE Nothing
         [ BindS (VarP innerVar) (AppE (VarE unwrapVar) (VarE exprVar))
