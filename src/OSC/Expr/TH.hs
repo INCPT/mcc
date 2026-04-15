@@ -300,8 +300,11 @@ makeBiPlateInstance sumTypeName destTypeName diffTypeName = do
   -- Create matches for diff constructors (apply f)
   let diffConsFromSum = [ c | c <- sumCons, not (consInByFields c subsetCons) ]
   diffMatches <- forM diffConsFromSum $ \(conName, fields) -> do
-    let sumConName = mkName (sumPrefix ++ nameBase conName)
-    let diffConName = mkName (diffPrefix ++ sumPrefix ++ nameBase conName)
+    -- conName already has the sum prefix (e.g., S1_Single)
+    let sumConName = conName
+    -- Get the base name without prefix for the diff constructor
+    let baseName = drop (length sumPrefix) (nameBase conName)
+    let diffConName = mkName (diffPrefix ++ baseName)
     makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar
 
   let transformBody = DoE Nothing
