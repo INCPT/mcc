@@ -10,25 +10,25 @@
 
 module OSC.Expr.THTest where
 
+import qualified Control.Monad.Reader as R
+import qualified Control.Monad.State as ST
+
 import Data.Functor.Identity
 import qualified Data.Foldable as F
+import qualified Data.Map as M
 
 import OSC.Expr.TH
 
-{-
 -- Simple recursive functor (can be paired with Identity)
-data Mu f = Mu (f (Mu f))
+newtype Mu f = Mu { unMu :: f (Mu f) }
 
 -- Annotated recursive functor + monad
-data Ann ann f = Ann (ann, f (Ann ann f))
-data AnnM ann expr a = AnnM (Ann ann expr -> a)
+newtype Ann ann f = Ann { unAnn :: (ann, f (Ann ann f)) }
+type AnnM ann expr = R.Reader (Ann ann expr)
 
 -- DAG recursive functor + monad
 data Dag k f = Node (f (Dag k f)) | Key k
-data DagM k expr a = DagM ((k -> expr (Dag k expr)) -> a)
--}
-
-data Mu f = Mu { unmu :: f (Mu f) }
+type DagM k expr = R.Reader (k -> expr (Dag k expr))
 
 -- write a TH function that:
 
@@ -41,35 +41,48 @@ data FuncRef exp = FuncRef Int
 
 $(makeSum "S1_" "Sum1" [''Value, ''Expr, ''FuncRef])
 $(makeSum "S2_" "Sum2" [''Value, ''Expr, ''Lambda])
+$(makeSum "S3_" "Sum3" [''Value, ''Expr])
 
-$(makePlateInstance ''Sum1)
-$(makePlateInstance ''Sum2)
+-- $(makePlateInstance ''Sum1)
+-- $(makePlateInstance ''Sum2)
 
 $(makeDiff "D1_" "Diff1" "S1_" ''Sum1 "" ''Value)
 $(makeDiff "D2_" "Diff2" "S2_" ''Sum2 "S1_" ''Sum1)
+$(makeDiff "D3_" "Diff3" "S2_" ''Sum2 "S3_" ''Sum3)
 
-$(makeBiPlateInstance "S1_" ''Sum1 "" ''Value "D1_S1_" ''Diff1)
-$(makeBiPlateInstance "S2_" ''Sum2 "S1_" ''Sum1 "D2_S2_" ''Diff2)
+$(makeBiPlateInstance "S1_" ''Sum1 "" ''Value "D1_" ''Diff1)
+$(makeBiPlateInstance "S2_" ''Sum2 "S1_" ''Sum1 "D2_" ''Diff2)
+$(makeBiPlateInstance "S2_" ''Sum2 "S3_" ''Sum3 "D3_" ''Diff3)
 
 sum2 :: Mu Sum2
 sum2 = undefined
 
 test :: Identity (Mu Sum1)
-test = transformBi (pure . unmu) (pure . Mu) go sum2
+test = transformBi (pure . unMu) (pure . Mu) go sum2
   where
-    go :: Diff2 (Mu Sum1) -> Identity (Sum1 (Mu Sum1))
-    go (D2_S2_Lambda n bindings body) = pure $ S1_FuncRef 5
+    go :: Diff2 (Mu Sum1) -> Identity (Mu Sum1)
+    go (D2_Lambda n bindings body) = pure $ Mu $ S1_FuncRef 5
+
+type FuncM = ST.State (Int, M.Map Int (String, [(String, Dag Int Sum3)], Dag Int Sum3))
+
+test2 :: FuncM (Dag Int Sum3)
+test2 = transformBi (pure . unMu) (pure . Node) go sum2
+  where
+    go :: Diff3 (Dag Int Sum3) -> FuncM (Dag Int Sum3)
+    go (D3_Lambda n bindings body) = do
+      nextId <- ST.state $ \(nextId, funcMap) -> (nextId, (nextId + 1, M.insert nextId (n, bindings, body) funcMap))
+      pure $ Key nextId
 
 -- instance BiPlate Sum1 Value Diff1 where
 --   transformBi unwrap wrap f expr = do
 --     inner <- unwrap expr
 --     case inner of
 --       S1_Const n -> wrap =<< (Const <$> pure n)
---       S1_Single -> wrap =<< f =<< pure D1_S1_Single
 --       S1_Arr as  -> wrap =<< (Arr <$> traverse (transformBi unwrap wrap f) as)
 -- 
---       S1_Add a b -> wrap =<< f =<< (D1_S1_Add <$> (traverse (transformBi unwrap wrap f)) a <*> transformBi unwrap wrap f b)
---       S1_Mul a b -> wrap =<< f =<< (D1_S1_Mul <$> (traverse (traverse (traverse (transformBi unwrap wrap f)))) a <*> transformBi unwrap wrap f b)
+--       S1_Single ->  f =<< pure D1_Single
+--       S1_Add a b -> f =<< (D1_Add <$> (traverse (transformBi unwrap wrap f)) a <*> transformBi unwrap wrap f b)
+--       S1_Mul a b -> f =<< (D1_Mul <$> (traverse (traverse (traverse (transformBi unwrap wrap f)))) a <*> transformBi unwrap wrap f b)
 --       _ -> undefined
 
 -- instance Plate Sum1 where

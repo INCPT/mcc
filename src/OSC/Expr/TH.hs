@@ -28,7 +28,7 @@ class BiPlate a b c | a c -> b, b c -> a where
     => (forall y. mu y -> m (y (mu y)))      -- | Unwrap
     -> (forall y. y (mu' y) -> m (mu' y))    -- | Wrap
 
-    -> (c (mu' b) -> m (b (mu' b)))          -- | Transform
+    -> (c (mu' b) -> m (mu' b))              -- | Transform
     -> mu a
     -> m (mu' b)
 
@@ -77,30 +77,6 @@ stripPrefix prefix str
   | prefix == take (length prefix) str = Just (drop (length prefix) str)
   | otherwise = Nothing
 
--- Match sum constructors to subset/dest constructors by name
--- For each sum constructor, strips the sum prefix and looks up the base name
--- in the subset map. Calls onSubset if found, onDiff if not found.
-matchSumConstructors
-  :: String                                    -- Sum prefix
-  -> [(Name, [BangType])]                      -- Sum constructors
-  -> [(String, (Name, [BangType]))]            -- Subset map (baseName -> (conName, fields))
-  -> ((Name, [BangType]) -> (Name, [BangType]) -> String -> Q a)  -- onSubset: sumCon -> subsetCon -> baseName -> result
-  -> ((Name, [BangType]) -> String -> Q a)     -- onDiff: sumCon -> baseName -> result
-  -> Q [a]
-matchSumConstructors sumPrefix sumCons subsetMap onSubset onDiff =
-  forM sumCons $ \sumCon@(sumConName, fields) -> do
-    let sumName = nameBase sumConName
-    
-    case stripPrefix sumPrefix sumName of
-      Nothing -> fail $ "Sum constructor " ++ sumName ++ " doesn't have expected prefix " ++ sumPrefix
-      Just baseName -> do
-        case lookup baseName subsetMap of
-          Just (subsetConName, subsetFields) -> do
-            unless (consEqualByFields sumCon (subsetConName, subsetFields)) $
-              fail $ "Constructor " ++ sumName ++ " has different fields than subset constructor " ++ nameBase subsetConName
-            onSubset sumCon (subsetConName, subsetFields) baseName
-          Nothing -> onDiff sumCon baseName
-
 replaceExpType :: Name -> BangType -> BangType
 replaceExpType expVar (bang, typ) = (bang, replaceInType expVar typ)
 
@@ -126,6 +102,46 @@ containerDepth typ = case typ of
   VarT _ -> 0
   AppT _ a -> 1 + containerDepth a
   _ -> 0
+
+-- Match sum constructors to subset/dest constructors by name
+-- For each sum constructor, strips the sum prefix and looks up the base name
+-- in the subset map. Calls onSubset if found, onDiff if not found.
+matchSumConstructors
+  :: String                                    -- Sum prefix
+  -> [(Name, [BangType])]                      -- Sum constructors
+  -> [(String, (Name, [BangType]))]            -- Subset map (baseName -> (conName, fields))
+  -> ((Name, [BangType]) -> (Name, [BangType]) -> String -> Q a)  -- onSubset: sumCon -> subsetCon -> baseName -> result
+  -> ((Name, [BangType]) -> String -> Q a)     -- onDiff: sumCon -> baseName -> result
+  -> Q [a]
+matchSumConstructors sumPrefix sumCons subsetMap onSubset onDiff =
+  forM sumCons $ \sumCon@(sumConName, _) -> do
+    let sumName = nameBase sumConName
+    
+    case stripPrefix sumPrefix sumName of
+      Nothing -> fail $ "Sum constructor " ++ sumName ++ " doesn't have expected prefix " ++ sumPrefix
+      Just baseName -> do
+        case lookup baseName subsetMap of
+          Just (subsetConName, subsetFields) -> do
+            unless (consEqualByFields sumCon (subsetConName, subsetFields)) $
+              fail $ "Constructor " ++ sumName ++ " has different fields than subset constructor " ++ nameBase subsetConName
+            onSubset sumCon (subsetConName, subsetFields) baseName
+          Nothing -> onDiff sumCon baseName
+
+-- Build a constructor application with transformed fields using <$> and <*>
+makeConstructorApp :: Name -> [BangType] -> [Name] -> Name -> Name -> Name -> Q Exp
+makeConstructorApp conName fields fieldVars unwrapVar wrapVar fVar = do
+  transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
+    makeFieldTransform typ var unwrapVar wrapVar fVar
+  
+  let con = conE conName
+  case transformedFields of
+    [] -> error "makeConstructorApp: empty fields"
+    [field] -> [| $(con) <$> $(pure field) |]
+    (field:rest) -> do
+      initial <- [| $(con) <$> $(pure field) |]
+      foldM (\acc f -> [| $(pure acc) <*> $(pure f) |]) initial rest
+
+--------------------------------------------------------------------------------
 
 {-# INLINE foldMapM #-}
 foldMapM :: Applicative f => Monoid b => (a -> f b) -> [a] -> f b
@@ -321,7 +337,7 @@ makeBiPlateInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefix dif
       let diffConName = mkName (diffPrefix ++ baseName)
       makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar
     )
-  
+ 
   -- Validate that all constructors were matched
   when (length matches /= length sumCons) $
     fail $ "Not all sum constructors were matched: expected " ++ show (length sumCons) ++ " but got " ++ show (length matches)
@@ -357,7 +373,7 @@ makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar = do
 
   pure $ Match pat (NormalB body) []
 
--- For diff constructors: wrap =<< f =<< (DiffCon <$> transform fields)
+-- For diff constructors: f =<< (DiffCon <$> transform fields)
 makeDiffMatch :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
 makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar = do
   fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_a" ++ show i)
@@ -365,10 +381,10 @@ makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar = do
   let pat = ConP sumConName [] (fmap VarP fieldVars)
   
   body <- if null fields
-    then [| $(varE wrapVar) =<< $(varE fVar) =<< pure $(conE diffConName) |]
+    then [| $(varE fVar) =<< pure $(conE diffConName) |]
     else do
       conApp <- makeConstructorApp diffConName fields fieldVars unwrapVar wrapVar fVar
-      [| $(varE wrapVar) =<< $(varE fVar) =<< $(pure conApp) |]
+      [| $(varE fVar) =<< $(pure conApp) |]
 
   pure $ Match pat (NormalB body) []
 
@@ -396,17 +412,3 @@ makeNestedTraverse depth var unwrapVar wrapVar fVar =
   where
     buildTraverse 0 = [| transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar) |]
     buildTraverse n = [| traverse $(buildTraverse (n - 1)) |]
-
--- Build a constructor application with transformed fields using <$> and <*>
-makeConstructorApp :: Name -> [BangType] -> [Name] -> Name -> Name -> Name -> Q Exp
-makeConstructorApp conName fields fieldVars unwrapVar wrapVar fVar = do
-  transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
-    makeFieldTransform typ var unwrapVar wrapVar fVar
-  
-  let con = conE conName
-  case transformedFields of
-    [] -> error "makeConstructorApp: empty fields"
-    [field] -> [| $(con) <$> $(pure field) |]
-    (field:rest) -> do
-      initial <- [| $(con) <$> $(pure field) |]
-      foldM (\acc f -> [| $(pure acc) <*> $(pure f) |]) initial rest
