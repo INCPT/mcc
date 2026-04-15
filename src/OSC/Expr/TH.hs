@@ -12,9 +12,7 @@ module OSC.Expr.TH where
 import Control.Monad (forM_)
 
 import Language.Haskell.TH
-import Control.Monad (forM, foldM, liftM2)
-import Control.Applicative (liftA2)
-import Data.Traversable (traverse)
+import Control.Monad (forM, foldM)
 import qualified Data.Foldable as F
 
 foldl1M :: Monad m => (a -> a -> m a) -> [a] -> m a
@@ -39,7 +37,70 @@ class BiPlate a b c | a c -> b, b c -> a where
     -> mu a
     -> m (mu' b)
 
---------------------------------------------------------------------------------
+-- Helper functions ------------------------------------------------------------
+
+validateTypeParams :: Name -> Info -> Q ()
+validateTypeParams typeName (TyConI (DataD _ _ tvbs _ _ _)) =
+  case length tvbs of
+    1 -> pure ()
+    n -> fail $ "Type " ++ nameBase typeName ++ " must have exactly 1 type parameter, but has " ++ show n
+validateTypeParams typeName _ = 
+  fail $ "Expected a data type declaration for " ++ nameBase typeName
+
+getConstructors :: Info -> [(Name, [BangType])]
+getConstructors (TyConI (DataD _ _ _ _ cons _)) = 
+  [ (name, fields) | NormalC name fields <- cons ]
+getConstructors _ = []
+
+validateNoExistentials :: Name -> Info -> Q ()
+validateNoExistentials typeName (TyConI (DataD _ _ _ _ cons _)) = do
+  forM_ cons $ \con -> case con of
+    ForallC _ _ _ -> fail $ "Type " ++ nameBase typeName ++ " has existentially quantified constructor, which is not supported"
+    _ -> pure ()
+validateNoExistentials _ _ = pure ()
+
+-- Compare constructors by their fields only, ignoring names
+-- Normalize type variables before comparing so we compare structure
+consEqualByFields :: (Name, [BangType]) -> (Name, [BangType]) -> Bool
+consEqualByFields (_, fields1) (_, fields2) = 
+  normalizeFields fields1 == normalizeFields fields2
+  where
+    normalizeFields = fmap normalizeBangType
+    normalizeBangType (bang, typ) = (bang, normalizeType typ)
+    normalizeType (VarT _) = VarT (mkName "a")
+    normalizeType (AppT f a) = AppT (normalizeType f) (normalizeType a)
+    normalizeType t = t
+
+-- Check if a constructor (by fields) is in a list of constructors
+consInByFields :: (Name, [BangType]) -> [(Name, [BangType])] -> Bool
+consInByFields con = any (consEqualByFields con)
+
+replaceExpType :: Name -> BangType -> BangType
+replaceExpType expVar (bang, typ) = (bang, replaceInType expVar typ)
+
+replaceInType :: Name -> Type -> Type
+replaceInType expVar typ = case typ of
+  AppT _ (AppT ListT innerType) -> AppT ListT (replaceInType expVar innerType)
+  AppT f a -> AppT (replaceInType expVar f) (replaceInType expVar a)
+  VarT _ -> VarT expVar
+  ConT name -> ConT name
+  _ -> typ
+
+-- Check if a type contains a type variable in positive position (i.e., is recursive)
+-- This handles cases like Maybe f, [f], Either a f, etc.
+isRecursiveType :: Type -> Bool
+isRecursiveType typ = case typ of
+  VarT _ -> True
+  AppT _ a -> isRecursiveType a  -- Only check the argument, not the constructor
+  _ -> False
+
+-- Count the nesting depth of containers before reaching the recursive type variable
+-- e.g., Maybe exp -> 1, Maybe (Maybe exp) -> 2, [Maybe exp] -> 2
+containerDepth :: Type -> Int
+containerDepth typ = case typ of
+  VarT _ -> 0
+  AppT _ a -> 1 + containerDepth a
+  _ -> 0
 
 --------------------------------------------------------------------------------
 
@@ -104,70 +165,6 @@ makeDiff prefix diffName sumTypeName subsetTypeName = do
   pure [diffDataDec]
 
 --------------------------------------------------------------------------------
--- Helper functions
-
-validateTypeParams :: Name -> Info -> Q ()
-validateTypeParams typeName (TyConI (DataD _ _ tvbs _ _ _)) =
-  case length tvbs of
-    1 -> pure ()
-    n -> fail $ "Type " ++ nameBase typeName ++ " must have exactly 1 type parameter, but has " ++ show n
-validateTypeParams typeName _ = 
-  fail $ "Expected a data type declaration for " ++ nameBase typeName
-
-getConstructors :: Info -> [(Name, [BangType])]
-getConstructors (TyConI (DataD _ _ _ _ cons _)) = 
-  [ (name, fields) | NormalC name fields <- cons ]
-getConstructors _ = []
-
-validateNoExistentials :: Name -> Info -> Q ()
-validateNoExistentials typeName (TyConI (DataD _ _ _ _ cons _)) = do
-  forM_ cons $ \con -> case con of
-    ForallC _ _ _ -> fail $ "Type " ++ nameBase typeName ++ " has existentially quantified constructor, which is not supported"
-    _ -> pure ()
-validateNoExistentials _ _ = pure ()
-
--- Compare constructors by their fields only, ignoring names
--- Normalize type variables before comparing so we compare structure
-consEqualByFields :: (Name, [BangType]) -> (Name, [BangType]) -> Bool
-consEqualByFields (_, fields1) (_, fields2) = 
-  normalizeFields fields1 == normalizeFields fields2
-  where
-    normalizeFields = fmap normalizeBangType
-    normalizeBangType (bang, typ) = (bang, normalizeType typ)
-    normalizeType (VarT _) = VarT (mkName "a")
-    normalizeType (AppT f a) = AppT (normalizeType f) (normalizeType a)
-    normalizeType t = t
-
--- Check if a constructor (by fields) is in a list of constructors
-consInByFields :: (Name, [BangType]) -> [(Name, [BangType])] -> Bool
-consInByFields con = any (consEqualByFields con)
-
-replaceExpType :: Name -> BangType -> BangType
-replaceExpType expVar (bang, typ) = (bang, replaceInType expVar typ)
-
-replaceInType :: Name -> Type -> Type
-replaceInType expVar typ = case typ of
-  AppT _ (AppT ListT innerType) -> AppT ListT (replaceInType expVar innerType)
-  AppT f a -> AppT (replaceInType expVar f) (replaceInType expVar a)
-  VarT _ -> VarT expVar
-  ConT name -> ConT name
-  _ -> typ
-
--- Check if a type contains a type variable in positive position (i.e., is recursive)
--- This handles cases like Maybe f, [f], Either a f, etc.
-isRecursiveType :: Type -> Bool
-isRecursiveType typ = case typ of
-  VarT _ -> True
-  AppT f a -> isRecursiveType a  -- Only check the argument, not the constructor
-  _ -> False
-
--- Count the nesting depth of containers before reaching the recursive type variable
--- e.g., Maybe exp -> 1, Maybe (Maybe exp) -> 2, [Maybe exp] -> 2
-containerDepth :: Type -> Int
-containerDepth typ = case typ of
-  VarT _ -> 0
-  AppT _ a -> 1 + containerDepth a
-  _ -> 0
 
 makePlateInstance :: Name -> Q [Dec]
 makePlateInstance typeName = do
@@ -236,19 +233,21 @@ makeDescendBody recursiveFields unwrapVar extractVar = do
                   buildLayers n = [| mconcat $ F.toList $ sequenceA $ F.toList $(buildLayers (n-1)) |]
               [| (fmap mconcat . traverse (descend $(varE unwrapVar) $(varE extractVar))) $(buildLayers (depth - 1)) |]
 
-  if length recursiveFields == 1
-    then do
-      let ((bang, typ), var) = head recursiveFields
-      let depth = containerDepth typ
-      makeUnwrapExpr depth var
-    else do
+  case recursiveFields of
+    [] -> error "recursiveFields"
+    [((_, typ), var)] -> do
+       let depth = containerDepth typ
+       makeUnwrapExpr depth var
+    _ -> do
       -- Multiple fields: combine with <> using liftA2
-      exprs <- forM recursiveFields $ \((bang, typ), var) -> do
+      exprs <- forM recursiveFields $ \((_, typ), var) -> do
         let depth = containerDepth typ
         makeUnwrapExpr depth var
       
       let combineExprs a b = [| liftA2 (<>) $(pure a) $(pure b) |]
       foldl1M combineExprs exprs
+
+--------------------------------------------------------------------------------
 
 makeBiPlateInstance :: String -> Name -> Name -> Name -> [(Name, [BangType])] -> Q Dec
 makeBiPlateInstance prefix sourceTypeName destTypeName commonTypeName sourceCons = do

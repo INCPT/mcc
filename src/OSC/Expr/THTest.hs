@@ -34,7 +34,7 @@ data Mu f = Mu (f (Mu f))
 ---- having the following types
 
 data Value exp = Const exp Int | Arr [exp]
-data Expr exp = Add (Maybe exp) exp | Mul (Maybe (Either String [exp])) exp exp | Exp (Maybe (Maybe (Maybe exp)))
+data Expr exp = Single | Add (Maybe exp) exp | Mul (Maybe (Either String [exp])) exp exp | Exp (Maybe (Maybe (Maybe exp)))
 data Lambda exp = Lambda String [(String, exp)] exp
 
 $(makeSum "S1_" "Sum1" [''Value, ''Expr])
