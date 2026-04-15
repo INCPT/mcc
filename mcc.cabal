@@ -45,11 +45,12 @@ library
       OSC.Codegen.Backend
       OSC.Codegen.Interpret
       OSC.Expr
-      OSC.Expr.Comp
+      OSC.Expr.Base
       OSC.Expr.Functors
       OSC.Expr.Gen
       OSC.Expr.TH
       OSC.Expr.THTest
+      OSC.Transforms.Typecheck
   other-modules:
       Paths_mcc
   hs-source-dirs:
