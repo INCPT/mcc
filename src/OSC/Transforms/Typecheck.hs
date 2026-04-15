@@ -19,7 +19,6 @@ import qualified Data.Graph as G
 import Data.List (find)
 import Data.Generics.Uniplate.Data (universe)
 
-import OSC.Expr.Plate (transform)
 import OSC.Expr.Functors
 import OSC.Expr.TH
 import OSC.Expr.Base (TNumber (..), Type (..), Op (..))
@@ -105,8 +104,9 @@ typecheckBindings pos bindings = do
   -- Check for duplicates
   checkDuplicates pos bindings
   
-  -- Typecheck each binding and build environment incrementally
-  go bindings
+  -- Check for cycles
+  bindings' <- checkCycles pos =<< go bindings
+  pure bindings'
   where
     go [] = pure []
     go ((n, expr):bs) = do
@@ -116,156 +116,160 @@ typecheckBindings pos bindings = do
       return $ (n, expr'):bs'
 
 typecheck :: ExpA pos -> TypecheckM pos (ExpA (pos, Type))
-typecheck = transform (\(Ann (ann, f)) -> R.local (const ann) (pure f)) f
-  where
-    f :: Exp (ExpA (pos, Type)) -> TypecheckM pos (ExpA (pos, Type))
-    f (Const n) = R.ask >>= \pos -> pure $ Ann ((pos, B.numberType n), Const n)
+typecheck expr = case unAnn expr of
+  (pos, Const n) -> 
+    pure $ Ann ((pos, B.numberType n), Const n)
+  
+  (pos, Op op a b) -> do
+    a' <- typecheck a
+    b' <- typecheck b
     
-    f (Op op a@(Ann ((apos, at), _)) b@(Ann ((bpos, bt), _))) = case (op, at, bt) of
+    let apos = fst . fst . unAnn $ a'
+    let bpos = fst . fst . unAnn $ b'
+    let at = snd . fst . unAnn $ a'
+    let bt = snd . fst . unAnn $ b'
+    
+    case (op, at, bt) of
       -- Arithmetic operations: return same type as operands
-      (B.Add, TNumber t, TNumber u) | t == u -> flowAnn (,TNumber t) $ pure $ Op op a b
-      (B.Sub, TNumber t, TNumber u) | t == u -> flowAnn (,TNumber t) $ pure $ Op op a b
-      (B.Mul, TNumber t, TNumber u) | t == u -> flowAnn (,TNumber t) $ pure $ Op op a b
-      (B.Div, TNumber t, TNumber u) | t == u -> flowAnn (,TNumber t) $ pure $ Op op a b
-      (B.Mod, TNumber t, TNumber u) | t == u -> flowAnn (,TNumber t) $ pure $ Op op a b
-      (B.Rem, TNumber t, TNumber u) | t == u -> flowAnn (,TNumber t) $ pure $ Op op a b
-      (B.Min, TNumber t, TNumber u) | t == u -> flowAnn (,TNumber t) $ pure $ Op op a b
-      (B.Max, TNumber t, TNumber u) | t == u -> flowAnn (,TNumber t) $ pure $ Op op a b
-      (B.CopySign, TNumber t, TNumber u) | t == u -> flowAnn (,TNumber t) $ pure $ Op op a b
+      (B.Add, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (B.Sub, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (B.Mul, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (B.Div, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (B.Mod, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (B.Rem, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (B.Min, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (B.Max, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (B.CopySign, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
       
       -- Bitwise operations: integer types only
-      (B.And, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> flowAnn (,TNumber t) $ pure $ Op op a b
-      (B.Or, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> flowAnn (,TNumber t) $ pure $ Op op a b
-      (B.Xor, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> flowAnn (,TNumber t) $ pure $ Op op a b
-      (B.Shl, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> flowAnn (,TNumber t) $ pure $ Op op a b
-      (B.Shr, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> flowAnn (,TNumber t) $ pure $ Op op a b
-      (B.Rotl, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> flowAnn (,TNumber t) $ pure $ Op op a b
-      (B.Rotr, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> flowAnn (,TNumber t) $ pure $ Op op a b
+      (B.And, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (B.Or, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (B.Xor, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (B.Shl, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (B.Shr, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (B.Rotl, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (B.Rotr, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
       
       -- Comparison operations: return I32 (boolean)
-      (B.Eq, TNumber t, TNumber u) | t == u -> flowAnn (,TNumber TI32) $ pure $ Op op a b
-      (B.Ne, TNumber t, TNumber u) | t == u -> flowAnn (,TNumber TI32) $ pure $ Op op a b
-      (B.Gt, TNumber t, TNumber u) | t == u -> flowAnn (,TNumber TI32) $ pure $ Op op a b
-      (B.Lt, TNumber t, TNumber u) | t == u -> flowAnn (,TNumber TI32) $ pure $ Op op a b
-      (B.GEt, TNumber t, TNumber u) | t == u -> flowAnn (,TNumber TI32) $ pure $ Op op a b
-      (B.LEt, TNumber t, TNumber u) | t == u -> flowAnn (,TNumber TI32) $ pure $ Op op a b
+      (B.Eq, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
+      (B.Ne, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
+      (B.Gt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
+      (B.Lt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
+      (B.GEt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
+      (B.LEt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
       
       -- Type mismatch error
       (_, TNumber t, TNumber u) | t /= u -> E.throwError $ BinOpTypeMismatch apos bpos op at bt
       _ -> E.throwError $ BinOpInvalidTypes apos bpos op at bt
+  
+  (pos, Arr []) -> E.throwError $ EmptyArray pos
+  (pos, Arr (a:as)) -> do
+    a' <- typecheck a
+    as' <- traverse typecheck as
+    let at = snd . fst . unAnn $ a'
+    let types = fmap (snd . fst . unAnn) as'
+    if all (== at) types
+      then pure $ Ann ((pos, TArr at (length as + 1)), Arr (a':as'))
+      else E.throwError $ ArrayElementTypeMismatch pos (at:types)
+  
+  (pos, Var n) -> do
+    env <- lift R.ask
+    case M.lookup n env of
+      Just t -> pure $ Ann ((pos, t), Var n)
+      Nothing -> E.throwError $ UnknownBinding pos n
+  
+  (pos, Lam t params bindings body) -> do
+    -- Check for duplicate parameters  
+    checkDuplicates pos [(p, ()) | p <- params]
+    checkDuplicates pos bindings
     
-    f (Arr []) = R.ask >>= \pos -> E.throwError $ EmptyArray pos
-    f (Arr (a:as)) = do
-      pos <- R.ask
-      let at = snd . fst . unAnn $ a
-      let types = fmap (snd . fst . unAnn) as
-      if all (== at) types
-        then flowAnn (,TArr at (length as + 1)) $ pure $ Arr (a:as)
-        else E.throwError $ ArrayElementTypeMismatch pos (at:types)
-    
-    f (Var n) = do
-      pos <- R.ask
-      env <- lift R.ask
-      case M.lookup n env of
-        Just t -> flowAnn (,t) $ pure $ Var n
-        Nothing -> E.throwError $ UnknownBinding pos n
-    
-    f (Lam t params bindings body) = do
-      pos <- R.ask
-      
-      -- Check for duplicate parameters  
-      checkDuplicates pos [(p, ()) | p <- params]
-      checkDuplicates pos bindings
-      
-      -- Extract parameter types and return type from the function type
-      case t of
-        TAbs paramTypes retType -> do
-          -- Check parameter count matches
-          when (length params /= length paramTypes) $
-            E.throwError $ ArgumentCountMismatch pos (length paramTypes) (length params)
-          
-          -- Build parameter environment
-          let paramsEnv = M.fromList (zip params paramTypes)
-          
-          -- Typecheck bindings in the context of parameters
-          bindings' <- lift $ R.local (paramsEnv <>) $ R.runReaderT (typecheckBindings pos bindings) pos
-          
-          -- Build full environment for body (params + bindings)
-          let bindingsEnv = M.fromList [(n, snd . fst . unAnn $ e) | (n, e) <- bindings']
-          body' <- lift $ R.local ((bindingsEnv <> paramsEnv) <>) $ R.runReaderT (typecheck body) pos
-          
-          let bodyType = snd . fst . unAnn $ body'
-          
-          -- Check return type matches
-          when (bodyType /= retType) $
-            E.throwError $ FunctionReturnTypeMismatch pos retType bodyType
-          
-          flowAnn (,t) $ pure $ Lam t params bindings' body'
+    -- Extract parameter types and return type from the function type
+    case t of
+      TAbs paramTypes retType -> do
+        -- Check parameter count matches
+        when (length params /= length paramTypes) $
+          E.throwError $ ArgumentCountMismatch pos (length paramTypes) (length params)
         
-        _ -> E.throwError $ NotAFunction pos t
+        -- Build parameter environment
+        let paramsEnv = M.fromList (zip params paramTypes)
+        
+        -- Typecheck bindings in the context of parameters
+        bindings' <- lift $ R.local (paramsEnv <>) $ R.runReaderT (typecheckBindings pos bindings) pos
+        
+        -- Build full environment for body (params + bindings)
+        let bindingsEnv = M.fromList [(n, snd . fst . unAnn $ e) | (n, e) <- bindings']
+        body' <- lift $ R.local (bindingsEnv <> paramsEnv <>) $ R.runReaderT (typecheck body) pos
+        
+        let bodyType = snd . fst . unAnn $ body'
+        
+        -- Check return type matches
+        when (bodyType /= retType) $
+          E.throwError $ FunctionReturnTypeMismatch pos retType bodyType
+        
+        pure $ Ann ((pos, t), Lam t params bindings' body')
+      
+      _ -> E.throwError $ NotAFunction pos t
+  
+  (pos, App func args) -> do
+    func' <- typecheck func
+    args' <- traverse typecheck args
     
-    f (App func args) = do
-      pos <- R.ask
-      let funcType = snd . fst . unAnn $ func
-      let argTypes = fmap (snd . fst . unAnn) args
-      
-      case funcType of
-        TAbs paramTypes retType -> do
-          -- Check argument count
-          when (length paramTypes /= length args) $
-            E.throwError $ ArgumentCountMismatch pos (length paramTypes) (length args)
-          
-          -- Check each argument type
-          sequence_
-            [ when (pt /= at) $
-                E.throwError $ ArgumentTypeMismatch (fst . fst . unAnn $ arg) i pt at
-            | (i, (pt, (at, arg))) <- zip [0..] $ zip paramTypes $ zip argTypes args
-            ]
-          
-          flowAnn (,retType) $ pure $ App func args
-        _ -> E.throwError $ NotAFunction (fst . fst . unAnn $ func) funcType
+    let funcType = snd . fst . unAnn $ func'
+    let argTypes = fmap (snd . fst . unAnn) args'
     
-    f (Select sel idx) = do
-      pos <- R.ask
-      let selType = snd . fst . unAnn $ sel
-      let idxType = snd . fst . unAnn $ idx
-      
-      case selType of
-        TArr elemType _ -> do
-          case idxType of
-            TNumber TI32 -> flowAnn (,elemType) $ pure $ Select sel idx
-            TNumber TI64 -> flowAnn (,elemType) $ pure $ Select sel idx
-            _ -> E.throwError $ InvalidIndexType (fst . fst . unAnn $ idx) idxType
-        _ -> E.throwError $ NotAnArray (fst . fst . unAnn $ sel) selType
+    case funcType of
+      TAbs paramTypes retType -> do
+        -- Check argument count
+        when (length paramTypes /= length args) $
+          E.throwError $ ArgumentCountMismatch pos (length paramTypes) (length args)
+        
+        -- Check each argument type
+        sequence_
+          [ when (pt /= at) $
+              E.throwError $ ArgumentTypeMismatch (fst . fst . unAnn $ arg) i pt at
+          | (i, (pt, (at, arg))) <- zip [0..] $ zip paramTypes $ zip argTypes args'
+          ]
+        
+        pure $ Ann ((pos, retType), App func' args')
+      _ -> E.throwError $ NotAFunction (fst . fst . unAnn $ func') funcType
+  
+  (pos, Select sel idx) -> do
+    sel' <- typecheck sel
+    idx' <- typecheck idx
     
-    f (Rec t param bindings body) = do
-      pos <- R.ask
-      
-      -- Check for duplicates
-      checkDuplicates pos bindings
-      
-      -- Check that the type doesn't contain functions
-      when (typeContainsAbs t) $
-        E.throwError $ RecTypeContainsFunction pos t
-      
-      -- Build parameter environment (the recursive parameter has the delay type)
-      let paramsEnv = M.singleton param t
-      
-      -- Typecheck bindings in the context of the recursive parameter
-      bindings' <- lift $ R.local (paramsEnv <>) $ R.runReaderT (typecheckBindings pos bindings) pos
-      
-      -- Build full environment for body (param + bindings)
-      let bindingsEnv = M.fromList [(n, snd . fst . unAnn $ e) | (n, e) <- bindings']
-      body' <- lift $ R.local ((bindingsEnv <> paramsEnv) <>) $ R.runReaderT (typecheck body) pos
-      
-      let bodyType = snd . fst . unAnn $ body'
-      
-      -- Check return type matches the delay type
-      when (bodyType /= t) $
-        E.throwError $ RecReturnTypeMismatch pos t bodyType
-      
-      flowAnn (,t) $ pure $ Rec t param bindings' body'
+    let selType = snd . fst . unAnn $ sel'
+    let idxType = snd . fst . unAnn $ idx'
     
-    f _ = do
-      pos <- R.ask
-      E.throwError $ UnknownBinding pos (B.Ident "unknown-constructor")
+    case selType of
+      TArr elemType _ -> do
+        case idxType of
+          TNumber TI32 -> pure $ Ann ((pos, elemType), Select sel' idx')
+          TNumber TI64 -> pure $ Ann ((pos, elemType), Select sel' idx')
+          _ -> E.throwError $ InvalidIndexType (fst . fst . unAnn $ idx') idxType
+      _ -> E.throwError $ NotAnArray (fst . fst . unAnn $ sel') selType
+  
+  (pos, Rec t param bindings body) -> do
+    -- Check for duplicates
+    checkDuplicates pos bindings
+    
+    -- Check that the type doesn't contain functions
+    when (typeContainsAbs t) $
+      E.throwError $ RecTypeContainsFunction pos t
+    
+    -- Build parameter environment (the recursive parameter has the delay type)
+    let paramsEnv = M.singleton param t
+    
+    -- Typecheck bindings in the context of the recursive parameter
+    bindings' <- lift $ R.local (paramsEnv <>) $ R.runReaderT (typecheckBindings pos bindings) pos
+    
+    -- Build full environment for body (param + bindings)
+    let bindingsEnv = M.fromList [(n, snd . fst . unAnn $ e) | (n, e) <- bindings']
+    body' <- lift $ R.local (bindingsEnv <> paramsEnv <>) $ R.runReaderT (typecheck body) pos
+    
+    let bodyType = snd . fst . unAnn $ body'
+    
+    -- Check return type matches the delay type
+    when (bodyType /= t) $
+      E.throwError $ RecReturnTypeMismatch pos t bodyType
+    
+    pure $ Ann ((pos, t), Rec t param bindings' body')
