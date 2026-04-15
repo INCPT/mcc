@@ -1,7 +1,3 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE DeriveTraversable #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
 
 module OSC.Transforms.Typecheck where
@@ -22,9 +18,6 @@ import OSC.Expr.Comp (Ident, TNumber (..), Type (..), Op (..))
 import qualified OSC.Expr.Comp as C
 import OSC.Expr.Base
 import qualified OSC.Expr.Base as B
-
-foldMapM :: Applicative f => Monoid b => (a -> f b) -> [a] -> f b
-foldMapM f = fmap mconcat . traverse f
 
 --------------------------------------------------------------------------------
 
