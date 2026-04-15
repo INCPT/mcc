@@ -7,9 +7,10 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module OSC.Expr.TH (Plate (..), BiPlate (..), Empty, genSum, genDiff, genPlateInstance, genBiPlateInstance, universe, transform) where
+module OSC.Expr.TH (Plate (..), BiPlate (..), Empty, genSum, genDiff, genPlateInstance, genBiPlateInstance, genSmartConstructors, universe, transform) where
 
 import Control.Monad (forM_, forM, foldM, unless, when)
+import Data.Char (toLower)
 
 import qualified Data.Foldable as F
 
@@ -47,6 +48,17 @@ data Lambda exp = Lambda String [(String, exp)] exp
 -- --------------------
 --
 -- $(genSmartConstructors ''Expr)
+--
+-- This generates smart constructor functions for each constructor of the type.
+-- Each smart constructor:
+-- 1. Takes the same arguments as the original constructor
+-- 2. Replaces occurrences of the recursive type variable with the concrete type (f Expr)
+-- 3. Calls wrap before returning
+--
+-- For example, given:
+--   data Expr exp = NoFields | Add exp exp | Mul (Maybe (Either String [exp])) exp
+--
+-- It generates:
 
 noFields :: Wrap f => f Expr
 noFields = wrap NoFields
@@ -56,6 +68,9 @@ add a b = wrap $ Add a b
 
 mul :: Wrap f => (Maybe (Either String [f Expr])) -> f Expr -> f Expr
 mul a b = wrap $ Mul a b
+
+-- The generated functions have a Wrap constraint and return f Expr, allowing them
+-- to work with any wrapper type (Fix, Ann, Dag, etc.) that implements Wrap.
 
 -- Creating a Sum Type:
 -- --------------------
@@ -413,6 +428,63 @@ genDescendBody recursiveFields unwrapVar extractVar = do
       
       let combineExprs a b = [| liftA2 (<>) $(pure a) $(pure b) |]
       foldl1M combineExprs exprs
+
+--------------------------------------------------------------------------------
+
+genSmartConstructors :: Name -> Q [Dec]
+genSmartConstructors typeName = do
+  info <- reify typeName
+  validateTypeParams typeName info
+  validateNoExistentials typeName info
+  
+  let cons = getConstructors info
+  let expVar = mkName "exp"
+  let fVar = mkName "f"
+  
+  -- Generate a smart constructor for each constructor
+  mconcat <$> forM cons (\(conName, fields) -> do
+    let smartName = mkName (lowerFirst (nameBase conName))
+    genSmartConstructor typeName smartName conName fields expVar fVar)
+
+-- Helper to lowercase the first character
+lowerFirst :: String -> String
+lowerFirst [] = []
+lowerFirst (c:cs) = toLower c : cs
+
+-- Generate a single smart constructor
+genSmartConstructor :: Name -> Name -> Name -> [BangType] -> Name -> Name -> Q [Dec]
+genSmartConstructor typeName smartName conName fields expVar fVar = do
+  -- Generate parameter names
+  paramVars <- forM [1..length fields] $ \i -> pure $ mkName ("a" ++ show i)
+  
+  -- Build the type signature
+  let wrapConstraint = AppT (ConT ''Wrap) (VarT fVar)
+  let returnType = AppT (VarT fVar) (ConT typeName)
+  
+  -- Replace exp with (f TypeName) in field types
+  let paramTypes = [ replaceExpWithWrapped fVar typeName typ | (_, typ) <- fields ]
+  
+  let funType = ForallT [PlainTV fVar BndrReq] [wrapConstraint] $
+        foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) returnType paramTypes
+  
+  -- Build the function body: wrap (ConName a1 a2 ...)
+  let conApp = foldl AppE (ConE conName) (fmap VarE paramVars)
+  let body = AppE (VarE 'wrap) conApp
+  
+  let funClause = Clause (fmap VarP paramVars) (NormalB body) []
+  
+  pure
+    [ SigD smartName funType
+    , FunD smartName [funClause]
+    ]
+
+-- Replace occurrences of the type variable with (f TypeName)
+replaceExpWithWrapped :: Name -> Name -> Type -> Type
+replaceExpWithWrapped fVar typeName typ = case typ of
+  VarT _ -> AppT (VarT fVar) (ConT typeName)
+  AppT t1 t2 -> AppT (replaceExpWithWrapped fVar typeName t1) (replaceExpWithWrapped fVar typeName t2)
+  ConT name -> ConT name
+  _ -> typ
 
 --------------------------------------------------------------------------------
 
