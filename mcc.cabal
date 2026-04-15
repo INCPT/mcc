@@ -48,6 +48,7 @@ library
       OSC.Expr.Comp
       OSC.Expr.Gen
       OSC.Expr.TH
+      OSC.Expr.THTest
   other-modules:
       Paths_mcc
   hs-source-dirs:

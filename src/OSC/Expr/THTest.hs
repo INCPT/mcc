@@ -9,6 +9,8 @@
 
 module OSC.Expr.THTest where
 
+import qualified Data.Foldable as F
+
 import OSC.Expr.TH
 
 {-
@@ -31,11 +33,29 @@ data Mu f = Mu (f (Mu f))
 ---- having the following types
 
 data Value exp = Const Int | Arr [exp]
-data Expr exp = Add exp exp | Mul exp exp
+data Expr exp = Add (Maybe exp) exp | Mul (Maybe (Maybe exp)) exp exp | Exp (Maybe (Maybe (Maybe exp)))
 
 $(makeSum "S_" "Sum1" [''Value, ''Expr])
+$(makePlateInstance ''Sum1)
 
-$(makePlate ''Sum1)
+-- instance Plate Sum1 where
+--   descend unwrap extract expr = do
+--     inner <- unwrap expr
+--     a <- extract inner
+--     case a of
+--       Just a' -> pure [a']
+--       Nothing -> case inner of
+--         S_Const _ -> pure []
+--         S_Arr exprs -> (fmap mconcat . traverse (descend unwrap extract)) (F.toList exprs)
+--         S_Add exp1 exp2 -> (<>) <$> (fmap mconcat . traverse (descend unwrap extract)) (F.toList exp1) <*> descend unwrap extract exp2
+--         S_Mul exp1 exp2 -> (<>) <$> (fmap mconcat . traverse (descend unwrap extract)) (mconcat $ F.toList $ sequenceA $ F.toList exp1) <*> descend unwrap extract exp2
+--         S_Exp exp1 -> (fmap mconcat . traverse (descend unwrap extract)) (mconcat $ F.toList $ sequenceA $ F.toList $ mconcat $ F.toList $ sequenceA $ F.toList exp1)
+
+-- $(do
+--   decs <- makePlateInstance ''Sum1
+--   reportWarning (pprint decs)
+--   pure decs
+--  )
 
 bla :: Mu Sum1 -> Mu Sum1
 bla (Mu (S_Const n)) = Mu (S_Const n)
