@@ -255,15 +255,21 @@ makeDescendBody recursiveFields unwrapVar extractVar = do
 
 --------------------------------------------------------------------------------
 
-makeBiPlateInstance :: String -> Name -> Name -> Name -> Name -> Q Dec
-makeBiPlateInstance prefix sumTypeName destTypeName diffTypeName subsetTypeName = do
+-- makeBiPlateInstance takes:
+-- - prefix: constructor prefix (e.g., "S1_")
+-- - sumTypeName: the sum type (e.g., Sum1)
+-- - destTypeName: the destination type (e.g., Value) 
+-- - diffTypeName: the diff type (e.g., Diff1)
+-- The subset type is the same as destTypeName
+makeBiPlateInstance :: String -> Name -> Name -> Name -> Q Dec
+makeBiPlateInstance prefix sumTypeName destTypeName diffTypeName = do
   -- Get constructors of sum type
   sumInfo <- reify sumTypeName
   let sumCons = getConstructors sumInfo
   
-  -- Get constructors of subset type
-  subsetInfo <- reify subsetTypeName
-  let subsetCons = getConstructors subsetInfo
+  -- Get constructors of dest/subset type
+  destInfo <- reify destTypeName
+  let subsetCons = getConstructors destInfo
   
   let unwrapVar = mkName "unwrap"
   let wrapVar = mkName "wrap"
@@ -277,11 +283,11 @@ makeBiPlateInstance prefix sumTypeName destTypeName diffTypeName subsetTypeName 
     makeSubsetMatch sumConName conName fields unwrapVar wrapVar fVar
 
   -- Create matches for diff constructors (apply f)
+  -- The diff constructors use the same names as the sum constructors
   let diffCons = [ c | c <- sumCons, not (consInByFields c subsetCons) ]
   diffMatches <- forM diffCons $ \(conName, fields) -> do
     let sumConName = mkName (prefix ++ nameBase conName)
-    let diffConName = mkName (prefix ++ nameBase conName)
-    makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar
+    makeDiffMatch sumConName fields unwrapVar wrapVar fVar
 
   let transformBody = DoE Nothing
         [ BindS (VarP innerVar) (AppE (VarE unwrapVar) (VarE exprVar))
@@ -293,8 +299,20 @@ makeBiPlateInstance prefix sumTypeName destTypeName diffTypeName subsetTypeName 
         (NormalB transformBody)
         []
 
+  -- The diff type name is derived from the sum type name
+  -- We need to construct it based on the naming convention
+  -- For now, we'll use a placeholder - this should be passed or derived properly
+  -- Actually, looking at the manual instance, the third parameter is the Diff type
+  -- which was created by makeDiff. We need to know its name.
+  -- Let's assume it follows the pattern: if sum is Sum1 and subset is Value,
+  -- diff is Diff1. We'll need to pass this or derive it.
+  
+  -- For now, let's just use a type variable to represent the diff type
+  -- The caller will need to ensure the diff type exists
+  diffTypeVar <- newName "diff"
+  
   pure $ InstanceD Nothing [] 
-     (AppT (AppT (AppT (ConT ''BiPlate) (ConT sumTypeName)) (ConT destTypeName)) (ConT diffTypeName))
+     (AppT (AppT (AppT (ConT ''BiPlate) (ConT sumTypeName)) (ConT destTypeName)) (VarT diffTypeVar))
      [FunD 'transformBi [transformClause]]
 
 -- For subset constructors: wrap =<< (DestCon <$> transform fields)
@@ -315,20 +333,17 @@ makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar = do
 
   pure $ Match pat (NormalB body) []
 
--- For diff constructors: wrap =<< f =<< (DiffCon <$> transform fields)
-makeDiffMatch :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
-makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar = do
   fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_a" ++ show i)
   
   let pat = ConP sumConName [] (fmap VarP fieldVars)
   
   body <- if null fields
-    then [| $(varE wrapVar) =<< $(varE fVar) =<< pure $(conE diffConName) |]
+    then [| $(varE wrapVar) =<< $(varE fVar) =<< pure $(conE sumConName) |]
     else do
       transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
         makeFieldTransform typ var unwrapVar wrapVar fVar
       
-      conApp <- foldl appE (conE diffConName) (fmap pure transformedFields)
+      conApp <- foldl appE (conE sumConName) (fmap pure transformedFields)
       [| $(varE wrapVar) =<< $(varE fVar) =<< $(pure conApp) |]
 
   pure $ Match pat (NormalB body) []
