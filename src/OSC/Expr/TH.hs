@@ -272,8 +272,16 @@ makeBiPlateInstance sumTypeName destTypeName diffTypeName = do
   let innerVar = mkName "inner"
 
   -- Create matches for subset constructors (direct mapping, no f)
+  -- Get the prefix from the sum type constructors
+  let prefix = case sumCons of
+        ((firstSumCon, _):_) -> 
+          let sumName = nameBase firstSumCon
+              baseName = nameBase (fst $ head subsetCons)
+          in take (length sumName - length baseName) sumName
+        _ -> ""
+  
   subsetMatches <- forM subsetCons $ \(conName, fields) -> do
-    let sumConName = mkName (nameBase conName)
+    let sumConName = mkName (prefix ++ nameBase conName)
     makeSubsetMatch sumConName conName fields unwrapVar wrapVar fVar
 
   -- Create matches for diff constructors (apply f)
@@ -312,7 +320,15 @@ makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar = do
       transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
         makeFieldTransform typ var unwrapVar wrapVar fVar
       
-      conApp <- foldl appE (conE destConName) (fmap pure transformedFields)
+      -- Build the constructor application using <$> and <*>
+      let destCon = conE destConName
+      conApp <- case transformedFields of
+        [] -> error "impossible: null fields already handled"
+        [field] -> [| $(destCon) <$> $(pure field) |]
+        (field:rest) -> do
+          let initial = [| $(destCon) <$> $(pure field) |]
+          foldM (\acc f -> [| $(pure acc) <*> $(pure f) |]) initial rest
+      
       [| $(varE wrapVar) =<< $(pure conApp) |]
 
   pure $ Match pat (NormalB body) []
