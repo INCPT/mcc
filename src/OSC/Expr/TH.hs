@@ -265,8 +265,8 @@ makeBiPlateInstance prefix sourceTypeName destTypeName commonTypeName sourceCons
   let thirdType = if isSelfInstance then sourceTypeName else commonTypeName
 
   pure $ InstanceD Nothing [] 
-    (AppT (AppT (AppT (ConT ''BiPlate) (ConT sourceTypeName)) (ConT destTypeName)) (ConT thirdType))
-    [FunD 'transformBi [transformClause]]
+     (AppT (AppT (AppT (ConT ''BiPlate) (ConT sourceTypeName)) (ConT destTypeName)) (ConT thirdType))
+     [FunD 'transformBi [transformClause]]
 
 data TransformMode = ApplyF | NoApplyF | ApplyFAfter
 
