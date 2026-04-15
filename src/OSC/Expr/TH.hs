@@ -145,13 +145,13 @@ makeSum prefix sumName typeNames = do
 
   pure [sumDataDec]
 
-makeDiff :: String -> String -> Name -> Name -> Q [Dec]
-makeDiff prefix diffName sumTypeName subsetTypeName = do
+makeDiff :: String -> String -> String -> Name -> String -> Name -> Q [Dec]
+makeDiff prefix diffName sumPrefix sumTypeName subsetPrefix subsetTypeName = do
   -- Get info about the sum type
   sumInfo <- reify sumTypeName
   validateTypeParams sumTypeName sumInfo
   validateNoExistentials sumTypeName sumInfo
-  let allCons = getConstructors sumInfo
+  let sumCons = getConstructors sumInfo
 
   -- Get info about the subset type
   subsetInfo <- reify subsetTypeName
@@ -159,21 +159,43 @@ makeDiff prefix diffName sumTypeName subsetTypeName = do
   validateNoExistentials subsetTypeName subsetInfo
   let subsetCons = getConstructors subsetInfo
 
-  -- Diff constructors = all - subset (comparing by fields only)
-  let diffCons = [ c | c <- allCons, not (consInByFields c subsetCons) ]
+  -- Build a map from base names to subset constructors
+  let subsetMap = [ (baseName, (conName, fields))
+                  | (conName, fields) <- subsetCons
+                  , Just baseName <- [stripPrefix subsetPrefix (nameBase conName)]
+                  ]
 
   -- Create the diff type
   let expVar = mkName "exp"
   let diffTypeName = mkName diffName
   
   -- Build constructors for the diff type
-  diffConsDecls <- forM diffCons $ \(conName, fields) -> do
-    let newConName = mkName (prefix ++ nameBase conName)
-    let newFields = fmap (replaceExpType expVar) fields
-    pure $ NormalC newConName newFields
+  -- Only include sum constructors that don't match any subset constructor
+  diffConsDecls <- forM sumCons $ \sumCon@(sumConName, fields) -> do
+    let sumName = nameBase sumConName
+    
+    -- Try to strip sum prefix to get base name
+    case stripPrefix sumPrefix sumName of
+      Nothing -> fail $ "Sum constructor " ++ sumName ++ " doesn't have expected prefix " ++ sumPrefix
+      Just baseName -> do
+        -- Check if this base name exists in subset constructors
+        case lookup baseName subsetMap of
+          Just (subsetConName, subsetFields) -> do
+            -- Validate that fields match
+            unless (consEqualByFields sumCon (subsetConName, subsetFields)) $
+              fail $ "Constructor " ++ sumName ++ " has different fields than subset constructor " ++ nameBase subsetConName
+            -- This is a subset constructor, skip it
+            pure Nothing
+          Nothing -> do
+            -- This is a diff constructor
+            let newConName = mkName (prefix ++ baseName)
+            let newFields = fmap (replaceExpType expVar) fields
+            pure $ Just $ NormalC newConName newFields
+
+  let diffConsDecls' = [ c | Just c <- diffConsDecls ]
 
   -- Create the data declaration
-  let diffDataDec = DataD [] diffTypeName [PlainTV expVar BndrReq] Nothing diffConsDecls []
+  let diffDataDec = DataD [] diffTypeName [PlainTV expVar BndrReq] Nothing diffConsDecls' []
 
   pure [diffDataDec]
 
