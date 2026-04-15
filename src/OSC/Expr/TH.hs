@@ -80,9 +80,8 @@ replaceExpType expVar (bang, typ) = (bang, replaceInType expVar typ)
 
 replaceInType :: Name -> Type -> Type
 replaceInType expVar typ = case typ of
-  AppT _ (AppT ListT innerType) -> AppT ListT (replaceInType expVar innerType)
-  AppT f a -> AppT (replaceInType expVar f) (replaceInType expVar a)
   VarT _ -> VarT expVar
+  AppT f a -> AppT (replaceInType expVar f) (replaceInType expVar a)
   ConT name -> ConT name
   _ -> typ
 
