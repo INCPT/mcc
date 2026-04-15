@@ -13,15 +13,13 @@ class Wrap f where
 
 class Plate expr where
   descend :: Monad m
-    => (f expr -> m (expr (f expr)))   -- | Unrwap
- 
-    -> (expr (f expr) -> m (Maybe a))  -- | Gather
+    => (f expr -> m (expr (f expr)))  -- | Unrwap
 
     -> f expr
-    -> m [a]
+    -> m [f expr]
 
-universe :: Plate expr => (f expr -> expr (f expr)) -> f expr -> [f exrp]
-universe unwrap = runIdentity . descend (fmap pure unwrap) (const $ pure Nothing)
+universe :: Plate expr => (f expr -> expr (f expr)) -> f expr -> [f expr]
+universe unwrap = (\children -> children <> concatMap (universe unwrap) children) . runIdentity . descend (fmap pure unwrap)
 
 class BiPlate a b c | a c -> b, b c -> a, a b -> c where
   transformBi :: Monad m

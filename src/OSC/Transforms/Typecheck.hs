@@ -97,7 +97,7 @@ typecheckBindings pos bindings = do
     go ((n, expr):bs) = do
       expr' <- typecheck expr
       let exprType = snd . fst . unAnn $ expr'
-      bs' <- R.local (M.insert n exprType) $ (go bs)
+      bs' <- R.local (M.insert n exprType) $ go bs
       return $ (n, expr'):bs'
 
 typecheck :: ExpA pos -> TypecheckM pos (ExpA (pos, Type))

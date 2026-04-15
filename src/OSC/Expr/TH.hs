@@ -400,7 +400,7 @@ genDescendBody recursiveFields = do
             then [| F.toList $(varE var) |]
             else do
               -- For depth > 1, use foldList to flatten nested containers
-              let buildLayers 0 = varE var
+              let buildLayers 1 = varE var
                   buildLayers n = [| foldList $ F.toList $(buildLayers (n-1)) |]
               buildLayers depth
 
