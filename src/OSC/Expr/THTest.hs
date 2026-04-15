@@ -65,10 +65,6 @@ $(makeDiff "D2_" "Diff2" ''Sum2 ''Sum1)
 --   pure decs
 --  )
 
-bla :: Mu Sum1 -> Mu Sum1
-bla (Mu (S1_Const a n)) = Mu (S1_Const a n)
-bla _ = undefined
-
 {-
 
 ---- and calling
