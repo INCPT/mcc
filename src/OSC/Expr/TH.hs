@@ -47,6 +47,7 @@ makeSum prefix sumName typeNames = do
   typeInfos <- forM typeNames $ \typeName -> do
     info <- reify typeName
     validateTypeParams typeName info
+    validateNoExistentials typeName info
     pure (typeName, info)
 
   -- Collect all constructors from all types
@@ -74,6 +75,7 @@ makeDiff prefix diffName allCons subsetTypeNames = do
   subsetInfos <- forM subsetTypeNames $ \typeName -> do
     info <- reify typeName
     validateTypeParams typeName info
+    validateNoExistentials typeName info
     pure (typeName, info)
 
   -- Get constructors from subset types
@@ -112,6 +114,13 @@ getConstructors :: Info -> [(Name, [BangType])]
 getConstructors (TyConI (DataD _ _ _ _ cons _)) = 
   [ (name, fields) | NormalC name fields <- cons ]
 getConstructors _ = []
+
+validateNoExistentials :: Name -> Info -> Q ()
+validateNoExistentials typeName (TyConI (DataD _ _ _ _ cons _)) = do
+  forM_ cons $ \con -> case con of
+    ForallC _ _ _ -> fail $ "Type " ++ nameBase typeName ++ " has existentially quantified constructor, which is not supported"
+    _ -> pure ()
+validateNoExistentials _ _ = pure ()
 
 replaceExpType :: Name -> BangType -> BangType
 replaceExpType expVar (bang, typ) = (bang, replaceInType expVar typ)
