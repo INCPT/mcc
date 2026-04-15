@@ -71,17 +71,19 @@ makeSum prefix sumName typeNames = do
 
   pure [sumDataDec]
 
-makeDiff :: String -> String -> [(Name, [BangType])] -> [Name] -> Q [Dec]
-makeDiff prefix diffName allCons subsetTypeNames = do
-  -- Get info about the subset types
-  subsetInfos <- forM subsetTypeNames $ \typeName -> do
-    info <- reify typeName
-    validateTypeParams typeName info
-    validateNoExistentials typeName info
-    pure (typeName, info)
+makeDiff :: String -> String -> Name -> Name -> Q [Dec]
+makeDiff prefix diffName sumTypeName subsetTypeName = do
+  -- Get info about the sum type
+  sumInfo <- reify sumTypeName
+  validateTypeParams sumTypeName sumInfo
+  validateNoExistentials sumTypeName sumInfo
+  let allCons = getConstructors sumInfo
 
-  -- Get constructors from subset types
-  let subsetCons = mconcat [ getConstructors info | (_, info) <- subsetInfos ]
+  -- Get info about the subset type
+  subsetInfo <- reify subsetTypeName
+  validateTypeParams subsetTypeName subsetInfo
+  validateNoExistentials subsetTypeName subsetInfo
+  let subsetCons = getConstructors subsetInfo
 
   -- Diff constructors = all - subset
   let diffCons = [ c | c <- allCons, c `notElem` subsetCons ]

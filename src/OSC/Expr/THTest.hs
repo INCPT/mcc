@@ -43,7 +43,8 @@ $(makeSum "S2_" "Sum2" [''Value, ''Expr, ''Lambda])
 $(makePlateInstance ''Sum1)
 $(makePlateInstance ''Sum2)
 
--- $(makeDiff "D2_" "Diff" [''Value, ''Expr, ''Lambda])
+$(makeDiff "D1_" "Diff1" ''Sum1 ''Value)
+$(makeDiff "D2_" "Diff2" ''Sum2 ''Sum1)
 
 -- instance Plate Sum1 where
 --   descend unwrap extract expr = do
