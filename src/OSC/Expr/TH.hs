@@ -310,7 +310,7 @@ makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar = do
       transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
         makeFieldTransform typ var unwrapVar wrapVar fVar
       
-      conApp <- foldl appE (conE destConName) transformedFields
+      conApp <- foldl appE (conE destConName) (fmap pure transformedFields)
       [| $(varE wrapVar) =<< $(pure conApp) |]
 
   pure $ Match pat (NormalB body) []
@@ -328,7 +328,7 @@ makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar = do
       transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
         makeFieldTransform typ var unwrapVar wrapVar fVar
       
-      conApp <- foldl appE (conE diffConName) transformedFields
+      conApp <- foldl appE (conE diffConName) (fmap pure transformedFields)
       [| $(varE wrapVar) =<< $(varE fVar) =<< $(pure conApp) |]
 
   pure $ Match pat (NormalB body) []
