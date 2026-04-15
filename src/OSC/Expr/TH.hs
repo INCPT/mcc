@@ -354,7 +354,7 @@ makeDiffMatch sumConName fields unwrapVar wrapVar fVar = do
 -- Transform a field based on its type structure
 makeFieldTransform :: Type -> Name -> Name -> Name -> Name -> Q Exp
 makeFieldTransform typ var unwrapVar wrapVar fVar
-  | not (isRecursiveType typ) = varE var  -- Non-recursive: return as-is
+  | not (isRecursiveType typ) = [| pure $(varE var) |]  -- Non-recursive: wrap in pure
   | otherwise = case typ of
       VarT _ -> 
         -- Direct recursive: transformBi unwrap wrap f var
