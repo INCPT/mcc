@@ -48,7 +48,7 @@ $(makePlateInstance ''Sum2)
 $(makeDiff "D1_" "Diff1" ''Sum1 ''Value)
 $(makeDiff "D2_" "Diff2" ''Sum2 ''Sum1)
 
--- $(makeBiPlateInstance ''Sum1 ''Value ''Diff1)
+$(makeBiPlateInstance ''Sum1 ''Value ''Diff1)
 $(makeBiPlateInstance ''Sum2 ''Sum1 ''Diff2)
 
 sum2 :: Mu Sum2

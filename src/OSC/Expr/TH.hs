@@ -299,7 +299,7 @@ makeBiPlateInstance sumTypeName destTypeName diffTypeName = do
             _ -> do
               -- Use longest common suffix heuristic
               let sumName = nameBase sumConName
-              let bestMatch = fst $ maximum 
+              let bestMatch = snd $ maximum 
                     [ (commonSuffixLength sumName (nameBase destConName), destConName)
                     | (destConName, _) <- candidates
                     ]
@@ -317,7 +317,7 @@ makeBiPlateInstance sumTypeName destTypeName diffTypeName = do
             _ -> do
               -- Use longest common suffix heuristic
               let sumName = nameBase sumConName
-              let bestMatch = fst $ maximum
+              let bestMatch = snd $ maximum
                     [ (commonSuffixLength sumName (nameBase diffConName), diffConName)
                     | (diffConName, _) <- candidates
                     ]
