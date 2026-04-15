@@ -262,9 +262,14 @@ typecheck expr = case unAnn expr of
 --------------------------------------------------------------------------------
 
 e1 :: ExpA ()
-e1 = select (arr [(op Add (cnst $ C.I32 4) (cnst $ C.I32 8))]) (cnst $ C.I32 8)
+e1 = select (arr [(op Add (cnst $ C.I32 4) (cnst $ C.I32 8))]) (cnst $ C.I32 0)
   where
     cnst = B.const
 
 infer :: ExpA pos -> Either (TypeError pos) (Ann Type Expr)
 infer = fmap (hoistAnn snd) . E.runExcept . flip R.runReaderT mempty . typecheck
+
+dbgInfer :: Show pos => ExpA pos -> Ann Type Expr
+dbgInfer expr = case fmap (hoistAnn snd) $ E.runExcept $ flip R.runReaderT mempty $ typecheck expr of
+  Right a -> a
+  Left e -> error $ show e
