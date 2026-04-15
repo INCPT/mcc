@@ -263,9 +263,9 @@ makeBiPlateInstance sumTypeName destTypeName diffTypeName = do
   
   -- Get constructors of dest/subset type
   destInfo <- reify destTypeName
-  let subsetCons = getConstructors destInfo
+  let destCons = getConstructors destInfo
   
-  -- Get constructors of diff type to get the prefix
+  -- Get constructors of diff type
   diffInfo <- reify diffTypeName
   let diffCons = getConstructors diffInfo
   
@@ -275,35 +275,23 @@ makeBiPlateInstance sumTypeName destTypeName diffTypeName = do
   let exprVar = mkName "expr"
   let innerVar = mkName "inner"
   
-  -- Get the diff prefix from the diff type constructors
-  let diffPrefix = case diffCons of
-        ((firstDiffCon, _):_) -> 
-          let diffName = nameBase firstDiffCon
-              -- The diff constructor name is like D1_S1_Single
-              -- We need to extract D1_ prefix
-              baseName = nameBase (fst $ head [ c | c <- sumCons, not (consInByFields c subsetCons) ])
-          in take (length diffName - length baseName) diffName
-        _ -> ""
-  
-  -- For subset constructors, find the matching sum constructor by fields
-  subsetMatches <- forM subsetCons $ \subsetCon@(conName, fields) -> do
-    -- Find the matching constructor in sumCons by comparing fields
-    case [ sumCon | sumCon <- sumCons, consEqualByFields sumCon subsetCon ] of
-      [(sumConName, _)] -> makeSubsetMatch sumConName conName fields unwrapVar wrapVar fVar
-      _ -> fail $ "Could not find matching sum constructor for " ++ nameBase conName
-
-  -- Create matches for diff constructors (apply f)
-  let diffConsFromSum = [ c | c <- sumCons, not (consInByFields c subsetCons) ]
-  diffMatches <- forM diffConsFromSum $ \(conName, fields) -> do
-    -- conName already has the sum prefix (e.g., S1_Single)
-    let sumConName = conName
-    -- The diff constructor keeps the full sum constructor name with diff prefix
-    let diffConName = mkName (diffPrefix ++ nameBase conName)
-    makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar
+  -- For each sum constructor, determine if it's a subset or diff constructor
+  matches <- forM sumCons $ \sumCon@(sumConName, fields) -> do
+    if consInByFields sumCon destCons
+      then do
+        -- Find the matching dest constructor
+        case [ destConName | (destConName, destFields) <- destCons, consEqualByFields sumCon (destConName, destFields) ] of
+          [destConName] -> makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar
+          _ -> fail $ "Could not find matching dest constructor for " ++ nameBase sumConName
+      else do
+        -- Find the matching diff constructor
+        case [ diffConName | (diffConName, diffFields) <- diffCons, consEqualByFields sumCon (diffConName, diffFields) ] of
+          [diffConName] -> makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar
+          _ -> fail $ "Could not find matching diff constructor for " ++ nameBase sumConName
 
   let transformBody = DoE Nothing
         [ BindS (VarP innerVar) (AppE (VarE unwrapVar) (VarE exprVar))
-        , NoBindS (CaseE (VarE innerVar) (subsetMatches ++ diffMatches))
+        , NoBindS (CaseE (VarE innerVar) matches)
         ]
 
   let transformClause = Clause 
