@@ -54,6 +54,9 @@ noFields = wrap NoFields
 add :: Wrap f => f Expr -> f Expr -> f Expr
 add a b = wrap $ Add a b
 
+mul :: Wrap f => (Maybe (Either String [f Expr])) -> f Expr -> f Expr
+mul a b = wrap $ Mul a b
+
 -- Creating a Sum Type:
 -- --------------------
 --
