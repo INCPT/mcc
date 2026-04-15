@@ -255,14 +255,15 @@ makeDescendBody recursiveFields unwrapVar extractVar = do
 
 --------------------------------------------------------------------------------
 
-makeBiPlateInstance :: String -> Name -> Name -> Name -> [(Name, [BangType])] -> Q Dec
-makeBiPlateInstance prefix sourceTypeName destTypeName commonTypeName sourceCons = do
-  -- Get constructors of common type
-  commonInfo <- reify commonTypeName
-  let commonCons = getConstructors commonInfo
+makeBiPlateInstance :: String -> Name -> Name -> Name -> Name -> Q Dec
+makeBiPlateInstance prefix sumTypeName destTypeName diffTypeName subsetTypeName = do
+  -- Get constructors of sum type
+  sumInfo <- reify sumTypeName
+  let sumCons = getConstructors sumInfo
   
-  -- Determine which constructors are in common vs diff
-  let diffCons = [ c | c <- sourceCons, c `notElem` commonCons ]
+  -- Get constructors of subset type
+  subsetInfo <- reify subsetTypeName
+  let subsetCons = getConstructors subsetInfo
   
   let unwrapVar = mkName "unwrap"
   let wrapVar = mkName "wrap"
@@ -270,24 +271,21 @@ makeBiPlateInstance prefix sourceTypeName destTypeName commonTypeName sourceCons
   let exprVar = mkName "expr"
   let innerVar = mkName "inner"
 
-  -- Determine if this is a self-instance (source == dest == common)
-  let isSelfInstance = sourceTypeName == destTypeName && destTypeName == commonTypeName
-
-  -- Create matches for common constructors (direct mapping to dest type)
-  commonMatches <- forM commonCons $ \(conName, fields) -> do
-    let sourceConName = mkName (prefix ++ nameBase conName)
-    let mode = if isSelfInstance then ApplyF else NoApplyF
-    makeTransformMatch sourceConName conName fields unwrapVar wrapVar fVar mode
+  -- Create matches for subset constructors (direct mapping, no f)
+  subsetMatches <- forM subsetCons $ \(conName, fields) -> do
+    let sumConName = mkName (prefix ++ nameBase conName)
+    makeSubsetMatch sumConName conName fields unwrapVar wrapVar fVar
 
   -- Create matches for diff constructors (apply f)
+  let diffCons = [ c | c <- sumCons, not (consInByFields c subsetCons) ]
   diffMatches <- forM diffCons $ \(conName, fields) -> do
-    let sourceConName = mkName (prefix ++ nameBase conName)
+    let sumConName = mkName (prefix ++ nameBase conName)
     let diffConName = mkName (prefix ++ nameBase conName)
-    makeTransformMatchDiff sourceConName diffConName fields unwrapVar wrapVar fVar
+    makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar
 
   let transformBody = DoE Nothing
         [ BindS (VarP innerVar) (AppE (VarE unwrapVar) (VarE exprVar))
-        , NoBindS (CaseE (VarE innerVar) (commonMatches ++ diffMatches))
+        , NoBindS (CaseE (VarE innerVar) (subsetMatches ++ diffMatches))
         ]
 
   let transformClause = Clause 
@@ -295,58 +293,67 @@ makeBiPlateInstance prefix sourceTypeName destTypeName commonTypeName sourceCons
         (NormalB transformBody)
         []
 
-  -- Determine the third type parameter for BiPlate instance
-  let thirdType = if isSelfInstance then sourceTypeName else commonTypeName
-
   pure $ InstanceD Nothing [] 
-     (AppT (AppT (AppT (ConT ''BiPlate) (ConT sourceTypeName)) (ConT destTypeName)) (ConT thirdType))
+     (AppT (AppT (AppT (ConT ''BiPlate) (ConT sumTypeName)) (ConT destTypeName)) (ConT diffTypeName))
      [FunD 'transformBi [transformClause]]
 
-data TransformMode = ApplyF | NoApplyF | ApplyFAfter
-
-makeTransformMatch :: Name -> Name -> [BangType] -> Name -> Name -> Name -> TransformMode -> Q Match
-makeTransformMatch patConName targetConName fields unwrapVar wrapVar fVar mode = do
+-- For subset constructors: wrap =<< (DestCon <$> transform fields)
+makeSubsetMatch :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
+makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar = do
   fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_a" ++ show i)
   
-  let pat = ConP patConName [] (fmap VarP fieldVars)
+  let pat = ConP sumConName [] (fmap VarP fieldVars)
   
-  body <- makeTransformBody targetConName fields fieldVars unwrapVar wrapVar fVar mode
+  body <- if null fields
+    then [| $(varE wrapVar) =<< pure $(conE destConName) |]
+    else do
+      transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
+        makeFieldTransform typ var unwrapVar wrapVar fVar
+      
+      conApp <- foldl appE (conE destConName) transformedFields
+      [| $(varE wrapVar) =<< $(pure conApp) |]
 
   pure $ Match pat (NormalB body) []
 
-makeTransformBody :: Name -> [BangType] -> [Name] -> Name -> Name -> Name -> TransformMode -> Q Exp
-makeTransformBody targetConName fields fieldVars unwrapVar wrapVar fVar mode = do
-  if null fields
-    then case mode of
-      ApplyF -> [| $(varE wrapVar) =<< $(varE fVar) =<< pure $(conE targetConName) |]
-      NoApplyF -> [| $(varE wrapVar) =<< pure $(conE targetConName) |]
-      ApplyFAfter -> [| $(varE wrapVar) =<< $(varE fVar) =<< pure $(conE targetConName) |]
+-- For diff constructors: wrap =<< f =<< (DiffCon <$> transform fields)
+makeDiffMatch :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
+makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar = do
+  fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_a" ++ show i)
+  
+  let pat = ConP sumConName [] (fmap VarP fieldVars)
+  
+  body <- if null fields
+    then [| $(varE wrapVar) =<< $(varE fVar) =<< pure $(conE diffConName) |]
     else do
-      -- Transform each field
-      transformedFields <- forM (zip fields fieldVars) $ \((bang, typ), var) ->
-        if isRecursiveType typ
-          then case typ of
-            AppT _ _ -> 
-              -- Any container type (Maybe, [], etc.) - use traverse
-              [| traverse (transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar)) $(varE var) |]
-            _ -> 
-              -- Direct recursive type
-              [| transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar) $(varE var) |]
-          else
-            -- Non-recursive field, just return as-is
-            varE var
-
-      conApp <- foldr (\acc field -> appE (pure acc) field) (conE targetConName) (transformedFields)
+      transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
+        makeFieldTransform typ var unwrapVar wrapVar fVar
       
-      case mode of
-        ApplyF -> [| $(varE wrapVar) =<< $(varE fVar) =<< $(pure conApp) |]
-        NoApplyF -> [| $(varE wrapVar) =<< $(pure conApp) |]
-        ApplyFAfter -> [| $(varE wrapVar) =<< $(varE fVar) =<< $(pure conApp) |]
+      conApp <- foldl appE (conE diffConName) transformedFields
+      [| $(varE wrapVar) =<< $(varE fVar) =<< $(pure conApp) |]
 
-makeTransformMatchDirect :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
-makeTransformMatchDirect sumConName targetConName fields unwrapVar wrapVar fVar =
-  makeTransformMatch sumConName targetConName fields unwrapVar wrapVar fVar NoApplyF
+  pure $ Match pat (NormalB body) []
 
-makeTransformMatchDiff :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
-makeTransformMatchDiff sumConName diffConName fields unwrapVar wrapVar fVar =
-  makeTransformMatch sumConName diffConName fields unwrapVar wrapVar fVar ApplyFAfter
+-- Transform a field based on its type structure
+makeFieldTransform :: Type -> Name -> Name -> Name -> Name -> Q Exp
+makeFieldTransform typ var unwrapVar wrapVar fVar
+  | not (isRecursiveType typ) = varE var  -- Non-recursive: return as-is
+  | otherwise = case typ of
+      VarT _ -> 
+        -- Direct recursive: transformBi unwrap wrap f var
+        [| transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar) $(varE var) |]
+      AppT _ _ ->
+        -- Container: traverse (transformBi unwrap wrap f) var
+        -- Handle nested containers by counting depth
+        let depth = containerDepth typ
+        in if depth == 1
+          then [| traverse (transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar)) $(varE var) |]
+          else makeNestedTraverse depth var unwrapVar wrapVar fVar
+      _ -> varE var
+
+-- Handle nested containers like Maybe (Either String [exp])
+makeNestedTraverse :: Int -> Name -> Name -> Name -> Name -> Q Exp
+makeNestedTraverse depth var unwrapVar wrapVar fVar =
+  [| (traverse $(buildTraverse (depth - 1))) $(varE var) |]
+  where
+    buildTraverse 0 = [| transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar) |]
+    buildTraverse n = [| traverse $(buildTraverse (n - 1)) |]
