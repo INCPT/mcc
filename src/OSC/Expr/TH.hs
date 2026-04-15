@@ -274,14 +274,6 @@ makeBiPlateInstance sumTypeName destTypeName diffTypeName = do
   let fVar = mkName "f"
   let exprVar = mkName "expr"
   let innerVar = mkName "inner"
-
-  -- Get the sum prefix from the sum type constructors
-  let sumPrefix = case sumCons of
-        ((firstSumCon, _):_) -> 
-          let sumName = nameBase firstSumCon
-              baseName = nameBase (fst $ head subsetCons)
-          in take (length sumName - length baseName) sumName
-        _ -> ""
   
   -- Get the diff prefix from the diff type constructors
   let diffPrefix = case diffCons of
