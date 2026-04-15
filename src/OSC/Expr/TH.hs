@@ -341,7 +341,7 @@ makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar = do
         [] -> error "impossible: null fields already handled"
         [field] -> [| $(destCon) <$> $(pure field) |]
         (field:rest) -> do
-          let initial = [| $(destCon) <$> $(pure field) |]
+          initial <- [| $(destCon) <$> $(pure field) |]
           foldM (\acc f -> [| $(pure acc) <*> $(pure f) |]) initial rest
       
       [| $(varE wrapVar) =<< $(pure conApp) |]
