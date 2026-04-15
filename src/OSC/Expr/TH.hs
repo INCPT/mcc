@@ -361,7 +361,15 @@ makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar = do
       transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
         makeFieldTransform typ var unwrapVar wrapVar fVar
       
-      conApp <- foldl appE (conE diffConName) (fmap pure transformedFields)
+      -- Build the constructor application using <$> and <*>
+      let diffCon = conE diffConName
+      conApp <- case transformedFields of
+        [] -> error "impossible: null fields already handled"
+        [field] -> [| $(diffCon) <$> $(pure field) |]
+        (field:rest) -> do
+          initial <- [| $(diffCon) <$> $(pure field) |]
+          foldM (\acc f -> [| $(pure acc) <*> $(pure f) |]) initial rest
+      
       [| $(varE wrapVar) =<< $(varE fVar) =<< $(pure conApp) |]
 
   pure $ Match pat (NormalB body) []
