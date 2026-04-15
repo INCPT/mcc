@@ -328,7 +328,7 @@ makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar = do
   fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_a" ++ show i)
   
   let pat = ConP sumConName [] (fmap VarP fieldVars)
-  
+ 
   body <- if null fields
     then [| $(varE wrapVar) =<< pure $(conE destConName) |]
     else do
