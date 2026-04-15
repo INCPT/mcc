@@ -2,14 +2,22 @@
 
 module OSC.Expr.Functors where
 
+import OSC.Expr.Plate (Wrap (wrap))
+
 import qualified Control.Monad.Reader as R
 
 -- Simple recursive functor (can be paired with Identity)
-newtype Mu f = Mu { unMu :: f (Mu f) }
+newtype Fix f = Fix { unFix :: f (Fix f) }
+
+instance Wrap Fix where
+  wrap = Fix
 
 -- Annotated recursive functor + monad
 newtype Ann ann f = Ann { unAnn :: (ann, f (Ann ann f)) }
 type AnnM = R.ReaderT
+
+instance Monoid ann => Wrap (Ann ann) where
+  wrap a = Ann (mempty, a)
 
 hoistAnn :: Functor f => (ann -> ann') -> Ann ann f -> Ann ann' f
 hoistAnn h (Ann (ann, f)) = Ann (h ann, fmap (hoistAnn h) f)
@@ -23,3 +31,6 @@ flowAnn f m = R.ask >>= \ann -> Ann <$> (f ann,) <$> m
 -- DAG recursive functor + monad
 data Dag k f = Node (f (Dag k f)) | Key k
 type DagM k expr = R.Reader (k -> expr (Dag k expr))
+
+instance Wrap (Dag k) where
+  wrap = Node

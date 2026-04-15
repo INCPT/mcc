@@ -8,6 +8,9 @@ import Data.Functor.Identity (Identity (runIdentity))
 
 data Empty exp
 
+class Wrap f where
+  wrap :: exp (f exp) -> f exp
+
 class Plate expr where
   descend :: Monad m
     => (f expr -> m (expr (f expr)))   -- | Unrwap

@@ -7,7 +7,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module OSC.Expr.TH (Plate (..), BiPlate (..), Empty, makeSum, makeDiff, makePlateInstance, makeBiPlateInstance, universe, transform) where
+module OSC.Expr.TH (Plate (..), BiPlate (..), Empty, genSum, genDiff, genPlateInstance, genBiPlateInstance, universe, transform) where
 
 import Control.Monad (forM_, forM, foldM, unless, when)
 
@@ -15,7 +15,7 @@ import qualified Data.Foldable as F
 
 import Language.Haskell.TH
 
-import OSC.Expr.Plate (Plate (..), BiPlate (..), Empty, universe, transform)
+import OSC.Expr.Plate (Plate (..), BiPlate (..), Empty, universe, transform, Wrap (wrap))
 
 -- Documentation ---------------------------------------------------------------
 --
@@ -43,10 +43,21 @@ data FuncRef exp = FuncRef Int
 
 data Lambda exp = Lambda String [(String, exp)] exp
 
+-- Creating smart constructors:
+-- --------------------
+--
+-- $(genSmartConstructors ''Expr)
+
+noFields :: Wrap f => f Expr
+noFields = wrap NoFields
+
+add :: Wrap f => f Expr -> f Expr -> f Expr
+add a b = wrap $ Add a b
+
 -- Creating a Sum Type:
 -- --------------------
 --
--- $(makeSum "S1_" "Sum1" [''Value, ''Expr, ''FuncRef])
+-- $(genSum "S1_" "Sum1" [''Value, ''Expr, ''FuncRef])
 --
 -- This generates a sum type that combines all constructors from Value, Expr,
 -- and FuncRef, prefixing each constructor name with "S1_":
@@ -68,7 +79,7 @@ data Sum1 exp
 -- Generating a Plate Instance:
 -- -----------------------------
 --
--- $(makePlateInstance ''Sum1)
+-- $(genPlateInstance ''Sum1)
 --
 -- This generates a Plate instance that enables generic traversal over the
 -- recursive structure. The descend function unwraps each expression, attempts
@@ -91,7 +102,7 @@ instance Plate Sum1 where
 -- Creating a Difference Type:
 -- ----------------------------
 --
--- $(makeDiff "D1_" "Diff1" "S1_" ''Sum1 "" ''Value)
+-- $(genDiff "D1_" "Diff1" "S1_" ''Sum1 "" ''Value)
 --
 -- This generates a type containing all constructors from Sum1 that are NOT
 -- in Value. The result is Sum1 minus Value, with constructors prefixed by "D1_":
@@ -106,7 +117,7 @@ data Diff1 exp
 -- Generating a BiPlate Instance:
 -- -------------------------------
 --
--- $(makeBiPlateInstance "S1_" ''Sum1 "" ''Value "D1_" ''Diff1)
+-- $(genBiPlateInstance "S1_" ''Sum1 "" ''Value "D1_" ''Diff1)
 --
 -- This generates a BiPlate instance that transforms between Sum1 and Value,
 -- using Diff1 for constructors not in Value. Constructors from Value are
@@ -224,14 +235,14 @@ matchSumConstructors sumPrefix sumCons subsetMap onSubset onDiff =
           Nothing -> onDiff sumCon baseName
 
 -- Build a constructor application with transformed fields using <$> and <*>
-makeConstructorApp :: Name -> [BangType] -> [Name] -> Name -> Name -> Name -> Q Exp
-makeConstructorApp conName fields fieldVars unwrapVar wrapVar fVar = do
+genConstructorApp :: Name -> [BangType] -> [Name] -> Name -> Name -> Name -> Q Exp
+genConstructorApp conName fields fieldVars unwrapVar wrapVar fVar = do
   transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
-    makeFieldTransform typ var unwrapVar wrapVar fVar
+    genFieldTransform typ var unwrapVar wrapVar fVar
   
   let con = conE conName
   case transformedFields of
-    [] -> error "makeConstructorApp: empty fields"
+    [] -> error "genConstructorApp: empty fields"
     [field] -> [| $(con) <$> $(pure field) |]
     (field:rest) -> do
       initial <- [| $(con) <$> $(pure field) |]
@@ -247,11 +258,10 @@ foldMapM f = fmap mconcat . traverse f
 foldList :: Foldable t => [t a] -> [a]
 foldList = mconcat . fmap F.toList
 
-
 --------------------------------------------------------------------------------
 
-makeSum :: String -> String -> [Name] -> Q [Dec]
-makeSum prefix sumName typeNames = do
+genSum :: String -> String -> [Name] -> Q [Dec]
+genSum prefix sumName typeNames = do
   -- Get info about all the types
   typeInfos <- forM typeNames $ \typeName -> do
     info <- reify typeName
@@ -278,8 +288,8 @@ makeSum prefix sumName typeNames = do
 
   pure [sumDataDec]
 
-makeDiff :: String -> String -> String -> Name -> String -> Name -> Q [Dec]
-makeDiff prefix diffName sumPrefix sumTypeName subsetPrefix subsetTypeName = do
+genDiff :: String -> String -> String -> Name -> String -> Name -> Q [Dec]
+genDiff prefix diffName sumPrefix sumTypeName subsetPrefix subsetTypeName = do
   -- Get info about the sum type
   sumInfo <- reify sumTypeName
   validateTypeParams sumTypeName sumInfo
@@ -321,8 +331,8 @@ makeDiff prefix diffName sumPrefix sumTypeName subsetPrefix subsetTypeName = do
 
 --------------------------------------------------------------------------------
 
-makePlateInstance :: Name -> Q [Dec]
-makePlateInstance typeName = do
+genPlateInstance :: Name -> Q [Dec]
+genPlateInstance typeName = do
   info <- reify typeName
   let cons = getConstructors info
   
@@ -334,7 +344,7 @@ makePlateInstance typeName = do
 
   -- Build pattern matches for each constructor
   matches <- forM cons $ \(conName, fields) -> do
-    makeDescendMatch conName fields unwrapVar extractVar
+    genDescendMatch conName fields unwrapVar extractVar
 
   let descendBody = DoE Nothing
         [ BindS (VarP innerVar) (AppE (VarE unwrapVar) (VarE exprVar))
@@ -358,8 +368,8 @@ makePlateInstance typeName = do
         [FunD 'descend [descendClause]]
     ]
 
-makeDescendMatch :: Name -> [BangType] -> Name -> Name -> Q Match
-makeDescendMatch conName fields unwrapVar extractVar = do
+genDescendMatch :: Name -> [BangType] -> Name -> Name -> Q Match
+genDescendMatch conName fields unwrapVar extractVar = do
   fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_exp" ++ show i)
   
   let pat = ConP conName [] (fmap VarP fieldVars)
@@ -369,14 +379,14 @@ makeDescendMatch conName fields unwrapVar extractVar = do
   
   body <- if null recursiveFields
     then [| pure [] |]
-    else makeDescendBody recursiveFields unwrapVar extractVar
+    else genDescendBody recursiveFields unwrapVar extractVar
 
   pure $ Match pat (NormalB body) []
 
-makeDescendBody :: [((Bang, Type), Name)] -> Name -> Name -> Q Exp
-makeDescendBody recursiveFields unwrapVar extractVar = do
+genDescendBody :: [((Bang, Type), Name)] -> Name -> Name -> Q Exp
+genDescendBody recursiveFields unwrapVar extractVar = do
   -- Generate unwrapping expression based on container depth
-  let makeUnwrapExpr depth var =
+  let genUnwrapExpr depth var =
         if depth == 0
           then [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
           else if depth == 1
@@ -391,20 +401,20 @@ makeDescendBody recursiveFields unwrapVar extractVar = do
     [] -> error "recursiveFields"
     [((_, typ), var)] -> do
        let depth = containerDepth typ
-       makeUnwrapExpr depth var
+       genUnwrapExpr depth var
     _ -> do
       -- Multiple fields: combine with <> using liftA2
       exprs <- forM recursiveFields $ \((_, typ), var) -> do
         let depth = containerDepth typ
-        makeUnwrapExpr depth var
+        genUnwrapExpr depth var
       
       let combineExprs a b = [| liftA2 (<>) $(pure a) $(pure b) |]
       foldl1M combineExprs exprs
 
 --------------------------------------------------------------------------------
 
-makeBiPlateInstance :: String -> Name -> String -> Name -> String -> Name -> Q [Dec]
-makeBiPlateInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefix diffTypeName = do
+genBiPlateInstance :: String -> Name -> String -> Name -> String -> Name -> Q [Dec]
+genBiPlateInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefix diffTypeName = do
   -- Get constructors of sum type
   sumInfo <- reify sumTypeName
   let sumCons = getConstructors sumInfo
@@ -428,11 +438,11 @@ makeBiPlateInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefix dif
   -- For each sum constructor, match it to dest or diff by name
   matches <- matchSumConstructors sumPrefix sumCons destMap
     (\(sumConName, fields) (destConName, _) _ ->
-      makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar
+      genSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar
     )
     (\(sumConName, fields) baseName -> do
       let diffConName = mkName (diffPrefix ++ baseName)
-      makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar
+      genDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar
     )
  
   -- Validate that all constructors were matched
@@ -456,8 +466,8 @@ makeBiPlateInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefix dif
     ]
 
 -- For subset constructors: wrap =<< (DestCon <$> transform fields)
-makeSubsetMatch :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
-makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar = do
+genSubsetMatch :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
+genSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar = do
   fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_a" ++ show i)
   
   let pat = ConP sumConName [] (fmap VarP fieldVars)
@@ -465,14 +475,14 @@ makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar = do
   body <- if null fields
     then [| $(varE wrapVar) =<< pure $(conE destConName) |]
     else do
-      conApp <- makeConstructorApp destConName fields fieldVars unwrapVar wrapVar fVar
+      conApp <- genConstructorApp destConName fields fieldVars unwrapVar wrapVar fVar
       [| $(varE wrapVar) =<< $(pure conApp) |]
 
   pure $ Match pat (NormalB body) []
 
 -- For diff constructors: f =<< (DiffCon <$> transform fields)
-makeDiffMatch :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
-makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar = do
+genDiffMatch :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
+genDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar = do
   fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_a" ++ show i)
   
   let pat = ConP sumConName [] (fmap VarP fieldVars)
@@ -480,14 +490,14 @@ makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar = do
   body <- if null fields
     then [| $(varE fVar) =<< pure $(conE diffConName) |]
     else do
-      conApp <- makeConstructorApp diffConName fields fieldVars unwrapVar wrapVar fVar
+      conApp <- genConstructorApp diffConName fields fieldVars unwrapVar wrapVar fVar
       [| $(varE fVar) =<< $(pure conApp) |]
 
   pure $ Match pat (NormalB body) []
 
 -- Transform a field based on its type structure
-makeFieldTransform :: Type -> Name -> Name -> Name -> Name -> Q Exp
-makeFieldTransform typ var unwrapVar wrapVar fVar
+genFieldTransform :: Type -> Name -> Name -> Name -> Name -> Q Exp
+genFieldTransform typ var unwrapVar wrapVar fVar
   | not (isRecursiveType typ) = [| pure $(varE var) |]  -- Non-recursive: wrap in pure
   | otherwise = case typ of
       VarT _ -> 
@@ -499,12 +509,12 @@ makeFieldTransform typ var unwrapVar wrapVar fVar
         let depth = containerDepth typ
         in if depth == 1
           then [| traverse (transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar)) $(varE var) |]
-          else makeNestedTraverse depth var unwrapVar wrapVar fVar
+          else genNestedTraverse depth var unwrapVar wrapVar fVar
       _ -> varE var
 
 -- Handle nested containers like Maybe (Either String [exp])
-makeNestedTraverse :: Int -> Name -> Name -> Name -> Name -> Q Exp
-makeNestedTraverse depth var unwrapVar wrapVar fVar =
+genNestedTraverse :: Int -> Name -> Name -> Name -> Name -> Q Exp
+genNestedTraverse depth var unwrapVar wrapVar fVar =
   [| (traverse $(buildTraverse (depth - 1))) $(varE var) |]
   where
     buildTraverse 0 = [| transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar) |]

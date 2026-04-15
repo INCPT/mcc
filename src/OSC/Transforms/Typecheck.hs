@@ -24,8 +24,8 @@ import qualified OSC.Expr.Base as B
 foldMapM :: Applicative f => Monoid b => (a -> f b) -> [a] -> f b
 foldMapM f = fmap mconcat . traverse f
 
-$(makeSum "" "Exp" [''B.Exp, ''B.Lam, ''B.Select, ''B.Rec])
-$(makePlateInstance ''Exp)
+$(genSum "" "Exp" [''B.Exp, ''B.Lam, ''B.Select, ''B.Rec])
+$(genPlateInstance ''Exp)
 
 --------------------------------------------------------------------------------
 
