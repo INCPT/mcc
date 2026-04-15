@@ -2,13 +2,15 @@
 
 module OSC.Expr.Pretty where
 
-import Prettyprinter
 import Data.Text (Text)
 import qualified Data.Text as T
 
 import OSC.Expr.Functors (Fix(..))
 import OSC.Expr.Base (Expr(..))
 import OSC.Expr.Comp (Ident(..), Number(..), Op(..), Type(..), TNumber(..))
+
+import Prettyprinter
+import Prettyprinter.Render.Text
 
 -- | Pretty print a Fix Expr as an S-expression
 prettySexp :: Fix Expr -> Doc ann
@@ -30,14 +32,14 @@ prettySexp = go
       
       Var (Ident name) -> pretty name
       
-      Lam ty params bindings body -> parens $ vsep
+      Lam ty params bindings body -> nest 2 $ parens $ vsep
         [ hsep ["lambda", prettyType ty]
         , nest 2 $ parens $ hsep ["params" , list (map prettyIdent params)]
         , nest 2 $ parens $ vsep
             [ "bindings"
             , nest 2 $ align $ vsep (map prettyBinding bindings)
             ]
-        , nest 2 $ vsep ["body", nest 2 $ go body]
+        , nest 2 $ vsep ["", nest 2 $ go body]
         ]
       
       App func args -> parens $ hsep
@@ -52,13 +54,13 @@ prettySexp = go
         , go idx
         ]
       
-      Rec ty delay param bindings body -> parens $ vsep
+      Rec ty delay param bindings body -> nest 2 $ parens $ vsep
         [ hsep ["rec", prettyType ty, pretty delay, prettyIdent param]
-        , nest 2 $ parens $ vsep
+        , nest 2 $ parens $ nest 2 $ vsep
             [ "bindings"
             , nest 2 $ align $ vsep (map prettyBinding bindings)
             ]
-        , nest 2 $ vsep ["body", nest 2 $ go body]
+        , nest 2 $ vsep ["", nest 2 $ go body]
         ]
     
     prettyBinding (ident, expr) = parens $ hsep

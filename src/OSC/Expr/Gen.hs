@@ -1,3 +1,5 @@
+{-# OPTIONS -Wno-orphans #-}
+
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
@@ -5,10 +7,11 @@
 
 module OSC.Expr.Gen where
 
-import OSC.Codegen
 import qualified OSC.Expr.Comp as C
+import qualified OSC.Expr.Base as B
 import OSC.Expr.Base
-import OSC.Expr.Functors (Fix (..), Wrap (..))
+import OSC.Expr.Plate (Wrap (..))
+import OSC.Expr.Functors (Fix (..))
 
 import Test.QuickCheck
 import Control.Monad (replicateM)
@@ -17,16 +20,16 @@ import Data.Map (Map)
 
 -- | Generate non-zero numeric constants (heavily biased against 0)
 genNonZeroI32 :: Wrap f => Gen (f Expr)
-genNonZeroI32 = eConst . C.I32 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]
+genNonZeroI32 = B.const . C.I32 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]
 
 genNonZeroF32 :: Wrap f => Gen (f Expr)
-genNonZeroF32 = eConst . C.F32 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]
+genNonZeroF32 = B.const . C.F32 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]
 
 genNonZeroI64 :: Wrap f => Gen (f Expr)
-genNonZeroI64 = eConst . C.I64 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]
+genNonZeroI64 = B.const . C.I64 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]
 
 genNonZeroF64 :: Wrap f => Gen (f Expr)
-genNonZeroF64 = eConst . C.F64 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]
+genNonZeroF64 = B.const . C.F64 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]
 
 -- | Generate a random identifier
 genIdent :: Gen C.Ident
@@ -147,7 +150,7 @@ genVarOfType ctx targetType =
     then Nothing
     else Just $ do
       (ident, _) <- elements varsOfType
-      pure $ eVar ident
+      pure $ var ident
   where
     varsOfType = M.toList $ M.filter (== targetType) (availableVars ctx)
 
@@ -180,7 +183,7 @@ genBinOp ctx t@(C.TNumber _) = do
   a <- scale (`div` 2) $ genExprOfType ctx' t
   b <- scale (`div` 2) $ genExprOfType ctx' t
 
-  pure $ eOp op a b
+  pure $ B.op op a b
 genBinOp _ t = error $ "genBinOp: not a number type: " ++ show t
 
 -- | Generate an array
@@ -188,7 +191,7 @@ genArray :: Wrap f => GenCtx -> C.Type -> Int -> Gen (f Expr)
 genArray ctx elemType len = do
   let ctx' = ctx { maxDepth = maxDepth ctx - 1 }
   elems <- replicateM len (scale (`div` len) $ genExprOfType ctx' elemType)
-  pure $ eArr elems
+  pure $ arr elems
 
 -- | Generate an array selection with in-bounds index
 genSelect :: Wrap f => GenCtx -> C.Type -> Gen (f Expr)
@@ -203,11 +206,11 @@ genSelect ctx targetType = do
   -- Generate an in-bounds index (0 to arrLen-1)
   idxVal <- choose (0, arrLen - 1)
   idx <- elements
-    [ eConst (C.I32 idxVal)
-    , eConst (C.I64 idxVal)
+    [ B.const (C.I32 idxVal)
+    , B.const (C.I64 idxVal)
     ]
   
-  pure $ eSelect arr idx
+  pure $ select arr idx
 
 -- | Generate a function application
 genApp :: Wrap f => GenCtx -> C.Type -> Gen (f Expr)
@@ -224,7 +227,7 @@ genApp ctx retType = do
   -- Generate arguments of correct types
   args <- mapM (scale (`div` 2) . genExprOfType ctx') paramTypes
   
-  pure $ eApp func args
+  pure $ app func args
 
 -- | Generate an abstraction with bindings
 genAbs :: Wrap f => GenCtx -> [C.Type] -> C.Type -> Gen (f Expr)
@@ -241,11 +244,11 @@ genAbs ctx paramTypes retType = do
   let bodyCtx = bindingCtx { maxDepth = maxDepth ctx - 1 }
   body <- scale (`div` 2) $ genExprOfType bodyCtx retType
   
-  pure $ eLam paramNames bindings body
+  pure $ lam (C.TLam paramTypes retType) paramNames bindings body
 
 -- | Generate a list of bindings where each can reference previous ones
 -- The bindings are shuffled so earlier bindings may reference later ones
-genBindings :: Wrap f => GenCtx -> Int -> Gen ([(C.Ident, C.Type, f Expr)], GenCtx)
+genBindings :: Wrap f => GenCtx -> Int -> Gen ([(C.Ident, f Expr)], GenCtx)
 genBindings ctx 0 = pure ([], ctx)
 genBindings ctx n = do
   -- Generate all bindings in dependency order
@@ -257,7 +260,7 @@ genBindings ctx n = do
   pure (shuffledBindings, finalCtx)
 
 -- | Generate bindings in dependency order (helper for genBindings)
-genBindingsInOrder :: Wrap f => GenCtx -> Int -> Gen ([(C.Ident, C.Type, f Expr)], GenCtx)
+genBindingsInOrder :: Wrap f => GenCtx -> Int -> Gen ([(C.Ident, f Expr)], GenCtx)
 genBindingsInOrder ctx 0 = pure ([], ctx)
 genBindingsInOrder ctx n = do
   -- Generate a unique binding name (not already in context)
@@ -272,7 +275,7 @@ genBindingsInOrder ctx n = do
   -- Generate remaining bindings
   (restBindings, finalCtx) <- genBindingsInOrder newCtx (n - 1)
   
-  pure ((bindingName, bindingType, bindingExpr) : restBindings, finalCtx)
+  pure ((bindingName, bindingExpr) : restBindings, finalCtx)
 
 -- | Generate a recursive expression (ERec)
 -- The type cannot contain functions, and the recursive parameter represents
@@ -294,7 +297,7 @@ genRec ctx recType = do
   let bodyCtx = bindingCtx { maxDepth = maxDepth ctx - 1 }
   body <- scale (`div` 2) $ genBodyUsingParam bodyCtx recType paramName
   
-  pure $ eRec delay paramName bindings body
+  pure $ B.rec recType delay paramName bindings body
   where
 
     -- Generate a body expression that uses the recursive parameter
@@ -306,8 +309,8 @@ genRec ctx recType = do
           other <- scale (`div` 2) $ genExprOfType ctx t
           -- Randomly put param on left or right
           elements
-            [ eOp op (eVar paramName) other
-            , eOp op other (eVar paramName)
+            [ B.op op (var paramName) other
+            , B.op op other (var paramName)
             ]
       , -- Use param in a more complex expression
         do
@@ -315,36 +318,36 @@ genRec ctx recType = do
           op2 <- elements [C.Add, C.Sub]
           a <- scale (`div` 3) $ genExprOfType ctx t
           b <- scale (`div` 3) $ genExprOfType ctx t
-          eOp op1 <$> (eOp op2 (eVar paramName) <$> pure a) <*> pure b
+          B.op op1 <$> (B.op op2 (var paramName) <$> pure a) <*> pure b
       ]
-    genBodyUsingParam ctx t@(C.TArr elemType len) paramName = oneof
+    genBodyUsingParam ctx (C.TArr elemType len) paramName = oneof
       [ -- Select from the recursive parameter array
         do
           idxVal <- choose (0, len - 1)
-          idx <- elements [eConst (C.I32 idxVal), eConst (C.I64 idxVal)]
-          pure $ eSelect (eVar paramName) idx
+          idx <- elements [B.const (C.I32 idxVal), B.const (C.I64 idxVal)]
+          pure $ select (var paramName) idx
       , -- Build array using recursive parameter elements
         do
           indices <- replicateM len $ choose (0, len - 1)
           elems <- mapM mkSelect indices
-          pure $ eArr elems
+          pure $ arr elems
       , -- Combine recursive param with other values in array
         do
           idxVal <- choose (0, len - 1)
-          idx <- elements [eConst (C.I32 idxVal), eConst (C.I64 idxVal)]
+          idx <- elements [B.const (C.I32 idxVal), B.const (C.I64 idxVal)]
           otherElems <- replicateM (len - 1) (scale (`div` len) $ genExprOfType ctx elemType)
           pos <- choose (0, len - 1)
           let (before, after) = splitAt pos otherElems
-          let paramElem = eSelect (eVar paramName) idx
-          pure $ eArr (before <> [paramElem] <> after)
+          let paramElem = select (var paramName) idx
+          pure $ arr (before <> [paramElem] <> after)
       ]
       where
         mkSelect i = do
-          idx <- elements [eConst (C.I32 i), eConst (C.I64 i)]
-          pure $ eSelect (eVar paramName) idx
+          idx <- elements [B.const (C.I32 i), B.const (C.I64 i)]
+          pure $ select (var paramName) idx
     genBodyUsingParam _ _ paramName = 
       -- Fallback: just return the parameter itself
-      pure $ eVar paramName
+      pure $ var paramName
 
 -- | Arbitrary instance for Fix Expr
 instance Arbitrary (Fix Expr) where
@@ -360,8 +363,8 @@ instance Arbitrary (Fix Expr) where
   shrink (Fix (Arr es)) = es
   shrink (Fix (Select arr _)) = [arr]
   shrink (Fix (App f args)) = f : args
-  shrink (Fix (Lam _ bindings body)) = body : [e | (_, _, e) <- bindings]
-  shrink (Fix (Rec _ _ bindings body)) = body : [e | (_, _, e) <- bindings]
+  shrink (Fix (Lam _ _ bindings body)) = body : [e | (_,  e) <- bindings]
+  shrink (Fix (Rec _ _ _ bindings body)) = body : [e | (_,  e) <- bindings]
   shrink _ = []
 
 -- | Generate a random expression for testing in GHCi

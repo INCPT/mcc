@@ -34,6 +34,12 @@ hoistAnn h (Ann (ann, f)) = Ann (h ann, fmap (hoistAnn h) f)
 hoistAnnM :: Traversable f => Monad m => (ann -> m ann') -> Ann ann f -> m (Ann ann' f)
 hoistAnnM h (Ann (ann, f)) = Ann <$> ((,) <$> h ann <*> traverse (hoistAnnM h) f)
 
+fixToAnn :: Functor f => Monoid pos => Fix f -> Ann pos f
+fixToAnn (Fix f) = Ann (mempty, fmap fixToAnn f)
+
+fixToAnn' :: Functor f => Fix f -> Ann () f
+fixToAnn' (Fix f) = Ann (mempty, fmap fixToAnn' f)
+
 annToFix :: Functor f => Ann ann f -> Fix f
 annToFix (Ann (_, f)) = Fix (fmap annToFix f)
 

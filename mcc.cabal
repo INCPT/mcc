@@ -51,6 +51,7 @@ library
       OSC.Expr.Gen
       OSC.Expr.Interpret
       OSC.Expr.Plate
+      OSC.Expr.Pretty
       OSC.Expr.TH
       OSC.Expr.THTest
       OSC.Transforms.Typecheck

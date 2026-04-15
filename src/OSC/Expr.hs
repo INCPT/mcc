@@ -30,6 +30,8 @@ import qualified OSC.Codegen.Interpret as I
 
 import Debug.Trace
 
+{-
+
 newtype TypeError = TypeError String
   deriving Show
 
@@ -599,3 +601,4 @@ letsee e = I.interpretToList 20 ir (exprType et) fr
     ce = toCExpr et'
     (CAbs _ fr, funcRefMap, st) = compileExpr ce
     ir = toplevel st.globals funcRefMap
+-}

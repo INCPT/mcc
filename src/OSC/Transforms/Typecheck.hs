@@ -14,7 +14,7 @@ import qualified Data.Graph as G
 
 import OSC.Expr.Functors
 import OSC.Expr.TH
-import OSC.Expr.Comp (Ident, TNumber (..), Type (..), Op (..))
+import OSC.Expr.Comp (Number (..), Ident (..), TNumber (..), Type (..), Op (..))
 import qualified OSC.Expr.Comp as C
 import OSC.Expr.Base
 import qualified OSC.Expr.Base as B
@@ -71,9 +71,9 @@ checkDuplicates pos bindings = do
     [] -> pure ()
     _ -> E.throwError $ DuplicateBindings pos dups
 
-checkCycles :: pos -> [(Ident, ExpA (pos, Type))] -> TypecheckM pos [(Ident, ExpA (pos, Type))]
+checkCycles :: pos -> [(Ident, ExpA ann)] -> TypecheckM pos [(Ident, ExpA ann)]
 checkCycles pos bindings = do
-  let nodeEdges expr = S.fromList [ n | Ann ((_, _), Var n) <- universe (snd . unAnn) expr ]
+  let nodeEdges expr = S.fromList [ n | Ann (_, Var n) <- universe (snd . unAnn) expr ]
   case topsort nodeEdges bindings of
     Left scc -> E.throwError $ CyclicDependency pos scc
     Right sorted -> pure sorted
@@ -90,8 +90,8 @@ typecheckBindings pos bindings = do
   checkDuplicates pos bindings
   
   -- Check for cycles
-  bindings' <- checkCycles pos =<< go bindings
-  pure bindings'
+  bindings' <- checkCycles pos bindings
+  go bindings'
   where
     go [] = pure []
     go ((n, expr):bs) = do
@@ -233,7 +233,7 @@ typecheck expr = case unAnn expr of
           _ -> E.throwError $ InvalidIndexType (fst . fst . unAnn $ idx') idxType
       _ -> E.throwError $ NotAnArray (fst . fst . unAnn $ sel') selType
   
-  (pos, Rec t param bindings body) -> do
+  (pos, Rec t delay param bindings body) -> do
     -- Check for duplicates
     checkDuplicates pos bindings
     
@@ -257,7 +257,7 @@ typecheck expr = case unAnn expr of
     when (bodyType /= t) $
       E.throwError $ RecReturnTypeMismatch pos t bodyType
     
-    pure $ Ann ((pos, t), Rec t param bindings' body')
+    pure $ Ann ((pos, t), Rec t delay param bindings' body')
 
 --------------------------------------------------------------------------------
 
@@ -265,6 +265,9 @@ e1 :: ExpA ()
 e1 = select (arr [(op Add (cnst $ C.I32 4) (cnst $ C.I32 8))]) (cnst $ C.I32 0)
   where
     cnst = B.const
+
+e2 :: ExpA ()
+e2 = Ann {unAnn = ((),Lam (TLam [] (TNumber TF32)) [] [(Ident "g756",Ann {unAnn = ((),Rec (TNumber TI64) 2 (Ident "b500") [(Ident "f453",Ann {unAnn = ((),App (Ann {unAnn = ((),Lam (TLam [TNumber TI64,TArr (TNumber TI32) 3] (TArr (TNumber TI32) 1)) [Ident "c130",Ident "f982"] [(Ident "b182",Ann {unAnn = ((),Const (F64 0.5030272493895455))}),(Ident "a179",Ann {unAnn = ((),Const (I32 0))}),(Ident "b8",Ann {unAnn = ((),Const (F64 (-1.0)))})] (Ann {unAnn = ((),Arr [Ann {unAnn = ((),Var (Ident "a179"))}])}))}) [Ann {unAnn = ((),Const (I64 1))},Ann {unAnn = ((),Arr [Ann {unAnn = ((),Const (I32 1))},Ann {unAnn = ((),Const (I32 (-1)))},Ann {unAnn = ((),Const (I32 (-1)))}])}])}),(Ident "y862",Ann {unAnn = ((),Const (F64 0.7922093797675532))}),(Ident "y851",Ann {unAnn = ((),Lam (TLam [] (TNumber TF64)) [] [(Ident "x699",Ann {unAnn = ((),Var (Ident "y862"))}),(Ident "g666",Ann {unAnn = ((),Const (F32 (-1.0)))})] (Ann {unAnn = ((),Var (Ident "x699"))}))})] (Ann {unAnn = ((),Op Add (Ann {unAnn = ((),Op Sub (Ann {unAnn = ((),Var (Ident "b500"))}) (Ann {unAnn = ((),Const (I64 1))}))}) (Ann {unAnn = ((),Const (I64 (-1)))}))}))})] (Ann {unAnn = ((),Const (F32 1.5))}))}
 
 infer :: ExpA pos -> Either (TypeError pos) (Ann Type Expr)
 infer = fmap (hoistAnn snd) . E.runExcept . flip R.runReaderT mempty . typecheck

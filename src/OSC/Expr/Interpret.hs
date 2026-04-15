@@ -182,7 +182,7 @@ interpret (Ann (_, Select expr idx)) = do
       (VArr as, VNumber (C.I64 i')) -> pure (as !! i')
       (e', i') -> error $ "Select: " <> show e' <> ", " <> show i'
 
-interpret (Ann (t, Rec _ param bindings body)) = mdo
+interpret (Ann (t, Rec _ _ param bindings body)) = mdo
   nextCell <- ST.gets (.nextCell)
 
   let delayBufferIdx = nextCell
