@@ -35,9 +35,13 @@ data Mu f = Mu (f (Mu f))
 
 data Value exp = Const exp Int | Arr [exp]
 data Expr exp = Add (Maybe exp) exp | Mul (Maybe (Either String [exp])) exp exp | Exp (Maybe (Maybe (Maybe exp)))
+data Lambda exp = Lambda String [(String, exp)] exp
 
-$(makeSum "S_" "Sum1" [''Value, ''Expr])
+$(makeSum "S1_" "Sum1" [''Value, ''Expr])
+$(makeSum "S2_" "Sum2" [''Value, ''Expr, ''Lambda])
+
 $(makePlateInstance ''Sum1)
+$(makePlateInstance ''Sum2)
 
 -- instance Plate Sum1 where
 --   descend unwrap extract expr = do
@@ -59,7 +63,7 @@ $(makePlateInstance ''Sum1)
 --  )
 
 bla :: Mu Sum1 -> Mu Sum1
-bla (Mu (S_Const a n)) = Mu (S_Const a n)
+bla (Mu (S1_Const a n)) = Mu (S1_Const a n)
 bla _ = undefined
 
 {-
