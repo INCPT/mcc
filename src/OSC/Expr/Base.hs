@@ -55,9 +55,9 @@ data UOp = Sqrt | Abs | Neg | Ceil | Floor | Trunc | Nearest
 
 --------------------------------------------------------------------------------
 
-data Lam exp = Lam [Ident] [(Ident, exp)] exp
+data Lam exp = Lam Type [Ident] [(Ident, exp)] exp
 
-data Rec exp = Rec Ident [(Ident, exp)] exp
+data Rec exp = Rec Type Ident [(Ident, exp)] exp
 
 data Select exp = Select exp exp
 

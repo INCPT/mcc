@@ -192,7 +192,7 @@ typecheck = transform (\(Ann (ann, f)) -> R.local (const ann) (pure f)) f
           
           -- Build full environment for body (params + bindings)
           let bindingsEnv = M.fromList [(n, snd . fst . unAnn $ e) | (n, e) <- bindings']
-          body' <- lift $ R.local (bindingsEnv <> paramsEnv <>) $ R.runReaderT (typecheck body) pos
+          body' <- lift $ R.local ((bindingsEnv <> paramsEnv) <>) $ R.runReaderT (typecheck body) pos
           
           let bodyType = snd . fst . unAnn $ body'
           
@@ -219,7 +219,7 @@ typecheck = transform (\(Ann (ann, f)) -> R.local (const ann) (pure f)) f
           sequence_
             [ when (pt /= at) $
                 E.throwError $ ArgumentTypeMismatch (fst . fst . unAnn $ arg) i pt at
-            | (i, pt, at, arg) <- zip4 [0..] paramTypes argTypes args
+            | (i, (pt, (at, arg))) <- zip [0..] $ zip paramTypes $ zip argTypes args
             ]
           
           flowAnn (,retType) $ pure $ App func args
@@ -256,7 +256,7 @@ typecheck = transform (\(Ann (ann, f)) -> R.local (const ann) (pure f)) f
       
       -- Build full environment for body (param + bindings)
       let bindingsEnv = M.fromList [(n, snd . fst . unAnn $ e) | (n, e) <- bindings']
-      body' <- lift $ R.local (bindingsEnv <> paramsEnv <>) $ R.runReaderT (typecheck body) pos
+      body' <- lift $ R.local ((bindingsEnv <> paramsEnv) <>) $ R.runReaderT (typecheck body) pos
       
       let bodyType = snd . fst . unAnn $ body'
       
