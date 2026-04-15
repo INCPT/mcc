@@ -101,6 +101,14 @@ containerDepth typ = case typ of
   AppT _ a -> 1 + containerDepth a
   _ -> 0
 
+{-# INLINE foldMapM #-}
+foldMapM :: Applicative f => Monoid b => (a -> f b) -> [a] -> f b
+foldMapM f = fmap mconcat . traverse f
+
+{-# INLINE foldList #-}
+foldList :: Foldable t => Applicative t => [t a] -> [a]
+foldList = mconcat . F.toList . sequenceA
+
 --------------------------------------------------------------------------------
 
 makeSum :: String -> String -> [Name] -> Q [Dec]
