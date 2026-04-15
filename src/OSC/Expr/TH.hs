@@ -104,18 +104,15 @@ data Sum1 exp
 -- to extract a value, and recursively descends into subexpressions:
 
 instance Plate Sum1 where
-  descend unwrap extract expr = do
+  descend unwrap expr = do
     inner <- unwrap expr
-    a <- extract inner
-    case a of
-      Just a' -> pure [a']
-      Nothing -> case inner of
-        S1_Const _ -> pure []
-        S1_NoFields -> pure []
-        S1_Arr exprs -> (foldMapM (descend unwrap extract)) (F.toList exprs)
-        S1_Add exp1 exp2 -> (<>) <$> descend unwrap extract exp1 <*> descend unwrap extract exp2
-        S1_Mul exp1 exp2 -> (<>) <$> (foldMapM (descend unwrap extract)) (foldList $ F.toList $ foldList $ F.toList exp1) <*> descend unwrap extract exp2
-        S1_FuncRef _ -> pure []
+    case inner of
+      S1_Const _ -> pure []
+      S1_NoFields -> pure []
+      S1_Arr exprs -> pure $ mconcat [ F.toList exprs ]
+      S1_Add exp1 exp2 -> pure $ mconcat [ [ exp1 ], [ exp2 ] ]
+      S1_Mul exp1 exp2 -> pure $ mconcat [ foldList $ F.toList $ foldList $ F.toList exp1, [ exp2 ] ]
+      S1_FuncRef _ -> pure []
 
 -- Creating a Difference Type:
 -- ----------------------------
@@ -366,7 +363,7 @@ genPlateInstance typeName = do
 
   let descendBody = DoE Nothing
         [ BindS (VarP innerVar) (AppE (VarE unwrapVar) (VarE exprVar))
-        , BindS (VarP aVar) (AppE (VarE extractVar) (VarE innerVar))
+        , BindS (VarP aVar) (AppE (VarE extractVar) (VarE exprVar))
         , NoBindS (CaseE (VarE aVar)
             [ Match (ConP 'Just [] [VarP (mkName "a'")]) 
                 (NormalB (AppE (VarE 'pure) (ListE [VarE (mkName "a'")]))) []
