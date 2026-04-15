@@ -127,8 +127,16 @@ validateNoExistentials typeName (TyConI (DataD _ _ _ _ cons _)) = do
 validateNoExistentials _ _ = pure ()
 
 -- Compare constructors by their fields only, ignoring names
+-- Normalize type variables before comparing so we compare structure
 consEqualByFields :: (Name, [BangType]) -> (Name, [BangType]) -> Bool
-consEqualByFields (_, fields1) (_, fields2) = fields1 == fields2
+consEqualByFields (_, fields1) (_, fields2) = 
+  normalizeFields fields1 == normalizeFields fields2
+  where
+    normalizeFields = fmap normalizeBangType
+    normalizeBangType (bang, typ) = (bang, normalizeType typ)
+    normalizeType (VarT _) = VarT (mkName "a")
+    normalizeType (AppT f a) = AppT (normalizeType f) (normalizeType a)
+    normalizeType t = t
 
 -- Check if a constructor (by fields) is in a list of constructors
 consInByFields :: (Name, [BangType]) -> [(Name, [BangType])] -> Bool
