@@ -49,6 +49,7 @@ library
       OSC.Expr.Comp
       OSC.Expr.Functors
       OSC.Expr.Gen
+      OSC.Expr.Interpret
       OSC.Expr.Plate
       OSC.Expr.TH
       OSC.Expr.THTest
