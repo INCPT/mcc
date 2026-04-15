@@ -9,6 +9,8 @@
 
 module OSC.Expr.TH where
 
+import Control.Monad (forM_)
+
 import Language.Haskell.TH
 import Control.Monad (forM, foldM, liftM2)
 import Control.Applicative (liftA2)

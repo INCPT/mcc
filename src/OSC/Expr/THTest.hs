@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -32,8 +33,8 @@ data Mu f = Mu (f (Mu f))
 
 ---- having the following types
 
-data Value exp = Const Int | Arr [exp]
-data Expr exp = Add (Maybe exp) exp | Mul (Maybe (Maybe exp)) exp exp | Exp (Maybe (Maybe (Maybe exp)))
+data Value exp = Const exp Int | Arr [exp]
+data Expr exp = Add (Maybe exp) exp | Mul (Maybe (Either String [exp])) exp exp | Exp (Maybe (Maybe (Maybe exp)))
 
 $(makeSum "S_" "Sum1" [''Value, ''Expr])
 $(makePlateInstance ''Sum1)
@@ -58,7 +59,7 @@ $(makePlateInstance ''Sum1)
 --  )
 
 bla :: Mu Sum1 -> Mu Sum1
-bla (Mu (S_Const n)) = Mu (S_Const n)
+bla (Mu (S_Const a n)) = Mu (S_Const a n)
 bla _ = undefined
 
 {-
