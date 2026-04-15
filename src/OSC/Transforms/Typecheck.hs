@@ -56,7 +56,7 @@ data TypeError pos
   deriving Show
 
 type ExpA ann = Ann ann Exp
-type TypecheckM pos = AnnM pos (E.Except (TypeError pos))
+type TypecheckM pos = R.ReaderT (Map B.Ident Type) (E.Except (TypeError pos))
 
 -- Helper functions
 lookupE :: Ord k => String -> M.Map k v -> k -> v
@@ -88,10 +88,11 @@ checkDuplicates pos bindings = do
 
 checkCycles :: pos -> [(B.Ident, ExpA (pos, Type))] -> TypecheckM pos [(B.Ident, ExpA (pos, Type))]
 checkCycles pos bindings = do
-  let nodeEdges expr = S.fromList [ n | Ann ((_, _), Var n) <- universe expr ]
-  case topsort nodeEdges bindings of
-    Left scc -> E.throwError $ CyclicDependency pos scc
-    Right sorted -> pure sorted
+  undefined
+  -- let nodeEdges expr = S.fromList [ n | Ann ((_, _), Var n) <- universe expr ]
+  -- case topsort nodeEdges bindings of
+  --   Left scc -> E.throwError $ CyclicDependency pos scc
+  --   Right sorted -> pure sorted
 
 typeContainsAbs :: Type -> Bool
 typeContainsAbs (TNumber _) = False
@@ -112,7 +113,7 @@ typecheckBindings pos bindings = do
     go ((n, expr):bs) = do
       expr' <- typecheck expr
       let exprType = snd . fst . unAnn $ expr'
-      bs' <- lift $ R.local (M.insert n exprType) $ R.runReaderT (go bs) pos
+      bs' <- R.local (M.insert n exprType) $ (go bs)
       return $ (n, expr'):bs'
 
 typecheck :: ExpA pos -> TypecheckM pos (ExpA (pos, Type))
@@ -173,7 +174,7 @@ typecheck expr = case unAnn expr of
       else E.throwError $ ArrayElementTypeMismatch pos (at:types)
   
   (pos, Var n) -> do
-    env <- lift R.ask
+    env <- R.ask
     case M.lookup n env of
       Just t -> pure $ Ann ((pos, t), Var n)
       Nothing -> E.throwError $ UnknownBinding pos n
@@ -194,11 +195,11 @@ typecheck expr = case unAnn expr of
         let paramsEnv = M.fromList (zip params paramTypes)
         
         -- Typecheck bindings in the context of parameters
-        bindings' <- lift $ R.local (paramsEnv <>) $ R.runReaderT (typecheckBindings pos bindings) pos
+        bindings' <- R.local (paramsEnv <>) $ typecheckBindings pos bindings
         
         -- Build full environment for body (params + bindings)
         let bindingsEnv = M.fromList [(n, snd . fst . unAnn $ e) | (n, e) <- bindings']
-        body' <- lift $ R.local (bindingsEnv <> paramsEnv <>) $ R.runReaderT (typecheck body) pos
+        body' <- R.local ((bindingsEnv <> paramsEnv) <>) $ typecheck body
         
         let bodyType = snd . fst . unAnn $ body'
         
@@ -260,11 +261,11 @@ typecheck expr = case unAnn expr of
     let paramsEnv = M.singleton param t
     
     -- Typecheck bindings in the context of the recursive parameter
-    bindings' <- lift $ R.local (paramsEnv <>) $ R.runReaderT (typecheckBindings pos bindings) pos
+    bindings' <- R.local (paramsEnv <>) $ typecheckBindings pos bindings
     
     -- Build full environment for body (param + bindings)
     let bindingsEnv = M.fromList [(n, snd . fst . unAnn $ e) | (n, e) <- bindings']
-    body' <- lift $ R.local (bindingsEnv <> paramsEnv <>) $ R.runReaderT (typecheck body) pos
+    body' <- R.local ((bindingsEnv <> paramsEnv) <>) $ typecheck body
     
     let bodyType = snd . fst . unAnn $ body'
     
