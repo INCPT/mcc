@@ -293,9 +293,12 @@ makeBiPlateInstance sumTypeName destTypeName diffTypeName = do
           in take (length diffName - length baseName) diffName
         _ -> ""
   
-  subsetMatches <- forM subsetCons $ \(conName, fields) -> do
-    let sumConName = mkName (sumPrefix ++ nameBase conName)
-    makeSubsetMatch sumConName conName fields unwrapVar wrapVar fVar
+  -- For subset constructors, find the matching sum constructor by fields
+  subsetMatches <- forM subsetCons $ \subsetCon@(conName, fields) -> do
+    -- Find the matching constructor in sumCons by comparing fields
+    case [ sumCon | sumCon <- sumCons, consEqualByFields sumCon subsetCon ] of
+      [(sumConName, _)] -> makeSubsetMatch sumConName conName fields unwrapVar wrapVar fVar
+      _ -> fail $ "Could not find matching sum constructor for " ++ nameBase conName
 
   -- Create matches for diff constructors (apply f)
   let diffConsFromSum = [ c | c <- sumCons, not (consInByFields c subsetCons) ]
