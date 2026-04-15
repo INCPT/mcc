@@ -38,6 +38,7 @@ data Value exp = Const Int | Arr [exp]
 data Expr exp = Single | Add (Maybe exp) exp | Mul (Maybe (Either String [exp])) exp | Exp (Maybe (Maybe (Maybe exp))) (Maybe exp) (Maybe (Maybe exp))
 data Lambda exp = Lambda String [(String, exp)] exp
 data FuncRef exp = FuncRef Int
+data Empty exp
 
 $(makeSum "S1_" "Sum1" [''Value, ''Expr, ''FuncRef])
 $(makeSum "S2_" "Sum2" [''Value, ''Expr, ''Lambda])
@@ -53,6 +54,7 @@ $(makeDiff "D3_" "Diff3" "S2_" ''Sum2 "S3_" ''Sum3)
 $(makeBiPlateInstance "S1_" ''Sum1 "" ''Value "D1_" ''Diff1)
 $(makeBiPlateInstance "S2_" ''Sum2 "S1_" ''Sum1 "D2_" ''Diff2)
 $(makeBiPlateInstance "S2_" ''Sum2 "S3_" ''Sum3 "D3_" ''Diff3)
+$(makeBiPlateInstance "S2_" ''Sum2 "S2_" ''Sum2 "" ''Empty)
 
 sum2 :: Mu Sum2
 sum2 = undefined
@@ -72,6 +74,16 @@ test2 = transformBi (pure . unMu) (pure . Node) go sum2
     go (D3_Lambda n bindings body) = do
       nextId <- ST.state $ \(nextId, funcMap) -> (nextId, (nextId + 1, M.insert nextId (n, bindings, body) funcMap))
       pure $ Key nextId
+
+test3 :: FuncM (Ann Int Sum2)
+test3 = transformBi (pure . unMu) wrap go sum2
+  where
+    wrap :: Sum2 (Ann Int Sum2) -> FuncM (Ann Int Sum2)
+    wrap (S2_Const n) = pure $ Ann (0, S2_Const n)
+    wrap _ = undefined
+
+    go :: Empty (Ann Int Sum2) -> FuncM (Ann Int Sum2)
+    go _ = undefined
 
 -- instance BiPlate Sum1 Value Diff1 where
 --   transformBi unwrap wrap f expr = do
