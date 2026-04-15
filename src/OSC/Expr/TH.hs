@@ -355,18 +355,7 @@ makeSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar = do
   body <- if null fields
     then [| $(varE wrapVar) =<< pure $(conE destConName) |]
     else do
-      transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
-        makeFieldTransform typ var unwrapVar wrapVar fVar
-      
-      -- Build the constructor application using <$> and <*>
-      let destCon = conE destConName
-      conApp <- case transformedFields of
-        [] -> error "impossible: null fields already handled"
-        [field] -> [| $(destCon) <$> $(pure field) |]
-        (field:rest) -> do
-          initial <- [| $(destCon) <$> $(pure field) |]
-          foldM (\acc f -> [| $(pure acc) <*> $(pure f) |]) initial rest
-      
+      conApp <- makeConstructorApp destConName fields fieldVars unwrapVar wrapVar fVar
       [| $(varE wrapVar) =<< $(pure conApp) |]
 
   pure $ Match pat (NormalB body) []
@@ -381,18 +370,7 @@ makeDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar = do
   body <- if null fields
     then [| $(varE wrapVar) =<< $(varE fVar) =<< pure $(conE diffConName) |]
     else do
-      transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
-        makeFieldTransform typ var unwrapVar wrapVar fVar
-      
-      -- Build the constructor application using <$> and <*>
-      let diffCon = conE diffConName
-      conApp <- case transformedFields of
-        [] -> error "impossible: null fields already handled"
-        [field] -> [| $(diffCon) <$> $(pure field) |]
-        (field:rest) -> do
-          initial <- [| $(diffCon) <$> $(pure field) |]
-          foldM (\acc f -> [| $(pure acc) <*> $(pure f) |]) initial rest
-      
+      conApp <- makeConstructorApp diffConName fields fieldVars unwrapVar wrapVar fVar
       [| $(varE wrapVar) =<< $(varE fVar) =<< $(pure conApp) |]
 
   pure $ Match pat (NormalB body) []
@@ -421,3 +399,17 @@ makeNestedTraverse depth var unwrapVar wrapVar fVar =
   where
     buildTraverse 0 = [| transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar) |]
     buildTraverse n = [| traverse $(buildTraverse (n - 1)) |]
+
+-- Build a constructor application with transformed fields using <$> and <*>
+makeConstructorApp :: Name -> [BangType] -> [Name] -> Name -> Name -> Name -> Q Exp
+makeConstructorApp conName fields fieldVars unwrapVar wrapVar fVar = do
+  transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
+    makeFieldTransform typ var unwrapVar wrapVar fVar
+  
+  let con = conE conName
+  case transformedFields of
+    [] -> error "makeConstructorApp: empty fields"
+    [field] -> [| $(con) <$> $(pure field) |]
+    (field:rest) -> do
+      initial <- [| $(con) <$> $(pure field) |]
+      foldM (\acc f -> [| $(pure acc) <*> $(pure f) |]) initial rest
