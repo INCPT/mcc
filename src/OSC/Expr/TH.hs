@@ -352,28 +352,20 @@ genPlateInstance typeName = do
   let cons = getConstructors info
   
   let unwrapVar = mkName "unwrap"
-  let extractVar = mkName "extract"
   let exprVar = mkName "expr"
   let innerVar = mkName "inner"
-  let aVar = mkName "a"
 
   -- Build pattern matches for each constructor
   matches <- forM cons $ \(conName, fields) -> do
-    genDescendMatch conName fields unwrapVar extractVar
+    genDescendMatch conName fields
 
   let descendBody = DoE Nothing
         [ BindS (VarP innerVar) (AppE (VarE unwrapVar) (VarE exprVar))
-        , BindS (VarP aVar) (AppE (VarE extractVar) (VarE exprVar))
-        , NoBindS (CaseE (VarE aVar)
-            [ Match (ConP 'Just [] [VarP (mkName "a'")]) 
-                (NormalB (AppE (VarE 'pure) (ListE [VarE (mkName "a'")]))) []
-            , Match (ConP 'Nothing [] []) 
-                (NormalB (CaseE (VarE innerVar) matches)) []
-            ])
+        , NoBindS (CaseE (VarE innerVar) matches)
         ]
 
   let descendClause = Clause 
-        [VarP unwrapVar, VarP extractVar, VarP exprVar]
+        [VarP unwrapVar, VarP exprVar]
         (NormalB descendBody)
         []
 
@@ -383,8 +375,8 @@ genPlateInstance typeName = do
         [FunD 'descend [descendClause]]
     ]
 
-genDescendMatch :: Name -> [BangType] -> Name -> Name -> Q Match
-genDescendMatch conName fields unwrapVar extractVar = do
+genDescendMatch :: Name -> [BangType] -> Q Match
+genDescendMatch conName fields = do
   fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_exp" ++ show i)
   
   let pat = ConP conName [] (fmap VarP fieldVars)
@@ -394,37 +386,31 @@ genDescendMatch conName fields unwrapVar extractVar = do
   
   body <- if null recursiveFields
     then [| pure [] |]
-    else genDescendBody recursiveFields unwrapVar extractVar
+    else genDescendBody recursiveFields
 
   pure $ Match pat (NormalB body) []
 
-genDescendBody :: [((Bang, Type), Name)] -> Name -> Name -> Q Exp
-genDescendBody recursiveFields unwrapVar extractVar = do
-  -- Generate unwrapping expression based on container depth
-  let genUnwrapExpr depth var =
+genDescendBody :: [((Bang, Type), Name)] -> Q Exp
+genDescendBody recursiveFields = do
+  -- Generate field collection expressions based on container depth
+  let genFieldExpr depth var =
         if depth == 0
-          then [| descend $(varE unwrapVar) $(varE extractVar) $(varE var) |]
+          then [| [ $(varE var) ] |]
           else if depth == 1
-            then [| foldMapM (descend $(varE unwrapVar) $(varE extractVar)) (F.toList $(varE var)) |]
+            then [| F.toList $(varE var) |]
             else do
               -- For depth > 1, use foldList to flatten nested containers
               let buildLayers 0 = varE var
                   buildLayers n = [| foldList $ F.toList $(buildLayers (n-1)) |]
-              [| foldMapM (descend $(varE unwrapVar) $(varE extractVar)) $(buildLayers (depth - 1)) |]
+              buildLayers depth
 
-  case recursiveFields of
-    [] -> error "recursiveFields"
-    [((_, typ), var)] -> do
-       let depth = containerDepth typ
-       genUnwrapExpr depth var
-    _ -> do
-      -- Multiple fields: combine with <> using liftA2
-      exprs <- forM recursiveFields $ \((_, typ), var) -> do
-        let depth = containerDepth typ
-        genUnwrapExpr depth var
-      
-      let combineExprs a b = [| liftA2 (<>) $(pure a) $(pure b) |]
-      foldl1M combineExprs exprs
+  -- Build list of field expressions
+  fieldExprs <- forM recursiveFields $ \((_, typ), var) -> do
+    let depth = containerDepth typ
+    genFieldExpr depth var
+  
+  -- Combine with mconcat
+  [| pure $ mconcat $(pure $ ListE fieldExprs) |]
 
 --------------------------------------------------------------------------------
 
