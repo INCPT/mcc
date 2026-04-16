@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
 
@@ -303,7 +304,7 @@ transformGeneric runner trans wrapped =
   in do
     expr'' <- trans expr'
     expr''' <- traverse (transformGeneric runner trans) expr''
-    return $ rwrap (const expr''') wrapped
+    return $ rwrap (Prelude.const expr''') wrapped
 
 {-
 -- For your capture analysis:
