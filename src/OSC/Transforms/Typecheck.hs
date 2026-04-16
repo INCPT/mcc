@@ -1,11 +1,13 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TupleSections #-}
 
 module OSC.Transforms.Typecheck where
 
 import Control.Monad (when)
+import Control.Monad.Trans.Class (lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.Except as E
-import qualified Control.Monad.State as ST
+import qualified Control.Monad.Writer as W
 
 import Data.Map (Map)
 import qualified Data.Map as M
@@ -14,6 +16,7 @@ import qualified Data.Set as S
 import qualified Data.Graph as G
 
 import OSC.Expr.Functors
+import OSC.Expr.Plate
 import OSC.Expr.TH
 import OSC.Expr.Comp (Number (..), Ident (..), TNumber (..), Type (..), Op (..))
 import qualified OSC.Expr.Comp as C
@@ -272,8 +275,17 @@ dbgInfer expr = case fmap (hoistAnn snd) $ E.runExcept $ flip R.runReaderT mempt
 
 --------------------------------------------------------------------------------
 
-rename :: (f Expr -> Expr (f Expr)) -> Map Ident Ident -> f Expr -> f Expr
-rename unwrap env = undefined -- transform (fmap pure unwrap) _
+type CaptureM m = R.ReaderT (Set Ident) (W.WriterT (Set Ident) m)
+
+markCapturedBindings :: R.MonadReader (Set Ident) m => W.MonadWriter (Set Ident) m => (f Expr -> m (Expr (f Expr))) -> (Expr (f Expr) -> m (f Expr)) -> f Expr -> m (f Expr)
+markCapturedBindings unwrap wrap expr = unwrap expr >>= \expr -> case expr of
+  Var n -> R.ask >>= \env -> (if S.member n env then W.tell (S.singleton n) else pure ()) >> wrap (Var n)
+  Lam _ params _ body -> do
+    env <- R.ask
+    (body', captured) <- W.runWriterT $ R.runReaderT (markCapturedBindings (fmap (lift . lift) unwrap) (fmap (lift . lift) wrap) body) (S.fromList params <> env)
+    W.tell (captured S.\\ undefined)
+    wrap $ Lam undefined params undefined body'
+  e -> transformM unwrap (\e -> markCapturedBindings unwrap wrap =<< wrap e) =<< wrap e
 
 --------------------------------------------------------------------------------
 

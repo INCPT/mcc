@@ -7,7 +7,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module OSC.Expr.TH (Plate (..), BiPlate (..), Empty, genSum, genDiff, genPlateInstance, genBiPlateInstance, genSmartConstructors, universe, transformM) where
+module OSC.Expr.TH (Plate (..), BiPlate (..), Empty, genSum, genDiff, genPlateInstance, genBiPlateInstance, genSmartConstructors, universe, transformM, transform) where
 
 import Control.Monad (forM_, forM, foldM, unless, when)
 import Data.Char (toLower)
@@ -16,7 +16,8 @@ import qualified Data.Foldable as F
 
 import Language.Haskell.TH
 
-import OSC.Expr.Plate (Plate (..), BiPlate (..), Empty, universe, transformM, Wrap (wrap))
+import OSC.Expr.Functors (Wrap (wrap))
+import OSC.Expr.Plate
 
 -- Documentation ---------------------------------------------------------------
 --
@@ -560,13 +561,13 @@ genFieldTransform typ var unwrapVar wrapVar fVar
   | otherwise = case typ of
       VarT _ -> 
         -- Direct recursive: transformBi unwrap wrap f var
-        [| transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar) $(varE var) |]
+        [| transformBiM $(varE unwrapVar) $(varE wrapVar) $(varE fVar) $(varE var) |]
       AppT _ _ ->
-        -- Container: traverse (transformBi unwrap wrap f) var
+        -- Container: traverse (transformBiM unwrap wrap f) var
         -- Handle nested containers by counting depth
         let depth = containerDepth typ
         in if depth == 1
-          then [| traverse (transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar)) $(varE var) |]
+          then [| traverse (transformBiM $(varE unwrapVar) $(varE wrapVar) $(varE fVar)) $(varE var) |]
           else genNestedTraverse depth var unwrapVar wrapVar fVar
       _ -> varE var
 
@@ -575,5 +576,5 @@ genNestedTraverse :: Int -> Name -> Name -> Name -> Name -> Q Exp
 genNestedTraverse depth var unwrapVar wrapVar fVar =
   [| (traverse $(buildTraverse (depth - 1))) $(varE var) |]
   where
-    buildTraverse 0 = [| transformBi $(varE unwrapVar) $(varE wrapVar) $(varE fVar) |]
+    buildTraverse 0 = [| transformBiM $(varE unwrapVar) $(varE wrapVar) $(varE fVar) |]
     buildTraverse n = [| traverse $(buildTraverse (n - 1)) |]

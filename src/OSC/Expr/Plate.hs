@@ -8,9 +8,6 @@ import Data.Functor.Identity (Identity (runIdentity))
 
 data Empty exp
 
-class Wrap f where
-  wrap :: exp (f exp) -> f exp
-
 class Plate expr where
   descendM :: Monad m
     => (f expr -> m (expr (f expr)))  -- | Unrwap
@@ -19,7 +16,7 @@ class Plate expr where
     -> m [f expr]
 
 universe :: Plate expr => (f expr -> expr (f expr)) -> f expr -> [f expr]
-universe unwrap expr = expr:((\children -> children <> concatMap (universe unwrap) children) $ runIdentity $ descend (fmap pure unwrap) expr)
+universe unwrap expr = expr:((\children -> children <> concatMap (universe unwrap) children) $ runIdentity $ descendM (fmap pure unwrap) expr)
 
 class BiPlate a b c | a c -> b, b c -> a, a b -> c where
   transformBiM :: Monad m
@@ -30,10 +27,17 @@ class BiPlate a b c | a c -> b, b c -> a, a b -> c where
 
     -> f a
     -> m (f' b)
-  
+
 transformM :: Monad m => BiPlate a a Empty
   => (f a -> m (a (f a)))
   -> (a (f' a) -> m (f' a))
   -> f a
   -> m (f' a)
-transformM self diff = transformBiM self diff undefined
+transformM unwrap f = transformBiM unwrap f undefined
+
+transform :: BiPlate a a Empty
+  => (f a -> a (f a))
+  -> (a (f' a) -> f' a)
+  -> f a
+  -> f' a
+transform unwrap f = runIdentity . transformBiM (fmap pure unwrap) (fmap pure f) undefined

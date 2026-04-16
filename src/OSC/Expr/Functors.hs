@@ -4,9 +4,14 @@
 
 module OSC.Expr.Functors where
 
-import OSC.Expr.Plate (Wrap (wrap))
-
 import qualified Control.Monad.Reader as R
+import qualified Control.Monad.State as ST
+
+class Wrap f where
+  wrap :: exp (f exp) -> f exp
+
+class WFunctor f where
+  wmapM :: Functor m => (exp (f exp) -> m (exp (f exp))) -> f exp -> m (f exp)
 
 -- Simple recursive type
 newtype Fix f = Fix { unFix :: f (Fix f) }
@@ -16,17 +21,26 @@ deriving instance Show (f (Fix f)) => Show (Fix f)
 instance Wrap Fix where
   wrap = Fix
 
+instance WFunctor Fix where
+  wmapM g (Fix f) = Fix <$> g f
+
 -- Annotated recursive type + monad
 newtype Ann ann f = Ann { unAnn :: (ann, f (Ann ann f)) }
-type AnnM = R.ReaderT
+type AnnM ann = ST.State ann
 
 deriving instance (Show ann, Show (f (Ann ann f))) => Show (Ann ann f)
 
 instance Monoid ann => Wrap (Ann ann) where
   wrap a = Ann (mempty, a)
 
-flowAnn :: Monad m => (ann -> ann') -> AnnM ann m (exp (Ann ann' exp)) -> AnnM ann m (Ann ann' exp)
-flowAnn f m = R.ask >>= \ann -> Ann <$> (f ann,) <$> m
+instance WFunctor (Ann ann) where
+  wmapM g (Ann (ann, f)) = Ann <$> ((ann,) <$> g f)
+
+unwrapAnn :: Ann ann f -> AnnM ann (f (Ann ann f))
+unwrapAnn (Ann (ann, f)) = ST.put ann >> pure f
+
+wrapAnn :: f (Ann ann f) -> AnnM ann (Ann ann f)
+wrapAnn f = Ann <$> ((,f) <$> ST.get)
 
 hoistAnn :: Functor f => (ann -> ann') -> Ann ann f -> Ann ann' f
 hoistAnn h (Ann (ann, f)) = Ann (h ann, fmap (hoistAnn h) f)
