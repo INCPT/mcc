@@ -477,6 +477,7 @@ genBitraversableInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefi
   
   let gVar = mkName "g"
   let fVar = mkName "f"
+  let exprVar = mkName "expr"
   
   -- For each sum constructor, match it to dest or diff by name
   matches <- matchSumConstructors sumPrefix sumCons destMap
@@ -493,8 +494,8 @@ genBitraversableInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefi
     fail $ "Not all sum constructors were matched: expected " ++ show (length sumCons) ++ " but got " ++ show (length matches)
 
   let bitraverseClause = Clause 
-        [VarP gVar, VarP fVar]
-        (NormalB (LamCaseE matches))
+        [VarP gVar, VarP fVar, VarP exprVar]
+        (NormalB (CaseE (VarE exprVar) matches))
         []
 
   pure
