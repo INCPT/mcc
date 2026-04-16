@@ -7,7 +7,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module OSC.Expr.TH (BiPlate (..), Empty, genSum, genDiff, genBiPlateInstance, genSmartConstructors, universe) where
+module OSC.Expr.TH (BiPlate (..), Empty, genSum, genDiff, genBiPlateInstance, genBitraversableInstance, genSmartConstructors, universe) where
 
 import Control.Monad (forM_, forM, foldM, unless, when)
 import Data.Char (toLower)
@@ -449,6 +449,50 @@ genBiPlateInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefix diff
         [FunD 'transformBiM [transformClause]]
     ]
 
+genBitraversableInstance :: String -> Name -> String -> Name -> String -> Name -> Q [Dec]
+genBitraversableInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefix diffTypeName = do
+  -- Get constructors of sum type
+  sumInfo <- reify sumTypeName
+  let sumCons = getConstructors sumInfo
+  
+  -- Get constructors of dest type
+  destInfo <- reify destTypeName
+  let destCons = getConstructors destInfo
+  
+  -- Build a map from base names to dest constructors
+  let destMap = [ (baseName, (conName, fields)) 
+                | (conName, fields) <- destCons
+                , Just baseName <- [stripPrefix destPrefix (nameBase conName)]
+                ]
+  
+  let gVar = mkName "g"
+  let fVar = mkName "f"
+  
+  -- For each sum constructor, match it to dest or diff by name
+  matches <- matchSumConstructors sumPrefix sumCons destMap
+    (\(sumConName, fields) (destConName, _) _ ->
+      genBitraverseSubsetMatch sumConName destConName fields gVar
+    )
+    (\(sumConName, fields) baseName -> do
+      let diffConName = mkName (diffPrefix ++ baseName)
+      genBitraverseDiffMatch sumConName diffConName fields gVar fVar
+    )
+ 
+  -- Validate that all constructors were matched
+  when (length matches /= length sumCons) $
+    fail $ "Not all sum constructors were matched: expected " ++ show (length sumCons) ++ " but got " ++ show (length matches)
+
+  let bitraverseClause = Clause 
+        [VarP gVar, VarP fVar]
+        (NormalB (LamCaseE matches))
+        []
+
+  pure
+    [ InstanceD Nothing [] 
+        (AppT (AppT (AppT (ConT ''Bitraversable) (ConT sumTypeName)) (ConT destTypeName)) (ConT diffTypeName))
+        [FunD 'bitraverse [bitraverseClause]]
+    ]
+
 -- For subset constructors: wrap =<< (DestCon <$> transform fields)
 genSubsetMatch :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
 genSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar = do
@@ -503,3 +547,75 @@ genNestedTraverse depth var unwrapVar wrapVar fVar =
   where
     buildTraverse 0 = [| transformBiM $(varE unwrapVar) $(varE wrapVar) $(varE fVar) |]
     buildTraverse n = [| traverse $(buildTraverse (n - 1)) |]
+
+-- Transform a field for bitraverse (using g instead of transformBiM)
+genBitraverseFieldTransform :: Type -> Name -> Name -> Q Exp
+genBitraverseFieldTransform typ var gVar
+  | not (isRecursiveType typ) = [| pure $(varE var) |]  -- Non-recursive: wrap in pure
+  | otherwise = case typ of
+      VarT _ -> 
+        -- Direct recursive: g var
+        [| $(varE gVar) $(varE var) |]
+      AppT _ _ ->
+        -- Container: traverse g var (or nested traverse for deeper nesting)
+        let depth = containerDepth typ
+        in if depth == 1
+          then [| traverse $(varE gVar) $(varE var) |]
+          else genBitraverseNestedTraverse depth var gVar
+      _ -> varE var
+
+-- Handle nested containers for bitraverse
+genBitraverseNestedTraverse :: Int -> Name -> Name -> Q Exp
+genBitraverseNestedTraverse depth var gVar =
+  [| (traverse $(buildTraverse (depth - 1))) $(varE var) |]
+  where
+    buildTraverse 0 = varE gVar
+    buildTraverse n = [| traverse $(buildTraverse (n - 1)) |]
+
+-- For subset constructors in bitraverse: DestCon <$> g field1 <*> g field2 ...
+genBitraverseSubsetMatch :: Name -> Name -> [BangType] -> Name -> Q Match
+genBitraverseSubsetMatch sumConName destConName fields gVar = do
+  fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_a" ++ show i)
+  
+  let pat = ConP sumConName [] (fmap VarP fieldVars)
+ 
+  body <- if null fields
+    then [| pure $(conE destConName) |]
+    else do
+      transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
+        genBitraverseFieldTransform typ var gVar
+      
+      let con = conE destConName
+      case transformedFields of
+        [] -> error "genBitraverseSubsetMatch: empty fields"
+        [field] -> [| $(con) <$> $(pure field) |]
+        (field:rest) -> do
+          initial <- [| $(con) <$> $(pure field) |]
+          foldM (\acc f -> [| $(pure acc) <*> $(pure f) |]) initial rest
+
+  pure $ Match pat (NormalB body) []
+
+-- For diff constructors in bitraverse: f =<< (DiffCon <$> g field1 <*> g field2 ...)
+genBitraverseDiffMatch :: Name -> Name -> [BangType] -> Name -> Name -> Q Match
+genBitraverseDiffMatch sumConName diffConName fields gVar fVar = do
+  fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_a" ++ show i)
+  
+  let pat = ConP sumConName [] (fmap VarP fieldVars)
+  
+  body <- if null fields
+    then [| $(varE fVar) =<< pure $(conE diffConName) |]
+    else do
+      transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
+        genBitraverseFieldTransform typ var gVar
+      
+      let con = conE diffConName
+      conApp <- case transformedFields of
+        [] -> error "genBitraverseDiffMatch: empty fields"
+        [field] -> [| $(con) <$> $(pure field) |]
+        (field:rest) -> do
+          initial <- [| $(con) <$> $(pure field) |]
+          foldM (\acc f -> [| $(pure acc) <*> $(pure f) |]) initial rest
+      
+      [| $(varE fVar) =<< $(pure conApp) |]
+
+  pure $ Match pat (NormalB body) []
