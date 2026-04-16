@@ -142,9 +142,9 @@ instance Bitraversable Sum1 Value Diff1 where
   bitraverse g f (S1_Const n) = Const <$> pure n
   bitraverse g f (S1_Arr as) = Arr <$> traverse g as
 
-  bitraverse g f (S1_Add a b) = f =<< (D1_Add <$> g a <*> g b)
-  bitraverse g f (S1_Add2 a b) = f =<< (D1_Add2 <$> g a <*> traverse g b)
-  bitraverse g f (S1_Mul a b) = f =<< (D1_Mul <$> traverse (traverse (traverse g)) a <*> g b)
+  bitraverse g f (S1_Add a b) = f (D1_Add a b)
+  bitraverse g f (S1_Add2 a b) = f (D1_Add2 a b)
+  bitraverse g f (S1_Mul a b) = f (D1_Mul a b)
 
   bitraverse g f _ = undefined -- ...
 
