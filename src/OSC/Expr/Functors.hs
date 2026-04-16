@@ -8,7 +8,7 @@ import OSC.Expr.Plate (Wrap (wrap))
 
 import qualified Control.Monad.Reader as R
 
--- Simple recursive functor (can be paired with Identity)
+-- Simple recursive type
 newtype Fix f = Fix { unFix :: f (Fix f) }
 
 deriving instance Show (f (Fix f)) => Show (Fix f)
@@ -16,7 +16,7 @@ deriving instance Show (f (Fix f)) => Show (Fix f)
 instance Wrap Fix where
   wrap = Fix
 
--- Annotated recursive functor + monad
+-- Annotated recursive type + monad
 newtype Ann ann f = Ann { unAnn :: (ann, f (Ann ann f)) }
 type AnnM = R.ReaderT
 
@@ -43,7 +43,7 @@ fixToAnn' (Fix f) = Ann (mempty, fmap fixToAnn' f)
 annToFix :: Functor f => Ann ann f -> Fix f
 annToFix (Ann (_, f)) = Fix (fmap annToFix f)
 
--- DAG recursive functor + monad
+-- DAG recursive type + monad
 data Dag k f = Node (f (Dag k f)) | Key k
 type DagM k expr = R.Reader (k -> expr (Dag k expr))
 
@@ -51,3 +51,13 @@ deriving instance (Show k, Show (f (Dag k f))) => Show (Dag k f)
 
 instance Wrap (Dag k) where
   wrap = Node
+
+-- Higher order variants -------------------------------------------------------
+
+data AnnF ann f r = AnnF ann (f r)
+
+data DagF k f r = NodeF (f r) | KeyF k
+
+-- can be composed like this:
+
+-- type AnnDag ann k expr = Fix (AnnF ann (DagF k expr))

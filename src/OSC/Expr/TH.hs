@@ -7,7 +7,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module OSC.Expr.TH (Plate (..), BiPlate (..), Empty, genSum, genDiff, genPlateInstance, genBiPlateInstance, genSmartConstructors, universe, transform) where
+module OSC.Expr.TH (Plate (..), BiPlate (..), Empty, genSum, genDiff, genPlateInstance, genBiPlateInstance, genSmartConstructors, universe, transformM) where
 
 import Control.Monad (forM_, forM, foldM, unless, when)
 import Data.Char (toLower)
@@ -16,7 +16,7 @@ import qualified Data.Foldable as F
 
 import Language.Haskell.TH
 
-import OSC.Expr.Plate (Plate (..), BiPlate (..), Empty, universe, transform, Wrap (wrap))
+import OSC.Expr.Plate (Plate (..), BiPlate (..), Empty, universe, transformM, Wrap (wrap))
 
 -- Documentation ---------------------------------------------------------------
 --
@@ -104,7 +104,7 @@ data Sum1 exp
 -- to extract a value, and recursively descends into subexpressions:
 
 instance Plate Sum1 where
-  descend unwrap expr = do
+  descendM unwrap expr = do
     inner <- unwrap expr
     case inner of
       S1_Const _ -> pure []
@@ -139,17 +139,17 @@ data Diff1 exp
 -- wrapped, while others are passed to the transformation function:
 
 instance BiPlate Sum1 Value Diff1 where
-  transformBi unwrap wrap f expr = do
+  transformBiM unwrap wrap f expr = do
     inner <- unwrap expr
     case inner of
       -- Constructors from Value: wrap the result
       S1_Const n -> wrap =<< (Const <$> pure n)
-      S1_Arr as  -> wrap =<< (Arr <$> traverse (transformBi unwrap wrap f) as)
+      S1_Arr as  -> wrap =<< (Arr <$> traverse (transformBiM unwrap wrap f) as)
 
       -- Constructors from Diff1: apply transformation function
       S1_NoFields ->  f =<< pure D1_NoFields
-      S1_Add a b -> f =<< (D1_Add <$> (transformBi unwrap wrap f) a <*> transformBi unwrap wrap f b)
-      S1_Mul a b -> f =<< (D1_Mul <$> (traverse (traverse (traverse (transformBi unwrap wrap f)))) a <*> transformBi unwrap wrap f b)
+      S1_Add a b -> f =<< (D1_Add <$> (transformBiM unwrap wrap f) a <*> transformBiM unwrap wrap f b)
+      S1_Mul a b -> f =<< (D1_Mul <$> (traverse (traverse (traverse (transformBiM unwrap wrap f)))) a <*> transformBiM unwrap wrap f b)
 
       -- Constructors from FuncRef
       S1_FuncRef a ->  f =<< pure (D1_FuncRef a)
@@ -372,7 +372,7 @@ genPlateInstance typeName = do
   pure
     [ InstanceD Nothing [] 
         (AppT (ConT ''Plate) (ConT typeName))
-        [FunD 'descend [descendClause]]
+        [FunD 'descendM [descendClause]]
     ]
 
 genDescendMatch :: Name -> [BangType] -> Q Match
@@ -520,7 +520,7 @@ genBiPlateInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefix diff
   pure
     [ InstanceD Nothing [] 
         (AppT (AppT (AppT (ConT ''BiPlate) (ConT sumTypeName)) (ConT destTypeName)) (ConT diffTypeName))
-        [FunD 'transformBi [transformClause]]
+        [FunD 'transformBiM [transformClause]]
     ]
 
 -- For subset constructors: wrap =<< (DestCon <$> transform fields)
