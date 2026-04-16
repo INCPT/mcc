@@ -19,6 +19,18 @@ class WFunctor f where
 class WMonad f where
   wbind :: Functor m => (f exp -> m (exp (f exp))) -> f exp -> m (f exp)
 
+-- Generic transformation using WFunctor and WMonad
+transformGeneric2
+  :: (WFunctor f, Traversable expr, Monad m)
+  => (expr (f expr) -> m (expr (f expr)))  -- transformer
+  -> f expr
+  -> m (f expr)
+transformGeneric2 trans wrapped = 
+  wmapM (\expr -> do
+    expr' <- trans expr
+    traverse (transformGeneric2 trans) expr'
+  ) wrapped
+
 -- Simple recursive type
 newtype Fix f = Fix { unFix :: f (Fix f) }
 
