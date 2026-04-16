@@ -288,8 +288,8 @@ instance RunnableWrapper (Ann ann) where
   runWrapContext = runIdentity
 
 -- For Dag, you need to provide the resolver when running
-runWrapContextDag :: (k -> Dag k expr) -> R.Reader (k -> Dag k expr) a -> a
-runWrapContextDag resolver = flip R.runReader resolver
+runWrapContextDag :: (forall expr. k -> Dag k expr) -> R.Reader (DagResolver k) a -> a
+runWrapContextDag resolver = flip R.runReader (DagResolver resolver)
 
 -- Now transformGeneric can work:
 transformGeneric

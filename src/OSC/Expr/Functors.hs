@@ -70,6 +70,9 @@ instance Wrap (Dag k) where
 
 -- RecursiveWrapper instances --------------------------------------------------
 
+-- Helper newtype for Dag's resolver that hides the expr parameter
+newtype DagResolver k = DagResolver { runDagResolver :: forall expr. k -> Dag k expr }
+
 class RecursiveWrapper f where
   type WrapContext f :: * -> *
   runwrap :: Functor expr => f expr -> WrapContext f (expr (f expr))
@@ -86,9 +89,11 @@ instance RecursiveWrapper (Ann ann) where
   rwrap modify (Ann (ann, f)) = Ann (ann, modify f)
 
 instance RecursiveWrapper (Dag k) where
-  type WrapContext (Dag k) = R.Reader (k -> Dag k expr)
+  type WrapContext (Dag k) = R.Reader (DagResolver k)
   runwrap (Node f) = return f
-  runwrap (Key k) = R.ask >>= \resolve -> runwrap (resolve k)
+  runwrap (Key k) = do
+    DagResolver resolve <- R.ask
+    runwrap (resolve k)
   rwrap modify (Node f) = Node (modify f)
   rwrap modify (Key k) = Key k
 
