@@ -4,6 +4,7 @@
 
 module OSC.Expr.Functors where
 
+import Control.Monad.Identity (Identity(..))
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.State as ST
 
@@ -65,6 +66,25 @@ deriving instance (Show k, Show (f (Dag k f))) => Show (Dag k f)
 
 instance Wrap (Dag k) where
   wrap = Node
+
+-- RecursiveWrapper instances --------------------------------------------------
+
+instance RecursiveWrapper Fix where
+  type WrapContext Fix = Identity
+  runwrap (Fix f) = Identity f
+  rwrap modify (Fix f) = Fix (modify f)
+
+instance RecursiveWrapper (Ann ann) where
+  type WrapContext (Ann ann) = Identity
+  runwrap (Ann (ann, f)) = Identity f
+  rwrap modify (Ann (ann, f)) = Ann (ann, modify f)
+
+instance RecursiveWrapper (Dag k) where
+  type WrapContext (Dag k) = Reader (k -> Dag k expr)
+  runwrap (Node f) = return f
+  runwrap (Key k) = ask >>= \resolve -> runwrap (resolve k)
+  rwrap modify (Node f) = Node (modify f)
+  rwrap modify (Key k) = Key k
 
 -- Higher order variants -------------------------------------------------------
 

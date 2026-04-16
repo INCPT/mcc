@@ -5,6 +5,7 @@
 module OSC.Transforms.Typecheck where
 
 import Control.Monad (when)
+import Control.Monad.Identity (Identity(..), runIdentity)
 import Control.Monad.Trans.Class (lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.Except as E
@@ -281,20 +282,33 @@ class RecursiveWrapper f where
   runwrap :: f expr -> WrapContext f (expr (f expr))
   rwrap :: (expr (f expr) -> expr (f expr)) -> f expr -> f expr
 
-mjoin :: Monad m => m (m a) -> m a
-mjoin = undefined
+-- Better approach: Make the recursion explicit and require a runner
+class RecursiveWrapper f => RunnableWrapper f where
+  runWrapContext :: WrapContext f a -> a
 
+instance RunnableWrapper Fix where
+  runWrapContext = runIdentity
+
+instance RunnableWrapper (Ann ann) where
+  runWrapContext = runIdentity
+
+-- For Dag, you need to provide the resolver when running
+runWrapContextDag :: (k -> Dag k expr) -> R.Reader (k -> Dag k expr) a -> a
+runWrapContextDag resolver = flip R.runReader resolver
+
+-- Now transformGeneric can work:
 transformGeneric
-  :: (RecursiveWrapper f, Traversable expr, Monad m, Monad (WrapContext f))
-  => (expr (f expr) -> m (expr (f expr)))  -- transformer
+  :: (RunnableWrapper f, Traversable expr, Monad m)
+  => (WrapContext f a -> a)  -- explicit runner
+  -> (expr (f expr) -> m (expr (f expr)))  -- transformer
   -> f expr
-  -> WrapContext f (m (f expr))
-transformGeneric trans wrapped = do
-  expr <- runwrap wrapped  -- unwrap in WrapContext monad
-  return $ do
-    expr' <- trans expr  -- transform in m monad
-    expr'' <- traverse (\child -> mjoin $ transformGeneric trans child) expr'  -- recurse
-    return $ rwrap (Prelude.const expr'') wrapped
+  -> m (f expr)
+transformGeneric runner trans wrapped = 
+  let expr = runner $ runwrap wrapped
+  in do
+    expr' <- trans expr
+    expr'' <- traverse (transformGeneric runner trans) expr'
+    return $ rwrap (const expr'') wrapped
 
 {-
 -- For your capture analysis:
