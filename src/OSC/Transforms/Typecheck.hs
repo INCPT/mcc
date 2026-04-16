@@ -280,30 +280,43 @@ dbgInfer expr = case fmap (hoistAnn snd) $ E.runExcept $ flip R.runReaderT mempt
 
 -- Better approach: Make the recursion explicit and require a runner
 class RecursiveWrapper f => RunnableWrapper f where
-  runWrapContext :: WrapContext f a -> a
+  runWrapContext :: proxy f -> WrapContext f a -> a
 
 instance RunnableWrapper Fix where
-  runWrapContext = runIdentity
+  runWrapContext _ = runIdentity
 
 instance RunnableWrapper (Ann ann) where
-  runWrapContext = runIdentity
+  runWrapContext _ = runIdentity
 
 -- For Dag, you need to provide the resolver when running
 runWrapContextDag :: (forall expr. k -> Dag k expr) -> R.Reader (DagResolver k) a -> a
 runWrapContextDag resolver = flip R.runReader (DagResolver resolver)
 
--- Now transformGeneric can work:
-transformGeneric
-  :: (RunnableWrapper f, Traversable expr, Monad m)
-  => (forall a. WrapContext f a -> a)  -- explicit runner
-  -> (expr (f expr) -> m (expr (f expr)))  -- transformer
-  -> f expr
-  -> m (f expr)
-transformGeneric runner trans wrapped = 
-  let expr' = runner $ runwrap wrapped
+-- Specialized transform for Dag that requires a resolver
+transformDag
+  :: forall k expr m. (Traversable expr, Monad m)
+  => (forall e. k -> Dag k e)  -- resolver
+  -> (expr (Dag k expr) -> m (expr (Dag k expr)))  -- transformer
+  -> Dag k expr
+  -> m (Dag k expr)
+transformDag resolver trans wrapped = 
+  let expr' = runWrapContextDag resolver $ runwrap wrapped
   in do
     expr'' <- trans expr'
-    expr''' <- traverse (transformGeneric runner trans) expr''
+    expr''' <- traverse (transformDag resolver trans) expr''
+    return $ rwrap (Prelude.const expr''') wrapped
+
+-- Now transformGeneric can work:
+transformGeneric
+  :: forall f expr m. (RunnableWrapper f, Traversable expr, Monad m)
+  => (expr (f expr) -> m (expr (f expr)))  -- transformer
+  -> f expr
+  -> m (f expr)
+transformGeneric trans wrapped = 
+  let expr' = runWrapContext (Nothing :: Maybe (f expr)) $ runwrap wrapped
+  in do
+    expr'' <- trans expr'
+    expr''' <- traverse (transformGeneric trans) expr''
     return $ rwrap (Prelude.const expr''') wrapped
 
 {-
