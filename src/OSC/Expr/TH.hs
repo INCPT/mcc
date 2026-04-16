@@ -7,7 +7,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module OSC.Expr.TH (BiPlate (..), Empty, genSum, genDiff, genBiPlateInstance, genSmartConstructors, universe, transformM, transform) where
+module OSC.Expr.TH (BiPlate (..), Empty, genSum, genDiff, genBiPlateInstance, genSmartConstructors, universe) where
 
 import Control.Monad (forM_, forM, foldM, unless, when)
 import Data.Char (toLower)
@@ -138,20 +138,15 @@ instance BiPlate Sum1 Value Diff1 where
       S1_FuncRef a ->  f =<< pure (D1_FuncRef a)
       _ -> undefined
 
-instance RecPlate Sum1 where
-  transformRec wmap (S1_Const n) = pure $ S1_Const n
-  transformRec wmap (S1_Arr as) = S1_Arr <$> traverse wmap as
-  transformRec wmap (S1_Add a b) = S1_Add <$> wmap a <*> wmap b
-  transformRec _ _ = undefined
+instance Bitraversable Sum1 Value Diff1 where
+  bitraverse g f (S1_Const n) = Const <$> pure n
+  bitraverse g f (S1_Arr as) = Arr <$> traverse g as
 
-instance TraversableBi Sum1 Value Diff1 where
-  traverseBi g f (S1_Const n) = Const <$> pure n
-  traverseBi g f (S1_Arr as) = Arr <$> traverse g as
+  bitraverse g f (S1_Add a b) = f =<< (D1_Add <$> g a <*> g b)
+  bitraverse g f (S1_Add2 a b) = f =<< (D1_Add2 <$> g a <*> traverse g b)
+  bitraverse g f (S1_Mul a b) = f =<< (D1_Mul <$> traverse (traverse (traverse g)) a <*> g b)
 
-  traverseBi g f (S1_Add a b) = f =<< (D1_Add <$> g a <*> g b)
-  traverseBi g f (S1_Add2 a b) = f =<< (D1_Add2 <$> g a <*> traverse g b)
-
-  traverseBi g f _ = undefined
+  bitraverse g f _ = undefined -- ...
 
 -- Helper functions ------------------------------------------------------------
 
