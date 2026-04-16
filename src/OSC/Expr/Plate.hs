@@ -6,7 +6,7 @@
 
 module OSC.Expr.Plate where
 
-import OSC.Expr.Functors (WFunctor)
+import OSC.Expr.Functors (RFunctor)
 import Data.Foldable (foldl)
 import Data.Functor.Identity (Identity (runIdentity))
 

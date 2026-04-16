@@ -45,6 +45,7 @@ library
       OSC.Codegen.Backend
       OSC.Codegen.Interpret
       OSC.Expr
+      OSC.Expr.AnnBind
       OSC.Expr.Base
       OSC.Expr.Comp
       OSC.Expr.Functors

@@ -6,76 +6,60 @@
 
 module OSC.Expr.Functors where
 
+import Data.Functor.Identity (runIdentity)
+
 import qualified Control.Monad.Reader as R
 
-class Wrap f where
-  wrap :: exp (f exp) -> f exp
+class Corecursive f where
+  embed :: a (f a) -> f a
 
-class WFunctor f where
-  wmapM :: Functor m => (exp (f exp) -> m (exp' (f exp'))) -> f exp -> m (f exp')
+class Recursive f where
+  project :: f a -> a (f a)
 
-class Unwrap f where
-  unwrap :: f exp -> expr (f exp)
+class RFunctor f where
+  rtraverse :: Functor m => (a (f a) -> m (b (f b))) -> f a -> m (f b)
 
--- Simple recursive type
+hoist :: Recursive f => Corecursive g => Functor a => f a -> g a
+hoist = embed . fmap hoist . project
+
+-- Fix -------------------------------------------------------------------------
+
 newtype Fix f = Fix { unFix :: f (Fix f) }
 
 deriving instance Show (f (Fix f)) => Show (Fix f)
 
-instance Wrap Fix where
-  wrap = Fix
+instance Recursive Fix where project = unFix
+instance Corecursive Fix where embed = Fix
+instance RFunctor Fix where rtraverse g (Fix f) = Fix <$> g f
 
-instance WFunctor Fix where
-  wmapM g (Fix f) = Fix <$> g f
+-- Ann -------------------------------------------------------------------------
 
--- Annotated recursive type + monad
 newtype Ann ann f = Ann { unAnn :: (ann, f (Ann ann f)) }
-newtype AnnM ann a = AnnM ((a -> ann) -> ann)
 
 deriving instance (Show ann, Show (f (Ann ann f))) => Show (Ann ann f)
 
-instance Monoid ann => Wrap (Ann ann) where
-  wrap a = Ann (mempty, a)
+instance Recursive (Ann ann) where project = snd . unAnn
+instance Monoid ann => Corecursive (Ann ann) where embed a = Ann (mempty, a)
+instance RFunctor (Ann ann) where rtraverse g (Ann (ann, f)) = Ann <$> ((ann,) <$> g f)
 
-instance WFunctor (Ann ann) where
-  wmapM g (Ann (ann, f)) = Ann <$> ((ann,) <$> g f)
+mapAnnM :: Traversable f => Monad m => (ann -> m ann') -> Ann ann f -> m (Ann ann' f)
+mapAnnM h (Ann (ann, f)) = Ann <$> ((,) <$> h ann <*> traverse (mapAnnM h) f)
 
-unwrapAnn :: Ann ann f -> AnnM ann (f (Ann ann f))
-unwrapAnn (Ann (ann, _)) = AnnM $ \_ -> ann
+mapAnn :: Traversable f => Functor f => (ann -> ann') -> Ann ann f -> Ann ann' f
+mapAnn h = runIdentity . mapAnnM (fmap pure h)
 
-wrapAnn :: f (Ann ann f) -> AnnM ann (Ann ann f)
-wrapAnn f = AnnM $ \k -> let ann = k (Ann (ann, f)) in ann
+-- Ann -------------------------------------------------------------------------
 
-hoistAnn :: Functor f => (ann -> ann') -> Ann ann f -> Ann ann' f
-hoistAnn h (Ann (ann, f)) = Ann (h ann, fmap (hoistAnn h) f)
-
-hoistAnnM :: Traversable f => Monad m => (ann -> m ann') -> Ann ann f -> m (Ann ann' f)
-hoistAnnM h (Ann (ann, f)) = Ann <$> ((,) <$> h ann <*> traverse (hoistAnnM h) f)
-
-fixToAnn :: Functor f => Monoid pos => Fix f -> Ann pos f
-fixToAnn (Fix f) = Ann (mempty, fmap fixToAnn f)
-
-fixToAnn' :: Functor f => Fix f -> Ann () f
-fixToAnn' (Fix f) = Ann (mempty, fmap fixToAnn' f)
-
-annToFix :: Functor f => Ann ann f -> Fix f
-annToFix (Ann (_, f)) = Fix (fmap annToFix f)
-
--- DAG recursive type + monad
 data Dag k f = Node (f (Dag k f)) | Key k
 type DagM k expr = R.Reader (k -> expr (Dag k expr))
 
 deriving instance (Show k, Show (f (Dag k f))) => Show (Dag k f)
 
-instance Wrap (Dag k) where
-  wrap = Node
+instance Corecursive (Dag k) where embed = Node
 
 -- Higher order variants -------------------------------------------------------
 
 data AnnF ann r f = AnnF ann (f r)
-
--- instance WFunctor (AnnF ann r) where
---   wmapM f (AnnF ann r) = AnnF ann <$> f r
 
 data DagF k f r = NodeF (f r) | KeyF k
 
