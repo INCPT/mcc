@@ -10,7 +10,7 @@ module OSC.Expr.Gen where
 import qualified OSC.Expr.Comp as C
 import qualified OSC.Expr.Base as B
 import OSC.Expr.Base
-import OSC.Expr.Functors (Fix (..), Wrap (..))
+import OSC.Expr.Functors
 
 import Test.QuickCheck
 import Control.Monad (replicateM)
@@ -18,16 +18,16 @@ import qualified Data.Map as M
 import Data.Map (Map)
 
 -- | Generate non-zero numeric constants (heavily biased against 0)
-genNonZeroI32 :: Wrap f => Gen (f Expr)
+genNonZeroI32 :: Corecursive f => Gen (f Expr)
 genNonZeroI32 = B.const . C.I32 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]
 
-genNonZeroF32 :: Wrap f => Gen (f Expr)
+genNonZeroF32 :: Corecursive f => Gen (f Expr)
 genNonZeroF32 = B.const . C.F32 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]
 
-genNonZeroI64 :: Wrap f => Gen (f Expr)
+genNonZeroI64 :: Corecursive f => Gen (f Expr)
 genNonZeroI64 = B.const . C.I64 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]
 
-genNonZeroF64 :: Wrap f => Gen (f Expr)
+genNonZeroF64 :: Corecursive f => Gen (f Expr)
 genNonZeroF64 = B.const . C.F64 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]
 
 -- | Generate a random identifier
@@ -112,7 +112,7 @@ withVars :: [(C.Ident, C.Type)] -> GenCtx -> GenCtx
 withVars vars ctx = ctx { availableVars = M.fromList vars <> availableVars ctx }
 
 -- | Generate an expression of a specific type
-genExprOfType :: forall f. Wrap f => GenCtx -> C.Type -> Gen (f Expr)
+genExprOfType :: forall f. Corecursive f => GenCtx -> C.Type -> Gen (f Expr)
 genExprOfType ctx targetType = sized $ \size ->
   if size <= 0 || maxDepth ctx <= 0
     then genLeaf ctx targetType
@@ -122,7 +122,7 @@ genExprOfType ctx targetType = sized $ \size ->
       ]
 
 -- | Generate leaf expressions (constants and variables)
-genLeaf :: Wrap f => GenCtx -> C.Type -> Gen (f Expr)
+genLeaf :: Corecursive f => GenCtx -> C.Type -> Gen (f Expr)
 genLeaf ctx (C.TNumber C.TI32) = case genVarOfType ctx (C.TNumber C.TI32) of
   Just varGen -> frequency [(3, genNonZeroI32), (1, varGen)]
   Nothing -> genNonZeroI32
@@ -143,7 +143,7 @@ genLeaf ctx t@(C.TLam _ _) = case genVarOfType ctx t of
   Nothing -> genAbs ctx (C.paramTypes "genLeaf" t) (C.returnType t)
 
 -- | Generate a variable reference of a specific type (returns Nothing if no vars available)
-genVarOfType :: Wrap f => GenCtx -> C.Type -> Maybe (Gen (f Expr))
+genVarOfType :: Corecursive f => GenCtx -> C.Type -> Maybe (Gen (f Expr))
 genVarOfType ctx targetType =
   if null varsOfType
     then Nothing
@@ -154,7 +154,7 @@ genVarOfType ctx targetType =
     varsOfType = M.toList $ M.filter (== targetType) (availableVars ctx)
 
 -- | Generate composite expressions
-genComposite :: Wrap f => GenCtx -> C.Type -> Gen (f Expr)
+genComposite :: Corecursive f => GenCtx -> C.Type -> Gen (f Expr)
 genComposite ctx t@(C.TNumber _) = oneof
   [ genBinOp ctx t
   , genSelect ctx t
@@ -173,7 +173,7 @@ genComposite ctx t@(C.TLam params retType) = oneof
   ]
 
 -- | Generate a binary operation
-genBinOp :: Wrap f => GenCtx -> C.Type -> Gen (f Expr)
+genBinOp :: Corecursive f => GenCtx -> C.Type -> Gen (f Expr)
 genBinOp ctx t@(C.TNumber _) = do
   op <- elements [C.Add, C.Sub, C.Mul, C.And, C.Or, C.Xor, C.Min, C.Max]
 
@@ -186,14 +186,14 @@ genBinOp ctx t@(C.TNumber _) = do
 genBinOp _ t = error $ "genBinOp: not a number type: " ++ show t
 
 -- | Generate an array
-genArray :: Wrap f => GenCtx -> C.Type -> Int -> Gen (f Expr)
+genArray :: Corecursive f => GenCtx -> C.Type -> Int -> Gen (f Expr)
 genArray ctx elemType len = do
   let ctx' = ctx { maxDepth = maxDepth ctx - 1 }
   elems <- replicateM len (scale (`div` len) $ genExprOfType ctx' elemType)
   pure $ arr elems
 
 -- | Generate an array selection with in-bounds index
-genSelect :: Wrap f => GenCtx -> C.Type -> Gen (f Expr)
+genSelect :: Corecursive f => GenCtx -> C.Type -> Gen (f Expr)
 genSelect ctx targetType = do
   -- Generate an array that contains elements of targetType
   arrLen <- choose (1, 5)
@@ -212,7 +212,7 @@ genSelect ctx targetType = do
   pure $ select arr idx
 
 -- | Generate a function application
-genApp :: Wrap f => GenCtx -> C.Type -> Gen (f Expr)
+genApp :: Corecursive f => GenCtx -> C.Type -> Gen (f Expr)
 genApp ctx retType = do
   -- Generate function type
   numParams <- choose (0, 3)
@@ -229,7 +229,7 @@ genApp ctx retType = do
   pure $ app func args
 
 -- | Generate an abstraction with bindings
-genAbs :: Wrap f => GenCtx -> [C.Type] -> C.Type -> Gen (f Expr)
+genAbs :: Corecursive f => GenCtx -> [C.Type] -> C.Type -> Gen (f Expr)
 genAbs ctx paramTypes retType = do
   -- Generate unique parameter names
   paramNames <- genUniqueIdents (length paramTypes)
@@ -247,7 +247,7 @@ genAbs ctx paramTypes retType = do
 
 -- | Generate a list of bindings where each can reference previous ones
 -- The bindings are shuffled so earlier bindings may reference later ones
-genBindings :: Wrap f => GenCtx -> Int -> Gen ([(C.Ident, f Expr)], GenCtx)
+genBindings :: Corecursive f => GenCtx -> Int -> Gen ([(C.Ident, f Expr)], GenCtx)
 genBindings ctx 0 = pure ([], ctx)
 genBindings ctx n = do
   -- Generate all bindings in dependency order
@@ -259,7 +259,7 @@ genBindings ctx n = do
   pure (shuffledBindings, finalCtx)
 
 -- | Generate bindings in dependency order (helper for genBindings)
-genBindingsInOrder :: Wrap f => GenCtx -> Int -> Gen ([(C.Ident, f Expr)], GenCtx)
+genBindingsInOrder :: Corecursive f => GenCtx -> Int -> Gen ([(C.Ident, f Expr)], GenCtx)
 genBindingsInOrder ctx 0 = pure ([], ctx)
 genBindingsInOrder ctx n = do
   -- Generate a unique binding name (not already in context)
@@ -279,7 +279,7 @@ genBindingsInOrder ctx n = do
 -- | Generate a recursive expression (ERec)
 -- The type cannot contain functions, and the recursive parameter represents
 -- the previous value in the recursive computation
-genRec :: Wrap f => GenCtx -> C.Type -> Gen (f Expr)
+genRec :: Corecursive f => GenCtx -> C.Type -> Gen (f Expr)
 genRec ctx recType = do
   -- Generate delay (number of samples to delay)
   delay <- choose (1, 5)
@@ -300,7 +300,7 @@ genRec ctx recType = do
   where
 
     -- Generate a body expression that uses the recursive parameter
-    genBodyUsingParam :: Wrap f => GenCtx -> C.Type -> C.Ident -> Gen (f Expr)
+    genBodyUsingParam :: Corecursive f => GenCtx -> C.Type -> C.Ident -> Gen (f Expr)
     genBodyUsingParam ctx t@(C.TNumber _) paramName = oneof
       [ -- Binary operation with the recursive parameter
         do

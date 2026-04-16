@@ -66,3 +66,20 @@ data DagF k f r = NodeF (f r) | KeyF k
 -- can be composed like this:
 
 -- type AnnDag ann k expr = Fix (AnnF ann (DagF k expr))
+
+--------------------------------------------------------------------------------
+
+type Alg expr f = expr f -> f
+
+cata :: Functor expr => Recursive f => Alg expr g -> f expr -> g
+cata f = f . fmap (cata f) . project
+-- cata f = c where c = f . fmap c . project
+
+query :: Foldable expr => Recursive f => (f expr -> r) -> (r -> r -> r) -> f expr -> r
+query q c t = foldl (\r x -> r `c` query q c x) (q t) (project t)
+
+universe' :: Foldable expr => Recursive f => f expr -> [f expr]
+universe' = query pure (<>)
+
+universe :: Foldable expr => Recursive f => f expr -> [expr (f expr)]
+universe = fmap project . query pure (<>)

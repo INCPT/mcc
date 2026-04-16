@@ -82,7 +82,7 @@ checkDuplicates pos bindings = do
 
 checkCycles :: Show ann => pos -> [(Ident, ExpA ann)] -> TypecheckM pos [(Ident, ExpA ann)]
 checkCycles pos bindings = do
-  let nodeEdges expr = S.fromList [ {- (\x -> trace ("VAR :" <> show x) x) $ -} n | Ann (_, Var n) <- universe (snd . unAnn) expr ]
+  let nodeEdges expr = S.fromList [ {- (\x -> trace ("VAR :" <> show x) x) $ -} n | Ann (_, Var n) <- universe' expr ]
   case topsort nodeEdges bindings of
     Left scc -> E.throwError $ CyclicDependency pos scc
     Right sorted -> pure sorted
@@ -271,10 +271,10 @@ typecheck expr = case unAnn expr of
 --------------------------------------------------------------------------------
 
 infer :: Show pos => ExpA pos -> Either (TypeError pos) (Ann Type Expr)
-infer = fmap (hoistAnn snd) . E.runExcept . flip R.runReaderT mempty . typecheck
+infer = fmap (mapAnn snd) . E.runExcept . flip R.runReaderT mempty . typecheck
 
 dbgInfer :: Show pos => ExpA pos -> Ann Type Expr
-dbgInfer expr = case fmap (hoistAnn snd) $ E.runExcept $ flip R.runReaderT mempty $ typecheck expr of
+dbgInfer expr = case fmap (mapAnn snd) $ E.runExcept $ flip R.runReaderT mempty $ typecheck expr of
   Right a -> a
   Left e -> error $ show e
 
@@ -285,8 +285,8 @@ type CaptureM = R.ReaderT (Set Ident) (W.WriterT (Set Ident) (ST.State (Set Iden
 runCapture :: CaptureM a -> ((a, Set Ident), Set Ident)
 runCapture = runIdentity . flip ST.runStateT mempty . W.runWriterT . flip R.runReaderT mempty
 
-markCapturedBindings :: WFunctor f => f Expr -> CaptureM (f Expr1)
-markCapturedBindings = wmapM go
+markCapturedBindings :: RFunctor f => f Expr -> CaptureM (f Expr1)
+markCapturedBindings = rtraverse go
   where
     go (Var n) = do
       env <- R.ask
@@ -345,7 +345,7 @@ markCapturedBindings = wmapM go
       pure undefined -- $ Rec t delay param bindings' body'
 
     -- Generic case: recursively process all children
-    go e = traverseBi (wmapM go) undefined e
+    go e = traverseBi (rtraverse go) undefined e
 
 --------------------------------------------------------------------------------
 

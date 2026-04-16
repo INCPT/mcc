@@ -16,7 +16,7 @@ import qualified Data.Foldable as F
 
 import Language.Haskell.TH
 
-import OSC.Expr.Functors (Wrap (wrap), WFunctor (..))
+import OSC.Expr.Functors
 import OSC.Expr.Plate
 
 -- Documentation ---------------------------------------------------------------
@@ -61,14 +61,14 @@ data Lambda exp = Lambda String [(String, exp)] exp
 --
 -- It generates:
 
-noFields :: Wrap f => f Expr
-noFields = wrap NoFields
+noFields :: Corecursive f => f Expr
+noFields = embed NoFields
 
-add :: Wrap f => f Expr -> f Expr -> f Expr
-add a b = wrap $ Add a b
+add :: Corecursive f => f Expr -> f Expr -> f Expr
+add a b = embed $ Add a b
 
-mul :: Wrap f => (Maybe (Either String [f Expr])) -> f Expr -> f Expr
-mul a b = wrap $ Mul a b
+mul :: Corecursive f => (Maybe (Either String [f Expr])) -> f Expr -> f Expr
+mul a b = embed $ Mul a b
 
 -- The generated functions have a Wrap constraint and return f Expr, allowing them
 -- to work with any wrapper type (Fix, Ann, Dag, etc.) that implements Wrap.
@@ -460,7 +460,7 @@ genSmartConstructor typeName smartName conName fields fVar = do
   paramVars <- forM [1..length fields] $ \i -> pure $ mkName ("a" ++ show i)
   
   -- Build the type signature
-  let wrapConstraint = AppT (ConT ''Wrap) (VarT fVar)
+  let wrapConstraint = AppT (ConT ''Corecursive) (VarT fVar)
   let returnType = AppT (VarT fVar) (ConT typeName)
   
   -- Replace exp with (f TypeName) in field types
@@ -469,9 +469,9 @@ genSmartConstructor typeName smartName conName fields fVar = do
   let funType = ForallT [PlainTV fVar SpecifiedSpec] [wrapConstraint] $
         foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) returnType paramTypes
   
-  -- Build the function body: wrap (ConName a1 a2 ...)
+  -- Build the function body: embed (ConName a1 a2 ...)
   let conApp = foldl AppE (ConE conName) (fmap VarE paramVars)
-  let body = AppE (VarE 'wrap) conApp
+  let body = AppE (VarE 'embed) conApp
   
   let funClause = Clause (fmap VarP paramVars) (NormalB body) []
   
