@@ -26,7 +26,7 @@ instance WFunctor Fix where
 
 -- Annotated recursive type + monad
 newtype Ann ann f = Ann { unAnn :: (ann, f (Ann ann f)) }
-type AnnM ann = ST.State ann
+newtype AnnM ann a = AnnM ((a -> ann) -> ann)
 
 deriving instance (Show ann, Show (f (Ann ann f))) => Show (Ann ann f)
 
@@ -37,10 +37,10 @@ instance WFunctor (Ann ann) where
   wmapM g (Ann (ann, f)) = Ann <$> ((ann,) <$> g f)
 
 unwrapAnn :: Ann ann f -> AnnM ann (f (Ann ann f))
-unwrapAnn (Ann (ann, f)) = ST.put ann >> pure f
+unwrapAnn (Ann (ann, _)) = AnnM $ \_ -> ann
 
 wrapAnn :: f (Ann ann f) -> AnnM ann (Ann ann f)
-wrapAnn f = Ann <$> ((,f) <$> ST.get)
+wrapAnn f = AnnM $ \k -> let ann = k (Ann (ann, f)) in ann
 
 hoistAnn :: Functor f => (ann -> ann') -> Ann ann f -> Ann ann' f
 hoistAnn h (Ann (ann, f)) = Ann (h ann, fmap (hoistAnn h) f)

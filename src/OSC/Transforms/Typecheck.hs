@@ -282,10 +282,29 @@ markCapturedBindings unwrap wrap expr = unwrap expr >>= \expr -> case expr of
   Var n -> R.ask >>= \env -> (if S.member n env then W.tell (S.singleton n) else pure ()) >> wrap (Var n)
   Lam _ params _ body -> do
     env <- R.ask
-    (body', captured) <- W.runWriterT $ R.runReaderT (markCapturedBindings (fmap (lift . lift) unwrap) (fmap (lift . lift) wrap) body) (S.fromList params <> env)
-    W.tell (captured S.\\ undefined)
+    let paramsEnv = S.fromList params
+
+    (body', captured) <- W.runWriterT $ R.runReaderT (markCapturedBindings (fmap (lift . lift) unwrap) (fmap (lift . lift) wrap) body) (paramsEnv <> env)
+
+    W.tell (captured S.\\ paramsEnv)
     wrap $ Lam undefined params undefined body'
   e -> transformM unwrap (\e -> markCapturedBindings unwrap wrap =<< wrap e) =<< wrap e
+
+flowAnn :: (Ann ann f -> f (Ann ann f) -> m (Either (f (Ann ann f)) (Ann ann f))) -> Ann ann f -> m (Ann ann f)
+flowAnn = undefined
+
+markCapturedBindings' :: Monad m => ExpA Type -> CaptureM m (ExpA Type)
+markCapturedBindings' = flowAnn $ \expa@(Ann (t, _)) exp -> case exp of
+  Var n -> R.ask >>= \env -> (if S.member n env then W.tell (S.singleton n) else pure ()) >> pure (Left $ Var n)
+  Lam _ params _ body -> do
+    env <- R.ask
+    let paramsEnv = S.fromList params
+
+    (body', captured) <- W.runWriterT $ R.runReaderT (markCapturedBindings' body) (paramsEnv <> env)
+
+    W.tell (captured S.\\ paramsEnv)
+    pure $ Left $ Lam undefined params undefined body'
+  _ -> fmap Right $ transformM (pure . snd . unAnn) (markCapturedBindings' . (\f -> Ann (t, f))) expa
 
 --------------------------------------------------------------------------------
 
