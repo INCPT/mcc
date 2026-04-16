@@ -130,7 +130,7 @@ data Diff1 exp
   | D1_Add2 exp [exp]
   | D1_Mul (Maybe (Either String [exp])) exp
   | D1_FuncRef Int
-  deriving (Functor, Foldable, Traversable)
+  -- deriving (Functor, Foldable, Traversable)
 
 -- Generating a BiPlate Instance:
 -- -------------------------------
@@ -169,7 +169,7 @@ instance TraversableBi Sum1 Value Diff1 where
   traverseBi g f (S1_Arr as) = Arr <$> traverse g as
 
   traverseBi g f (S1_Add a b) = f =<< (D1_Add <$> g a <*> g b)
-  traverseBi g f (S1_Add2 a b) = f =<< (D1_Add2 <$> g a <*> (traverse g b))
+  traverseBi g f (S1_Add2 a b) = f =<< (D1_Add2 <$> g a <*> traverse g b)
 
   traverseBi g f _ = undefined
 
