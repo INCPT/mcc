@@ -296,6 +296,7 @@ transformGeneric trans wrapped = do
     expr'' <- traverse (\child -> mjoin $ transformGeneric trans child) expr'  -- recurse
     return $ rwrap (Prelude.const expr'') wrapped
 
+{-
 -- For your capture analysis:
 markCapturedBindingsGeneric
   :: (RecursiveWrapper f, Monad m)
@@ -325,6 +326,7 @@ markCapturedBindingsGeneric = transformGeneric $ \expr -> case expr of
     return $ Lam t params bindings' body'
 
   e -> return e  -- transformGeneric handles recursion
+-}
 
 --------------------------------------------------------------------------------
 
