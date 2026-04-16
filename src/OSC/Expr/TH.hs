@@ -85,6 +85,7 @@ data Sum1 exp
   -- from Value
   = S1_Const Int
   | S1_Arr [exp]
+  | S1_Arr2 [Maybe exp]
 
   -- from Expr
   | S1_NoFields
@@ -154,6 +155,14 @@ instance BiPlate Sum1 Value Diff1 where
 
       -- Constructors from FuncRef
       S1_FuncRef a ->  f =<< pure (D1_FuncRef a)
+      _ -> undefined
+
+instance RecPlate Sum1 where
+  transformRec wmap (S1_Const n) = pure $ S1_Const n
+  transformRec wmap (S1_Arr as) = S1_Arr <$> traverse wmap as
+  transformRec wmap (S1_Arr2 as) = S1_Arr2 <$> traverse (traverse wmap) as
+  transformRec wmap (S1_Add a b) = S1_Add <$> wmap a <*> wmap b
+  transformRec _ _ = undefined
 
 -- Helper functions ------------------------------------------------------------
 

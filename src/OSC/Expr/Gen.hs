@@ -10,8 +10,7 @@ module OSC.Expr.Gen where
 import qualified OSC.Expr.Comp as C
 import qualified OSC.Expr.Base as B
 import OSC.Expr.Base
-import OSC.Expr.Plate (Wrap (..))
-import OSC.Expr.Functors (Fix (..))
+import OSC.Expr.Functors (Fix (..), Wrap (..))
 
 import Test.QuickCheck
 import Control.Monad (replicateM)

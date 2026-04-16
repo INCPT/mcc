@@ -6,30 +6,16 @@
 
 module OSC.Expr.Functors where
 
-import Control.Monad.Identity (Identity(..))
 import qualified Control.Monad.Reader as R
-import qualified Control.Monad.State as ST
 
 class Wrap f where
   wrap :: exp (f exp) -> f exp
 
 class WFunctor f where
-  wmapM :: Functor m => (exp (f exp) -> m (exp (f exp))) -> f exp -> m (f exp)
+  wmapM :: Functor m => (exp (f exp) -> m (exp' (f exp'))) -> f exp -> m (f exp')
 
-class WMonad f where
-  wbind :: Functor m => (f exp -> m (exp (f exp))) -> f exp -> m (f exp)
-
--- Generic transformation using WFunctor and WMonad
-transformGeneric2
-  :: (WFunctor f, Traversable expr, Monad m)
-  => (expr (f expr) -> m (expr (f expr)))  -- transformer
-  -> f expr
-  -> m (f expr)
-transformGeneric2 trans wrapped = 
-  wmapM (\expr -> do
-    expr' <- trans expr
-    traverse (transformGeneric2 trans) expr'
-  ) wrapped
+class Unwrap f where
+  unwrap :: f exp -> expr (f exp)
 
 -- Simple recursive type
 newtype Fix f = Fix { unFix :: f (Fix f) }
@@ -84,40 +70,12 @@ deriving instance (Show k, Show (f (Dag k f))) => Show (Dag k f)
 instance Wrap (Dag k) where
   wrap = Node
 
--- RecursiveWrapper instances --------------------------------------------------
-
--- Helper newtype for Dag's resolver that hides the expr parameter
-newtype DagResolver k = DagResolver { runDagResolver :: forall expr. k -> Dag k expr }
-
-class RecursiveWrapper f where
-  type WrapContext f :: * -> *
-  runwrap :: Functor expr => f expr -> WrapContext f (expr (f expr))
-  rwrap :: (expr (f expr) -> expr (f expr)) -> f expr -> f expr
-
-instance RecursiveWrapper Fix where
-  type WrapContext Fix = Identity
-  runwrap (Fix f) = Identity f
-  rwrap modify (Fix f) = Fix (modify f)
-
-instance RecursiveWrapper (Ann ann) where
-  type WrapContext (Ann ann) = Identity
-  runwrap (Ann (ann, f)) = Identity f
-  rwrap modify (Ann (ann, f)) = Ann (ann, modify f)
-
-instance RecursiveWrapper (Dag k) where
-  type WrapContext (Dag k) = R.Reader (DagResolver k)
-  runwrap (Node f) = return f
-  runwrap (Key k) = do
-    DagResolver resolve <- R.ask
-    runwrap (resolve k)
-  rwrap modify (Node f) = Node (modify f)
-  -- Keys cannot be modified in place - they must be resolved first via runwrap
-  -- If this case is reached, it indicates a bug in the transformation logic
-  rwrap _modify (Key k) = error "rwrap: cannot modify a Dag Key directly - it must be resolved first"
-
 -- Higher order variants -------------------------------------------------------
 
-data AnnF ann f r = AnnF ann (f r)
+data AnnF ann r f = AnnF ann (f r)
+
+-- instance WFunctor (AnnF ann r) where
+--   wmapM f (AnnF ann r) = AnnF ann <$> f r
 
 data DagF k f r = NodeF (f r) | KeyF k
 

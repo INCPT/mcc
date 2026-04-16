@@ -824,8 +824,8 @@ instance Monoid GlobalsEnv where mempty = GlobalsEnv mempty mempty
 -- Returns:
 --   - Updated function map with global bindings and substitutions applied
 --   - GlobalsEnv containing the substitution map and global variable types
-markCapturedBindings :: Map FuncRef (Set Ident) -> Map FuncRef Func -> Unique (Map FuncRef Func, GlobalsEnv)
-markCapturedBindings freeVarMap funcRefMap = do
+markCapturedBindings' :: Map FuncRef (Set Ident) -> Map FuncRef Func -> Unique (Map FuncRef Func, GlobalsEnv)
+markCapturedBindings' freeVarMap funcRefMap = do
   (funcRefMapWithGlobalBindings, genv) <- W.runWriterT $ sequenceA (M.mapWithKey go funcRefMap)
   pure (M.mapWithKey (substituteVars genv.substMap) funcRefMapWithGlobalBindings, genv)
   where
@@ -961,7 +961,7 @@ compileExprs toplevelMap = runUnique $ do
   let (toplevelMap', env) = flip ST.runState (AbsEnv mempty 0) $ traverse gatherAbstractions toplevelMap
   let freeVarMap = gatherFreeVars env.funcRefMap
 
-  (funcRefMap, genv) <- markCapturedBindings freeVarMap env.funcRefMap
+  (funcRefMap, genv) <- markCapturedBindings' freeVarMap env.funcRefMap
   
   -- TODO
   let optimize = id
@@ -973,7 +973,7 @@ compileExpr expr = runUnique $ do
   let (expr', env) = flip ST.runState (AbsEnv mempty 0) $ gatherAbstractions expr
   let freeVarMap = gatherFreeVars env.funcRefMap
 
-  (funcRefMap, genv) <- markCapturedBindings freeVarMap env.funcRefMap
+  (funcRefMap, genv) <- markCapturedBindings' freeVarMap env.funcRefMap
   
   -- TODO
   let optimize = id
