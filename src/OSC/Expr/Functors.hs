@@ -71,22 +71,22 @@ instance Wrap (Dag k) where
 -- RecursiveWrapper instances --------------------------------------------------
 
 class RecursiveWrapper f where
-  type WrapContext f expr :: * -> *
-  runwrap :: f expr -> WrapContext f expr (expr (f expr))
+  type WrapContext f :: * -> *
+  runwrap :: Functor expr => f expr -> WrapContext f (expr (f expr))
   rwrap :: (expr (f expr) -> expr (f expr)) -> f expr -> f expr
 
 instance RecursiveWrapper Fix where
-  type WrapContext Fix expr = Identity
+  type WrapContext Fix = Identity
   runwrap (Fix f) = Identity f
   rwrap modify (Fix f) = Fix (modify f)
 
 instance RecursiveWrapper (Ann ann) where
-  type WrapContext (Ann ann) expr = Identity
+  type WrapContext (Ann ann) = Identity
   runwrap (Ann (ann, f)) = Identity f
   rwrap modify (Ann (ann, f)) = Ann (ann, modify f)
 
 instance RecursiveWrapper (Dag k) where
-  type WrapContext (Dag k) expr = R.Reader (k -> Dag k expr)
+  type WrapContext (Dag k) = R.Reader (k -> Dag k expr)
   runwrap (Node f) = return f
   runwrap (Key k) = R.ask >>= \resolve -> runwrap (resolve k)
   rwrap modify (Node f) = Node (modify f)

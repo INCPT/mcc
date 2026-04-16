@@ -279,7 +279,7 @@ dbgInfer expr = case fmap (hoistAnn snd) $ E.runExcept $ flip R.runReaderT mempt
 
 -- Better approach: Make the recursion explicit and require a runner
 class RecursiveWrapper f => RunnableWrapper f where
-  runWrapContext :: WrapContext f expr a -> a
+  runWrapContext :: WrapContext f a -> a
 
 instance RunnableWrapper Fix where
   runWrapContext = runIdentity
@@ -294,7 +294,7 @@ runWrapContextDag resolver = flip R.runReader resolver
 -- Now transformGeneric can work:
 transformGeneric
   :: (RunnableWrapper f, Traversable expr, Monad m)
-  => (forall a. WrapContext f expr a -> a)  -- explicit runner
+  => (forall a. WrapContext f a -> a)  -- explicit runner
   -> (expr (f expr) -> m (expr (f expr)))  -- transformer
   -> f expr
   -> m (f expr)
