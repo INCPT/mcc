@@ -291,7 +291,7 @@ transformGeneric2 trans = wmapM $ \expr -> do
 
 -- For your capture analysis:
 markCapturedBindingsGeneric :: (WFunctor f, Monad m) => f Expr -> CaptureM m (f Expr)
-markCapturedBindingsGeneric = transformGeneric2 $ \expr -> case expr of
+markCapturedBindingsGeneric = wmapM $ \expr -> case expr of
   Var n -> do
     env <- R.ask
     when (S.member n env) $ W.tell (S.singleton n)
@@ -301,7 +301,7 @@ markCapturedBindingsGeneric = transformGeneric2 $ \expr -> case expr of
     env <- R.ask
     let paramsEnv = S.fromList params
 
-    -- Process bindings
+    -- Process bindings recursively
     bindings' <- forM bindings $ \(n, e) -> do
       -- Capture analysis for each binding in the context of params
       (e', captured) <- W.listen $ R.local (paramsEnv <>) (markCapturedBindingsGeneric e)
@@ -309,7 +309,7 @@ markCapturedBindingsGeneric = transformGeneric2 $ \expr -> case expr of
       W.tell (captured S.\\ paramsEnv)
       pure (n, e')
 
-    -- Process body and capture free vars
+    -- Process body recursively and capture free vars
     let bindingNames = S.fromList (fmap fst bindings)
     (body', captured) <- W.listen $
       R.local ((paramsEnv <> bindingNames) <>) (markCapturedBindingsGeneric body)
@@ -323,13 +323,13 @@ markCapturedBindingsGeneric = transformGeneric2 $ \expr -> case expr of
     env <- R.ask
     let paramEnv = S.singleton param
 
-    -- Process bindings
+    -- Process bindings recursively
     bindings' <- forM bindings $ \(n, e) -> do
       (e', captured) <- W.listen $ R.local (paramEnv <>) (markCapturedBindingsGeneric e)
       W.tell (captured S.\\ paramEnv)
       pure (n, e')
 
-    -- Process body
+    -- Process body recursively
     let bindingNames = S.fromList (fmap fst bindings)
     (body', captured) <- W.listen $
       R.local ((paramEnv <> bindingNames) <>) (markCapturedBindingsGeneric body)
@@ -338,7 +338,8 @@ markCapturedBindingsGeneric = transformGeneric2 $ \expr -> case expr of
 
     pure $ Rec t delay param bindings' body'
 
-  _ -> pure expr
+  -- Generic case: recursively process all children
+  e -> transformM (pure . snd . unAnn) (markCapturedBindingsGeneric . wrap) e
 
 --------------------------------------------------------------------------------
 
