@@ -16,7 +16,7 @@ import qualified Data.Foldable as F
 
 import Language.Haskell.TH
 
-import OSC.Expr.Functors (Wrap (wrap))
+import OSC.Expr.Functors (Wrap (wrap), WFunctor (..))
 import OSC.Expr.Plate
 
 -- Documentation ---------------------------------------------------------------
@@ -85,11 +85,11 @@ data Sum1 exp
   -- from Value
   = S1_Const Int
   | S1_Arr [exp]
-  | S1_Arr2 [Maybe exp]
 
   -- from Expr
   | S1_NoFields
   | S1_Add exp exp
+  | S1_Add2 exp [exp]
   | S1_Mul (Maybe (Either String [exp])) exp
 
   -- from FuncRef
@@ -127,6 +127,7 @@ instance Plate Sum1 where
 data Diff1 exp
   = D1_NoFields
   | D1_Add exp exp
+  | D1_Add2 exp [exp]
   | D1_Mul (Maybe (Either String [exp])) exp
   | D1_FuncRef Int
   deriving (Functor, Foldable, Traversable)
@@ -160,9 +161,17 @@ instance BiPlate Sum1 Value Diff1 where
 instance RecPlate Sum1 where
   transformRec wmap (S1_Const n) = pure $ S1_Const n
   transformRec wmap (S1_Arr as) = S1_Arr <$> traverse wmap as
-  transformRec wmap (S1_Arr2 as) = S1_Arr2 <$> traverse (traverse wmap) as
   transformRec wmap (S1_Add a b) = S1_Add <$> wmap a <*> wmap b
   transformRec _ _ = undefined
+
+instance TraversableBi Sum1 Value Diff1 where
+  traverseBi g f (S1_Const n) = Const <$> pure n
+  traverseBi g f (S1_Arr as) = Arr <$> traverse g as
+
+  traverseBi g f (S1_Add a b) = f =<< (D1_Add <$> g a <*> g b)
+  traverseBi g f (S1_Add2 a b) = f =<< (D1_Add2 <$> g a <*> (traverse g b))
+
+  traverseBi g f _ = undefined
 
 -- Helper functions ------------------------------------------------------------
 

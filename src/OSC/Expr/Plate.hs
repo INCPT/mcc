@@ -5,6 +5,7 @@
 
 module OSC.Expr.Plate where
 
+import OSC.Expr.Functors (WFunctor)
 import Data.Foldable (foldl)
 import Data.Functor.Identity (Identity (runIdentity))
 
@@ -29,6 +30,16 @@ class BiPlate a b c | a c -> b, b c -> a, a b -> c where
 
     -> f a
     -> m (f' b)
+
+class TraversableBi a b c | a c -> b, b c -> a, a b -> c where
+  traverseBi
+    :: Monad m
+    => (f a -> m (f' b))
+
+    -> (c (f' b) -> m (b (f' b)))
+    -> a (f a)
+    -> m (b (f' b))
+  traverseBi = undefined
 
 type Unwrap f = forall a. f a -> a (f a)
 

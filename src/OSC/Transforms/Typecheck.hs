@@ -285,14 +285,14 @@ type CaptureM = R.ReaderT (Set Ident) (W.WriterT (Set Ident) (ST.State (Set Iden
 runCapture :: CaptureM a -> ((a, Set Ident), Set Ident)
 runCapture = runIdentity . flip ST.runStateT mempty . W.runWriterT . flip R.runReaderT mempty
 
-markCapturedBindings :: WFunctor f => f Expr -> CaptureM (f Expr)
+markCapturedBindings :: WFunctor f => f Expr -> CaptureM (f Expr1)
 markCapturedBindings = wmapM go
   where
     go (Var n) = do
       env <- R.ask
       -- Add to captured set if var doesn't reference the params or bindings of the current lambda/rec block
       unless (S.member n env) $ W.tell (S.singleton n)
-      pure (Var n)
+      pure (E_Var n)
 
     go (Lam t params bindings body) = do
       let paramsEnv = S.fromList params
@@ -317,7 +317,7 @@ markCapturedBindings = wmapM go
         | captured <- S.toList (capturedByBindings <> capturedByBody)
         ]
 
-      pure $ Lam t params bindings' body'
+      pure $ E_Lam t params bindings' body'
 
     go (Rec t delay param bindings body) = do
       let paramEnv = S.singleton param
@@ -342,10 +342,10 @@ markCapturedBindings = wmapM go
         | captured <- S.toList (capturedByBindings <> capturedByBody)
         ]
 
-      pure $ Rec t delay param bindings' body'
+      pure undefined -- $ Rec t delay param bindings' body'
 
     -- Generic case: recursively process all children
-    go e = traverse (wmapM go) e
+    go e = traverseBi (wmapM go) undefined e
 
 --------------------------------------------------------------------------------
 
