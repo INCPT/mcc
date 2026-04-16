@@ -345,7 +345,7 @@ markCapturedBindings = rtraverse go
       pure undefined -- $ Rec t delay param bindings' body'
 
     -- Generic case: recursively process all children
-    go e = traverseBi (rtraverse go) undefined e
+    go e = bitraverse (rtraverse go) undefined e
 
 --------------------------------------------------------------------------------
 

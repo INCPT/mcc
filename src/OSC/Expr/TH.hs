@@ -243,6 +243,7 @@ matchSumConstructors sumPrefix sumCons subsetMap onSubset onDiff =
             onSubset sumCon (subsetConName, subsetFields) baseName
           Nothing -> onDiff sumCon baseName
 
+-- TODO: specialize once BiPlate is gone
 -- Build a constructor application with transformed fields using <$> and <*>
 -- Takes a field transformation function as a parameter
 genConstructorAppWith :: Name -> [BangType] -> [Name] -> (Type -> Name -> Q Exp) -> Q Exp
@@ -455,6 +456,8 @@ genBiPlateInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefix diff
         (AppT (AppT (AppT (ConT ''BiPlate) (ConT sumTypeName)) (ConT destTypeName)) (ConT diffTypeName))
         [FunD 'transformBiM [transformClause]]
     ]
+
+--------------------------------------------------------------------------------
 
 genBitraversableInstance :: String -> Name -> String -> Name -> String -> Name -> Q [Dec]
 genBitraversableInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefix diffTypeName = do
