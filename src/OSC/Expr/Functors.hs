@@ -1,6 +1,7 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module OSC.Expr.Functors where
 
@@ -69,6 +70,11 @@ instance Wrap (Dag k) where
 
 -- RecursiveWrapper instances --------------------------------------------------
 
+class RecursiveWrapper f where
+  type WrapContext f :: * -> *
+  runwrap :: f expr -> WrapContext f (expr (f expr))
+  rwrap :: (expr (f expr) -> expr (f expr)) -> f expr -> f expr
+
 instance RecursiveWrapper Fix where
   type WrapContext Fix = Identity
   runwrap (Fix f) = Identity f
@@ -80,7 +86,7 @@ instance RecursiveWrapper (Ann ann) where
   rwrap modify (Ann (ann, f)) = Ann (ann, modify f)
 
 instance RecursiveWrapper (Dag k) where
-  type WrapContext (Dag k) = Reader (k -> Dag k expr)
+  type WrapContext (Dag k) = R.Reader (k -> Dag k expr)
   runwrap (Node f) = return f
   runwrap (Key k) = ask >>= \resolve -> runwrap (resolve k)
   rwrap modify (Node f) = Node (modify f)

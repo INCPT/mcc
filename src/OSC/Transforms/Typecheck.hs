@@ -277,11 +277,6 @@ dbgInfer expr = case fmap (hoistAnn snd) $ E.runExcept $ flip R.runReaderT mempt
 
 --------------------------------------------------------------------------------
 
-class RecursiveWrapper f where
-  type WrapContext f :: * -> *
-  runwrap :: f expr -> WrapContext f (expr (f expr))
-  rwrap :: (expr (f expr) -> expr (f expr)) -> f expr -> f expr
-
 -- Better approach: Make the recursion explicit and require a runner
 class RecursiveWrapper f => RunnableWrapper f where
   runWrapContext :: WrapContext f a -> a
