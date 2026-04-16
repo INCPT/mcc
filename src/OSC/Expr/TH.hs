@@ -7,7 +7,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module OSC.Expr.TH (Plate (..), BiPlate (..), Empty, genSum, genDiff, genPlateInstance, genBiPlateInstance, genSmartConstructors, universe, transformM, transform) where
+module OSC.Expr.TH (BiPlate (..), Empty, genSum, genDiff, genBiPlateInstance, genSmartConstructors, universe, transformM, transform) where
 
 import Control.Monad (forM_, forM, foldM, unless, when)
 import Data.Char (toLower)
@@ -95,26 +95,6 @@ data Sum1 exp
   -- from FuncRef
   | S1_FuncRef Int
   deriving (Functor, Foldable, Traversable)
-
--- Generating a Plate Instance:
--- -----------------------------
---
--- $(genPlateInstance ''Sum1)
---
--- This generates a Plate instance that enables generic traversal over the
--- recursive structure. The descend function unwraps each expression, attempts
--- to extract a value, and recursively descends into subexpressions:
-
-instance Plate Sum1 where
-  descendM unwrap expr = do
-    inner <- unwrap expr
-    case inner of
-      S1_Const _ -> pure []
-      S1_NoFields -> pure []
-      S1_Arr exprs -> pure $ mconcat [ F.toList exprs ]
-      S1_Add exp1 exp2 -> pure $ mconcat [ [ exp1 ], [ exp2 ] ]
-      S1_Mul exp1 exp2 -> pure $ mconcat [ foldList $ F.toList $ foldList $ F.toList exp1, [ exp2 ] ]
-      S1_FuncRef _ -> pure []
 
 -- Creating a Difference Type:
 -- ----------------------------
@@ -362,74 +342,6 @@ genDiff prefix diffName sumPrefix sumTypeName subsetPrefix subsetTypeName = do
   let diffDataDec = DataD [] diffTypeName [PlainTV expVar BndrReq] Nothing diffConsDecls' []
 
   pure [diffDataDec]
-
---------------------------------------------------------------------------------
-
-genPlateInstance :: Name -> Q [Dec]
-genPlateInstance typeName = do
-  info <- reify typeName
-  let cons = getConstructors info
-  
-  let unwrapVar = mkName "unwrap"
-  let exprVar = mkName "expr"
-  let innerVar = mkName "inner"
-
-  -- Build pattern matches for each constructor
-  matches <- forM cons $ \(conName, fields) -> do
-    genDescendMatch conName fields
-
-  let descendBody = DoE Nothing
-        [ BindS (VarP innerVar) (AppE (VarE unwrapVar) (VarE exprVar))
-        , NoBindS (CaseE (VarE innerVar) matches)
-        ]
-
-  let descendClause = Clause 
-        [VarP unwrapVar, VarP exprVar]
-        (NormalB descendBody)
-        []
-
-  pure
-    [ InstanceD Nothing [] 
-        (AppT (ConT ''Plate) (ConT typeName))
-        [FunD 'descendM [descendClause]]
-    ]
-
-genDescendMatch :: Name -> [BangType] -> Q Match
-genDescendMatch conName fields = do
-  fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_exp" ++ show i)
-  
-  let pat = ConP conName [] (fmap VarP fieldVars)
-  
-  -- Filter to only recursive fields (those containing the type variable)
-  let recursiveFields = [ (f, v) | (f@(_, typ), v) <- zip fields fieldVars, isRecursiveType typ ]
-  
-  body <- if null recursiveFields
-    then [| pure [] |]
-    else genDescendBody recursiveFields
-
-  pure $ Match pat (NormalB body) []
-
-genDescendBody :: [((Bang, Type), Name)] -> Q Exp
-genDescendBody recursiveFields = do
-  -- Generate field collection expressions based on container depth
-  let genFieldExpr depth var =
-        if depth == 0
-          then [| [ $(varE var) ] |]
-          else if depth == 1
-            then [| F.toList $(varE var) |]
-            else do
-              -- For depth > 1, use foldList to flatten nested containers
-              let buildLayers 1 = varE var
-                  buildLayers n = [| foldList $ F.toList $(buildLayers (n-1)) |]
-              buildLayers depth
-
-  -- Build list of field expressions
-  fieldExprs <- forM recursiveFields $ \((_, typ), var) -> do
-    let depth = containerDepth typ
-    genFieldExpr depth var
-  
-  -- Combine with mconcat
-  [| pure $ mconcat $(pure $ ListE fieldExprs) |]
 
 --------------------------------------------------------------------------------
 

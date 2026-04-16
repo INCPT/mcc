@@ -12,16 +12,6 @@ import Data.Functor.Identity (Identity (runIdentity))
 
 data Empty exp
 
-class Plate expr where
-  descendM :: Monad m
-    => (f expr -> m (expr (f expr)))  -- | Unrwap
-
-    -> f expr
-    -> m [f expr]
-
--- universe :: Plate expr => (f expr -> expr (f expr)) -> f expr -> [f expr]
--- universe unwrap expr = expr:((\children -> children <> concatMap (universe unwrap) children) $ runIdentity $ descendM (fmap pure unwrap) expr)
-
 class BiPlate a b c | a c -> b, b c -> a, a b -> c where
   transformBiM :: Monad m
     => (f a -> m (a (f a)))   -- | Unwrap
