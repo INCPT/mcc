@@ -96,7 +96,9 @@ instance RecursiveWrapper (Dag k) where
     DagResolver resolve <- R.ask
     runwrap (resolve k)
   rwrap modify (Node f) = Node (modify f)
-  rwrap modify (Key k) = Key k
+  -- Keys cannot be modified in place - they must be resolved first via runwrap
+  -- If this case is reached, it indicates a bug in the transformation logic
+  rwrap _modify (Key k) = error "rwrap: cannot modify a Dag Key directly - it must be resolved first"
 
 -- Higher order variants -------------------------------------------------------
 
