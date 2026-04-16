@@ -279,57 +279,23 @@ dbgInfer expr = case fmap (hoistAnn snd) $ E.runExcept $ flip R.runReaderT mempt
 
 --------------------------------------------------------------------------------
 
--- Better approach: Make the recursion explicit and require a runner
-class RecursiveWrapper f => RunnableWrapper f where
-  runWrapContext :: f expr -> WrapContext f a -> a
-
-instance RunnableWrapper Fix where
-  runWrapContext _ = runIdentity
-
-instance RunnableWrapper (Ann ann) where
-  runWrapContext _ = runIdentity
-
--- For Dag, you need to provide the resolver when running
-runWrapContextDag :: (forall expr. k -> Dag k expr) -> R.Reader (DagResolver k) a -> a
-runWrapContextDag resolver = flip R.runReader (DagResolver resolver)
-
--- Specialized transform for Dag that requires a resolver
-transformDag
-  :: forall k expr m. (Traversable expr, Monad m)
-  => (forall e. k -> Dag k e)  -- resolver
-  -> (expr (Dag k expr) -> m (expr (Dag k expr)))  -- transformer
-  -> Dag k expr
-  -> m (Dag k expr)
-transformDag resolver trans wrapped = 
-  let expr' = runWrapContextDag resolver $ runwrap wrapped
-  in do
-    expr'' <- trans expr'
-    expr''' <- traverse (transformDag resolver trans) expr''
-    return $ rwrap (Prelude.const expr''') wrapped
-
--- Now transformGeneric can work:
-transformGeneric
-  :: forall f expr m. (RunnableWrapper f, Traversable expr, Monad m)
+-- Generic transformation using WFunctor and WMonad
+transformGeneric2
+  :: (WFunctor f, Traversable expr, Monad m)
   => (expr (f expr) -> m (expr (f expr)))  -- transformer
   -> f expr
   -> m (f expr)
-transformGeneric trans wrapped = 
-  let expr' = runWrapContext wrapped $ runwrap wrapped
-  in do
-    expr'' <- trans expr'
-    expr''' <- traverse (transformGeneric trans) expr''
-    return $ rwrap (Prelude.const expr''') wrapped
+transformGeneric2 trans = wmapM $ \expr -> do
+  expr' <- trans expr
+  traverse (transformGeneric2 trans) expr'
 
 -- For your capture analysis:
-markCapturedBindingsGeneric
-  :: (RunnableWrapper f, Monad m)
-  => f Expr
-  -> CaptureM m (f Expr)
-markCapturedBindingsGeneric = transformGeneric $ \expr -> case expr of
+markCapturedBindingsGeneric :: (WFunctor f, Monad m) => f Expr -> CaptureM m (f Expr)
+markCapturedBindingsGeneric = transformGeneric2 $ \expr -> case expr of
   Var n -> do
     env <- R.ask
     when (S.member n env) $ W.tell (S.singleton n)
-    return (Var n)
+    pure (Var n)
 
   Lam t params bindings body -> do
     env <- R.ask
@@ -339,19 +305,19 @@ markCapturedBindingsGeneric = transformGeneric $ \expr -> case expr of
     bindings' <- forM bindings $ \(n, e) -> do
       -- Capture analysis for each binding in the context of params
       (e', captured) <- W.listen $ R.local (paramsEnv <>) (markCapturedBindingsGeneric e)
-      -- Propagate captures excluding params
+      -- Propagate captured excluding params
       W.tell (captured S.\\ paramsEnv)
-      return (n, e')
+      pure (n, e')
 
     -- Process body and capture free vars
     let bindingNames = S.fromList (fmap fst bindings)
     (body', captured) <- W.listen $
-      R.local (paramsEnv <> bindingNames <>) (markCapturedBindingsGeneric body)
+      R.local ((paramsEnv <> bindingNames) <>) (markCapturedBindingsGeneric body)
 
     -- Propagate captures excluding params and bindings
     W.tell (captured S.\\ (paramsEnv <> bindingNames))
 
-    return $ Lam t params bindings' body'
+    pure $ Lam t params bindings' body'
 
   Rec t delay param bindings body -> do
     env <- R.ask
@@ -361,18 +327,18 @@ markCapturedBindingsGeneric = transformGeneric $ \expr -> case expr of
     bindings' <- forM bindings $ \(n, e) -> do
       (e', captured) <- W.listen $ R.local (paramEnv <>) (markCapturedBindingsGeneric e)
       W.tell (captured S.\\ paramEnv)
-      return (n, e')
+      pure (n, e')
 
     -- Process body
     let bindingNames = S.fromList (fmap fst bindings)
     (body', captured) <- W.listen $
-      R.local (paramEnv <> bindingNames <>) (markCapturedBindingsGeneric body)
+      R.local ((paramEnv <> bindingNames) <>) (markCapturedBindingsGeneric body)
 
     W.tell (captured S.\\ (paramEnv <> bindingNames))
 
-    return $ Rec t delay param bindings' body'
+    pure $ Rec t delay param bindings' body'
 
-  _ -> return expr  -- transformGeneric handles recursion for other cases
+  _ -> pure expr
 
 --------------------------------------------------------------------------------
 
