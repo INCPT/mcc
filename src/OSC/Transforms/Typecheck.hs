@@ -5,7 +5,7 @@
 
 module OSC.Transforms.Typecheck where
 
-import Control.Monad (when)
+import Control.Monad (forM, when)
 import Control.Monad.Identity (Identity(..), runIdentity)
 import Control.Monad.Trans.Class (lift)
 import qualified Control.Monad.Reader as R
@@ -320,10 +320,9 @@ transformGeneric trans wrapped =
     expr''' <- traverse (transformGeneric trans) expr''
     return $ rwrap (Prelude.const expr''') wrapped
 
-{-
 -- For your capture analysis:
 markCapturedBindingsGeneric
-  :: (RecursiveWrapper f, Monad m)
+  :: (RunnableWrapper f, Monad m)
   => f Expr
   -> CaptureM m (f Expr)
 markCapturedBindingsGeneric = transformGeneric $ \expr -> case expr of
@@ -337,20 +336,43 @@ markCapturedBindingsGeneric = transformGeneric $ \expr -> case expr of
     let paramsEnv = S.fromList params
 
     -- Process bindings
-    bindings' <- forM bindings $ \(n, e) ->
-      (n,) <$> R.local (paramsEnv <>) (markCapturedBindingsGeneric e)
+    bindings' <- forM bindings $ \(n, e) -> do
+      -- Capture analysis for each binding in the context of params
+      (e', captured) <- W.listen $ R.local (paramsEnv <>) (markCapturedBindingsGeneric e)
+      -- Propagate captures excluding params
+      W.tell (captured S.\\ paramsEnv)
+      return (n, e')
 
     -- Process body and capture free vars
+    let bindingNames = S.fromList (fmap fst bindings)
     (body', captured) <- W.listen $
-      R.local (paramsEnv <>) (markCapturedBindingsGeneric body)
+      R.local (paramsEnv <> bindingNames <>) (markCapturedBindingsGeneric body)
 
-    -- Propagate captures excluding params
-    W.tell (captured S.\\ paramsEnv)
+    -- Propagate captures excluding params and bindings
+    W.tell (captured S.\\ (paramsEnv <> bindingNames))
 
     return $ Lam t params bindings' body'
 
-  e -> return e  -- transformGeneric handles recursion
--}
+  Rec t delay param bindings body -> do
+    env <- R.ask
+    let paramEnv = S.singleton param
+
+    -- Process bindings
+    bindings' <- forM bindings $ \(n, e) -> do
+      (e', captured) <- W.listen $ R.local (paramEnv <>) (markCapturedBindingsGeneric e)
+      W.tell (captured S.\\ paramEnv)
+      return (n, e')
+
+    -- Process body
+    let bindingNames = S.fromList (fmap fst bindings)
+    (body', captured) <- W.listen $
+      R.local (paramEnv <> bindingNames <>) (markCapturedBindingsGeneric body)
+
+    W.tell (captured S.\\ (paramEnv <> bindingNames))
+
+    return $ Rec t delay param bindings' body'
+
+  _ -> return expr  -- transformGeneric handles recursion for other cases
 
 --------------------------------------------------------------------------------
 
