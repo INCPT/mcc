@@ -14,6 +14,7 @@ import qualified Control.Monad.Writer as W
 
 import Data.Map (Map)
 import qualified Data.Map as M
+import Data.Proxy (Proxy(..))
 import Data.Set (Set)
 import qualified Data.Set as S
 import qualified Data.Graph as G
@@ -313,7 +314,7 @@ transformGeneric
   -> f expr
   -> m (f expr)
 transformGeneric trans wrapped = 
-  let expr' = runWrapContext (Nothing :: Maybe (f expr)) $ runwrap wrapped
+  let expr' = runWrapContext (Proxy :: Proxy f) $ runwrap wrapped
   in do
     expr'' <- trans expr'
     expr''' <- traverse (transformGeneric trans) expr''
