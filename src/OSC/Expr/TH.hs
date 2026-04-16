@@ -244,18 +244,25 @@ matchSumConstructors sumPrefix sumCons subsetMap onSubset onDiff =
           Nothing -> onDiff sumCon baseName
 
 -- Build a constructor application with transformed fields using <$> and <*>
-genConstructorApp :: Name -> [BangType] -> [Name] -> Name -> Name -> Name -> Q Exp
-genConstructorApp conName fields fieldVars unwrapVar wrapVar fVar = do
+-- Takes a field transformation function as a parameter
+genConstructorAppWith :: Name -> [BangType] -> [Name] -> (Type -> Name -> Q Exp) -> Q Exp
+genConstructorAppWith conName fields fieldVars transformField = do
   transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
-    genFieldTransform typ var unwrapVar wrapVar fVar
+    transformField typ var
   
   let con = conE conName
   case transformedFields of
-    [] -> error "genConstructorApp: empty fields"
+    [] -> error "genConstructorAppWith: empty fields"
     [field] -> [| $(con) <$> $(pure field) |]
     (field:rest) -> do
       initial <- [| $(con) <$> $(pure field) |]
       foldM (\acc f -> [| $(pure acc) <*> $(pure f) |]) initial rest
+
+-- Build a constructor application with transformed fields using <$> and <*>
+genConstructorApp :: Name -> [BangType] -> [Name] -> Name -> Name -> Name -> Q Exp
+genConstructorApp conName fields fieldVars unwrapVar wrapVar fVar =
+  genConstructorAppWith conName fields fieldVars $ \typ var ->
+    genFieldTransform typ var unwrapVar wrapVar fVar
 
 --------------------------------------------------------------------------------
 
@@ -581,17 +588,8 @@ genBitraverseSubsetMatch sumConName destConName fields gVar = do
  
   body <- if null fields
     then [| pure $(conE destConName) |]
-    else do
-      transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
-        genBitraverseFieldTransform typ var gVar
-      
-      let con = conE destConName
-      case transformedFields of
-        [] -> error "genBitraverseSubsetMatch: empty fields"
-        [field] -> [| $(con) <$> $(pure field) |]
-        (field:rest) -> do
-          initial <- [| $(con) <$> $(pure field) |]
-          foldM (\acc f -> [| $(pure acc) <*> $(pure f) |]) initial rest
+    else genConstructorAppWith destConName fields fieldVars $ \typ var ->
+      genBitraverseFieldTransform typ var gVar
 
   pure $ Match pat (NormalB body) []
 
@@ -605,17 +603,8 @@ genBitraverseDiffMatch sumConName diffConName fields gVar fVar = do
   body <- if null fields
     then [| $(varE fVar) =<< pure $(conE diffConName) |]
     else do
-      transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
+      conApp <- genConstructorAppWith diffConName fields fieldVars $ \typ var ->
         genBitraverseFieldTransform typ var gVar
-      
-      let con = conE diffConName
-      conApp <- case transformedFields of
-        [] -> error "genBitraverseDiffMatch: empty fields"
-        [field] -> [| $(con) <$> $(pure field) |]
-        (field:rest) -> do
-          initial <- [| $(con) <$> $(pure field) |]
-          foldM (\acc f -> [| $(pure acc) <*> $(pure f) |]) initial rest
-      
       [| $(varE fVar) =<< $(pure conApp) |]
 
   pure $ Match pat (NormalB body) []
