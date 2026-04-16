@@ -16,6 +16,9 @@ class Wrap f where
 class WFunctor f where
   wmapM :: Functor m => (exp (f exp) -> m (exp (f exp))) -> f exp -> m (f exp)
 
+class WMonad f where
+  wbind :: Functor m => (f exp -> m (exp (f exp))) -> f exp -> m (f exp)
+
 -- Simple recursive type
 newtype Fix f = Fix { unFix :: f (Fix f) }
 
