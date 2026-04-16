@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module OSC.Transforms.Typecheck where
 
@@ -275,36 +276,115 @@ dbgInfer expr = case fmap (hoistAnn snd) $ E.runExcept $ flip R.runReaderT mempt
 
 --------------------------------------------------------------------------------
 
+class RecursiveWrapper f where
+  type WrapContext f :: * -> *
+  runwrap :: f expr -> WrapContext f (expr (f expr))
+  rwrap :: (expr (f expr) -> expr (f expr)) -> f expr -> f expr
+
+mjoin :: Monad m => m (m a) -> m a
+mjoin = undefined
+
+transformGeneric
+  :: (RecursiveWrapper f, Traversable expr, Monad m, Monad (WrapContext f))
+  => (expr (f expr) -> m (expr (f expr)))  -- transformer
+  -> f expr
+  -> WrapContext f (m (f expr))
+transformGeneric trans wrapped = do
+  expr <- runwrap wrapped  -- unwrap in WrapContext monad
+  return $ do
+    expr' <- trans expr  -- transform in m monad
+    expr'' <- traverse (\child -> mjoin $ transformGeneric trans child) expr'  -- recurse
+    return $ rwrap (Prelude.const expr'') wrapped
+
+-- For your capture analysis:
+markCapturedBindingsGeneric
+  :: (RecursiveWrapper f, Monad m)
+  => f Expr
+  -> CaptureM m (f Expr)
+markCapturedBindingsGeneric = transformGeneric $ \expr -> case expr of
+  Var n -> do
+    env <- R.ask
+    when (S.member n env) $ W.tell (S.singleton n)
+    return (Var n)
+
+  Lam t params bindings body -> do
+    env <- R.ask
+    let paramsEnv = S.fromList params
+
+    -- Process bindings
+    bindings' <- forM bindings $ \(n, e) ->
+      (n,) <$> R.local (paramsEnv <>) (markCapturedBindingsGeneric e)
+
+    -- Process body and capture free vars
+    (body', captured) <- W.listen $
+      R.local (paramsEnv <>) (markCapturedBindingsGeneric body)
+
+    -- Propagate captures excluding params
+    W.tell (captured S.\\ paramsEnv)
+
+    return $ Lam t params bindings' body'
+
+  e -> return e  -- transformGeneric handles recursion
+
+--------------------------------------------------------------------------------
+
 type CaptureM m = R.ReaderT (Set Ident) (W.WriterT (Set Ident) m)
 
-markCapturedBindings :: R.MonadReader (Set Ident) m => W.MonadWriter (Set Ident) m => (f Expr -> m (Expr (f Expr))) -> (Expr (f Expr) -> m (f Expr)) -> f Expr -> m (f Expr)
-markCapturedBindings unwrap wrap expr = unwrap expr >>= \expr -> case expr of
+transformM2
+  :: (Empty (f' Expr) -> m (Expr (f' Expr)))
+  -> ((Expr (f Expr) -> m (Expr (f' Expr))) -> Expr (f Expr) -> m (Expr (f' Expr)))
+  -> Expr (f Expr) -> m (Expr (f' Expr))
+transformM2 = undefined
+
+markCapturedBindings'' :: Monad m => Expr (Ann Type Expr) -> CaptureM m (Expr (Ann Type Expr))
+markCapturedBindings'' = transformM2 undefined $ \fdown expr -> case expr of
+  Var n -> R.ask >>= \env -> (if S.member n env then W.tell (S.singleton n) else pure ()) >> pure (Var n)
+  Lam _ params _ body -> do
+    env <- R.ask
+    let paramsEnv = S.fromList params
+    
+    -- TODO: bindings
+
+    -- error here we'd need to unwrap
+    -- body'' <- fdown body
+    -- (body', captured) <- W.runWriterT $ R.runReaderT (markCapturedBindings'' body) (paramsEnv <> env)
+
+    -- W.tell (captured S.\\ paramsEnv)
+    -- -- and then wrap again here
+    -- pure $ Lam undefined params undefined body'
+    undefined
+  e -> fdown e
+
+markCapturedBindingsGen :: R.MonadReader (Set Ident) m => W.MonadWriter (Set Ident) m => (f Expr -> m (Expr (f Expr))) -> (Expr (f Expr) -> m (f Expr)) -> f Expr -> m (f Expr)
+markCapturedBindingsGen unwrap wrap expr = unwrap expr >>= \expr -> case expr of
   Var n -> R.ask >>= \env -> (if S.member n env then W.tell (S.singleton n) else pure ()) >> wrap (Var n)
   Lam _ params _ body -> do
     env <- R.ask
     let paramsEnv = S.fromList params
 
-    (body', captured) <- W.runWriterT $ R.runReaderT (markCapturedBindings (fmap (lift . lift) unwrap) (fmap (lift . lift) wrap) body) (paramsEnv <> env)
+    (body', captured) <- W.runWriterT $ R.runReaderT (markCapturedBindingsGen (fmap (lift . lift) unwrap) (fmap (lift . lift) wrap) body) (paramsEnv <> env)
 
     W.tell (captured S.\\ paramsEnv)
     wrap $ Lam undefined params undefined body'
-  e -> transformM unwrap (\e -> markCapturedBindings unwrap wrap =<< wrap e) =<< wrap e
+  e -> transformM unwrap (\e -> markCapturedBindingsGen unwrap wrap =<< wrap e) =<< wrap e
 
 flowAnn :: (Ann ann f -> f (Ann ann f) -> m (Either (f (Ann ann f)) (Ann ann f))) -> Ann ann f -> m (Ann ann f)
 flowAnn = undefined
 
-markCapturedBindings' :: Monad m => ExpA Type -> CaptureM m (ExpA Type)
-markCapturedBindings' = flowAnn $ \expa@(Ann (t, _)) exp -> case exp of
+markCapturedBindingsSpecific :: Monad m => ExpA Type -> CaptureM m (ExpA Type)
+markCapturedBindingsSpecific = flowAnn $ \expa@(Ann (t, _)) exp -> case exp of
   Var n -> R.ask >>= \env -> (if S.member n env then W.tell (S.singleton n) else pure ()) >> pure (Left $ Var n)
   Lam _ params _ body -> do
     env <- R.ask
     let paramsEnv = S.fromList params
+    
+    -- TODO: bindings
 
-    (body', captured) <- W.runWriterT $ R.runReaderT (markCapturedBindings' body) (paramsEnv <> env)
+    (body', captured) <- W.runWriterT $ R.runReaderT (markCapturedBindingsSpecific body) (paramsEnv <> env)
 
     W.tell (captured S.\\ paramsEnv)
     pure $ Left $ Lam undefined params undefined body'
-  _ -> fmap Right $ transformM (pure . snd . unAnn) (markCapturedBindings' . (\f -> Ann (t, f))) expa
+  _ -> fmap Right $ transformM (pure . snd . unAnn) (markCapturedBindingsSpecific . (\f -> Ann (t, f))) expa
 
 --------------------------------------------------------------------------------
 
