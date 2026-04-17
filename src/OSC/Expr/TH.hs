@@ -112,20 +112,34 @@ data Diff1 exp
   | D1_FuncRef Int
   deriving (Functor, Foldable, Traversable)
 
--- Creating a Bitraversable Type:
--- ----------------------------
+-- Creating a Bitraversable Instance:
+-- -----------------------------------
 --
+-- $(genBitraversableInstance "S1_" ''Sum1 "" ''Value "D1_" ''Diff1)
+--
+-- This generates a Bitraversable instance that allows transforming Sum1 expressions
+-- into Value or Diff1 expressions. The bitraverse function takes:
+--   g :: f a -> m (f' b)       - transforms recursive positions (subset constructors)
+--   f :: c (f a) -> m (b (f' b)) - transforms diff constructors
+--
+-- For subset constructors (those in Value), it applies g to recursive fields and
+-- returns the Value constructor directly:
 
 instance Bitraversable Sum1 Value Diff1 where
-  bitraverse _ _ (S1_Const n) = Const <$> pure n
+  bitraverse g _ (S1_Const n) = Const <$> pure n
   bitraverse g _ (S1_Arr as) = Arr <$> traverse g as
 
+-- For diff constructors (those NOT in Value), it forwards the arguments to f,
+-- which is responsible for handling the transformation:
+
+  bitraverse _ f (S1_NoFields) = f D1_NoFields
   bitraverse _ f (S1_Add a b) = f (D1_Add a b)
   bitraverse _ f (S1_Add2 a b) = f (D1_Add2 a b)
   bitraverse _ f (S1_Mul a b) = f (D1_Mul a b)
   bitraverse _ f (S1_FuncRef a) = f (D1_FuncRef a)
 
-  bitraverse _ _ _ = undefined -- ...
+-- Note: Trailing underscores are automatically stripped from constructor names,
+-- so you can use empty prefixes ("") when the sum types are in the same module.
 
 -- Helper functions ------------------------------------------------------------
 
@@ -171,6 +185,12 @@ stripPrefix :: String -> String -> Maybe String
 stripPrefix prefix str
   | prefix == take (length prefix) str = Just (drop (length prefix) str)
   | otherwise = Nothing
+
+-- Strip trailing underscores from a string
+stripTrailingUnderscore :: String -> String
+stripTrailingUnderscore str = case reverse str of
+  ('_':rest) -> reverse rest
+  _ -> str
 
 replaceExpType :: Name -> BangType -> BangType
 replaceExpType expVar (bang, typ) = (bang, replaceInType expVar typ)
@@ -274,7 +294,8 @@ genSum prefix sumName typeNames = do
   
   -- Build constructors for the sum type
   sumCons <- forM allCons $ \(conName, fields) -> do
-    let newConName = mkName (prefix ++ nameBase conName)
+    let baseName = stripTrailingUnderscore (nameBase conName)
+    let newConName = mkName (prefix ++ baseName)
     let newFields = fmap (replaceExpType expVar) fields
     pure $ NormalC newConName newFields
 
@@ -301,7 +322,8 @@ genDiff prefix diffName sumPrefix sumTypeName subsetPrefix subsetTypeName = do
   -- Build a map from base names to subset constructors
   let subsetMap = [ (baseName, (conName, fields))
                   | (conName, fields) <- subsetCons
-                  , Just baseName <- [stripPrefix subsetPrefix (nameBase conName)]
+                  , let strippedName = stripTrailingUnderscore (nameBase conName)
+                  , Just baseName <- [stripPrefix subsetPrefix strippedName]
                   ]
 
   -- Create the diff type
@@ -313,7 +335,8 @@ genDiff prefix diffName sumPrefix sumTypeName subsetPrefix subsetTypeName = do
   diffConsDecls <- matchSumConstructors sumPrefix sumCons subsetMap
     (\_ _ _ -> pure Nothing)  -- Skip subset constructors
     (\(_, fields) baseName -> do
-      let newConName = mkName (prefix ++ baseName)
+      let strippedBaseName = stripTrailingUnderscore baseName
+      let newConName = mkName (prefix ++ strippedBaseName)
       let newFields = fmap (replaceExpType expVar) fields
       pure $ Just $ NormalC newConName newFields
     )
@@ -397,7 +420,8 @@ genBitraversableInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefi
   -- Build a map from base names to dest constructors
   let destMap = [ (baseName, (conName, fields)) 
                 | (conName, fields) <- destCons
-                , Just baseName <- [stripPrefix destPrefix (nameBase conName)]
+                , let strippedName = stripTrailingUnderscore (nameBase conName)
+                , Just baseName <- [stripPrefix destPrefix strippedName]
                 ]
   
   let gVar = mkName "g"
@@ -410,7 +434,8 @@ genBitraversableInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefi
       genBitraverseSubsetMatch sumConName destConName fields gVar
     )
     (\(sumConName, fields) baseName -> do
-      let diffConName = mkName (diffPrefix ++ baseName)
+      let strippedBaseName = stripTrailingUnderscore baseName
+      let diffConName = mkName (diffPrefix ++ strippedBaseName)
       genBitraverseDiffMatch sumConName diffConName fields fVar
     )
  
