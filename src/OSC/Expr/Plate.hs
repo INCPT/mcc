@@ -6,10 +6,6 @@
 
 module OSC.Expr.Plate where
 
-import OSC.Expr.Functors
-import Data.Foldable (foldl)
-import Data.Functor.Identity (Identity (runIdentity))
-
 data Empty exp
 
 class BiPlate a b c | a c -> b, b c -> a, a b -> c where
@@ -27,6 +23,6 @@ class Bitraversable a b c | a c -> b, b c -> a, a b -> c where
     :: Monad m
     => (f a -> m (f' b))
 
-    -> (c (f' b) -> m (b (f' b)))
+    -> (c (f a) -> m (b (f' b)))
     -> a (f a)
     -> m (b (f' b))

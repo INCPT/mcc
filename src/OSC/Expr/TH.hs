@@ -487,7 +487,7 @@ genBitraversableInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefi
     )
     (\(sumConName, fields) baseName -> do
       let diffConName = mkName (diffPrefix ++ baseName)
-      genBitraverseDiffMatch sumConName diffConName fields gVar fVar
+      genBitraverseDiffMatch sumConName diffConName fields fVar
     )
  
   -- Validate that all constructors were matched
@@ -599,8 +599,8 @@ genBitraverseSubsetMatch sumConName destConName fields gVar = do
   pure $ Match pat (NormalB body) []
 
 -- For diff constructors in bitraverse: f (DiffCon _a1 _a2 ...)
-genBitraverseDiffMatch :: Name -> Name -> [BangType] -> Name -> Name -> Q Match
-genBitraverseDiffMatch sumConName diffConName fields gVar fVar = do
+genBitraverseDiffMatch :: Name -> Name -> [BangType] -> Name -> Q Match
+genBitraverseDiffMatch sumConName diffConName fields fVar = do
   fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_a" ++ show i)
   
   let pat = ConP sumConName [] (fmap VarP fieldVars)
