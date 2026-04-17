@@ -145,6 +145,7 @@ instance Bitraversable Sum1 Value Diff1 where
   bitraverse g f (S1_Add a b) = f (D1_Add a b)
   bitraverse g f (S1_Add2 a b) = f (D1_Add2 a b)
   bitraverse g f (S1_Mul a b) = f (D1_Mul a b)
+  bitraverse g f (S1_FuncRef a) = f (D1_FuncRef a)
 
   bitraverse g f _ = undefined -- ...
 
@@ -597,18 +598,15 @@ genBitraverseSubsetMatch sumConName destConName fields gVar = do
 
   pure $ Match pat (NormalB body) []
 
--- For diff constructors in bitraverse: f =<< (DiffCon <$> g field1 <*> g field2 ...)
+-- For diff constructors in bitraverse: f (DiffCon _a1 _a2 ...)
 genBitraverseDiffMatch :: Name -> Name -> [BangType] -> Name -> Name -> Q Match
 genBitraverseDiffMatch sumConName diffConName fields gVar fVar = do
   fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_a" ++ show i)
   
   let pat = ConP sumConName [] (fmap VarP fieldVars)
   
-  body <- if null fields
-    then [| $(varE fVar) =<< pure $(conE diffConName) |]
-    else do
-      conApp <- genConstructorAppWith diffConName fields fieldVars $ \typ var ->
-        genBitraverseFieldTransform typ var gVar
-      [| $(varE fVar) =<< $(pure conApp) |]
+  -- Build the diff constructor application with the original field variables
+  let conApp = foldl AppE (ConE diffConName) (fmap VarE fieldVars)
+  let body = AppE (VarE fVar) conApp
 
   pure $ Match pat (NormalB body) []
