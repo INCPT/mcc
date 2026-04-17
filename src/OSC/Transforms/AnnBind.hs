@@ -28,99 +28,75 @@ import OSC.Expr.AnnBind
 
 --------------------------------------------------------------------------------
 
-type CaptureM = R.ReaderT (Set Ident) (W.WriterT (Set Ident) (ST.State (Set Ident)))
+type CaptureM = R.ReaderT (Set Ident) (W.WriterT (Set Ident) (ST.State (Map Ident Type)))
 
-runCapture :: CaptureM a -> ((a, Set Ident), Set Ident)
+runCapture :: CaptureM a -> ((a, Set Ident), Map Ident Type)
 runCapture = runIdentity . flip ST.runStateT mempty . W.runWriterT . flip R.runReaderT mempty
 
-markCapturedBindings :: RFunctor f => B.Expr (f B.Expr) -> CaptureM (Expr (f Expr))
-markCapturedBindings e = bitraverse (rtraverse markCapturedBindings) (go) e
+markCapturedBindings :: Type -> B.Expr (Ann Type B.Expr) -> CaptureM (Expr (Ann Type Expr))
+markCapturedBindings _ (B.Var n) = do
+  env <- R.ask
+
+  -- Add to captured set if var doesn't reference the params or bindings of the current lambda/rec block
+  unless (S.member n env) $ W.tell (S.singleton n)
+  pure (Var n)
+
+markCapturedBindings _ e = bitraverse (flow markCapturedBindings) go e
   where
-    go :: RFunctor f => Diff (f B.Expr) -> CaptureM (Expr (f Expr))
+    flow f (Ann (t, e)) = Ann <$> (t,) <$> f t e
+
+    go :: Diff (Ann Type B.Expr) -> CaptureM (Expr (Ann Type Expr))
+    go (DLam t params bindings body) = do
+      let paramsEnv = S.fromList params
+      let bindingNames = S.fromList (fmap fst bindings)
+
+      -- Process bindings recursively
+      (bindings', capturedByBindings) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramsEnv <> bindingNames) $ sequence
+        [ (n,) <$> flow markCapturedBindings e
+        | (n, e) <- bindings
+        ]
+
+      -- Process body recursively and capture free vars
+      (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramsEnv <> bindingNames) (flow markCapturedBindings body)
+
+      -- Propagate captures excluding params and bindings
+      W.tell ((capturedByBindings <> capturedByBody) S.\\ (paramsEnv <> bindingNames))
+
+      let allCaptured = capturedByBindings <> capturedByBody
+
+      bindings'' <- sequence
+        [ do
+            when (S.member n allCaptured) $ ST.modify (M.insert n t)
+            pure (n, if S.member n allCaptured then Global else Local, Ann (t, e))
+        | (n, Ann (t, e)) <- bindings'
+        ]
+
+      -- Accumulate captured bindings
+      pure $ LamAnn t params bindings'' body'
+
     go (DRec t delay param bindings body) = do
       let paramEnv = S.singleton param
       let bindingNames = S.fromList (fmap fst bindings)
 
       -- Process bindings recursively
       (bindings', capturedByBindings) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramEnv <> bindingNames) $ sequence
-        [ (n,) <$> rtraverse markCapturedBindings e
+        [ (n,) <$> flow markCapturedBindings e
         | (n, e) <- bindings
         ]
 
       -- Process body recursively and capture free vars
-      (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramEnv <> bindingNames) (rtraverse markCapturedBindings body)
+      (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramEnv <> bindingNames) (flow markCapturedBindings body)
 
       -- Propagate captures excluding params and bindings
       W.tell ((capturedByBindings <> capturedByBody) S.\\ (paramEnv <> bindingNames))
-
-      -- Accumulate captured bindings
-      sequence_
-        [ when (S.member captured bindingNames || S.member captured paramEnv) $
-            ST.modify (S.singleton captured <>)
-        | captured <- S.toList (capturedByBindings <> capturedByBody)
+      
+      let allCaptured = capturedByBindings <> capturedByBody
+      
+      bindings'' <- sequence
+        [ do
+            when (S.member n allCaptured) $ ST.modify (M.insert n t)
+            pure (n, if S.member n allCaptured then Global else Local, Ann (t, e))
+        | (n, Ann (t, e)) <- bindings'
         ]
 
-      pure undefined -- $ Rec t delay param bindings' body'
-    go _ = undefined
-
--- markCapturedBindings :: RFunctor f => f Expr -> CaptureM (f Expr1)
--- markCapturedBindings = rtraverse go
---   where
---     go (Var n) = do
---       env <- R.ask
---       -- Add to captured set if var doesn't reference the params or bindings of the current lambda/rec block
---       unless (S.member n env) $ W.tell (S.singleton n)
---       pure (E_Var n)
--- 
---     go (Lam t params bindings body) = do
---       let paramsEnv = S.fromList params
---       let bindingNames = S.fromList (fmap fst bindings)
--- 
---       -- Process bindings recursively
---       (bindings', capturedByBindings) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramsEnv <> bindingNames) $ sequence
---         [ (n,) <$> markCapturedBindings e
---         | (n, e) <- bindings
---         ]
--- 
---       -- Process body recursively and capture free vars
---       (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramsEnv <> bindingNames) (markCapturedBindings body)
--- 
---       -- Propagate captures excluding params and bindings
---       W.tell ((capturedByBindings <> capturedByBody) S.\\ (paramsEnv <> bindingNames))
--- 
---       -- Accumulate captured bindings
---       sequence_
---         [ when (S.member captured bindingNames || S.member captured paramsEnv) $
---             ST.modify (S.singleton captured <>)
---         | captured <- S.toList (capturedByBindings <> capturedByBody)
---         ]
--- 
---       pure $ E_Lam t params bindings' body'
--- 
---     go (Rec t delay param bindings body) = do
---       let paramEnv = S.singleton param
---       let bindingNames = S.fromList (fmap fst bindings)
--- 
---       -- Process bindings recursively
---       (bindings', capturedByBindings) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramEnv <> bindingNames) $ sequence
---         [ (n,) <$> markCapturedBindings e
---         | (n, e) <- bindings
---         ]
--- 
---       -- Process body recursively and capture free vars
---       (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramEnv <> bindingNames) (markCapturedBindings body)
--- 
---       -- Propagate captures excluding params and bindings
---       W.tell ((capturedByBindings <> capturedByBody) S.\\ (paramEnv <> bindingNames))
--- 
---       -- Accumulate captured bindings
---       sequence_
---         [ when (S.member captured bindingNames || S.member captured paramEnv) $
---             ST.modify (S.singleton captured <>)
---         | captured <- S.toList (capturedByBindings <> capturedByBody)
---         ]
--- 
---       pure undefined -- $ Rec t delay param bindings' body'
--- 
---     -- Generic case: recursively process all children
---     go e = bitraverse (rtraverse go) undefined e
+      pure $ RecAnn t delay param bindings'' body'
