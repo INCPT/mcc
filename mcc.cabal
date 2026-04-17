@@ -47,11 +47,11 @@ library
       OSC.Expr
       OSC.Expr.AnnBind
       OSC.Expr.Base
+      OSC.Expr.Bitraversable
       OSC.Expr.Comp
       OSC.Expr.Functors
       OSC.Expr.Gen
       OSC.Expr.Interpret
-      OSC.Expr.Plate
       OSC.Expr.Pretty
       OSC.Expr.TH
       OSC.Expr.THTest

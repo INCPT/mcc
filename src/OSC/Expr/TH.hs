@@ -7,7 +7,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module OSC.Expr.TH (BiPlate (..), Empty, genSum, genDiff, genBiPlateInstance, genBitraversableInstance, genSmartConstructors, universe) where
+module OSC.Expr.TH (genSum, genDiff, genBitraversableInstance, genSmartConstructors) where
 
 import Control.Monad (forM_, forM, foldM, unless, when)
 import Data.Char (toLower)
@@ -16,8 +16,8 @@ import qualified Data.Foldable as F
 
 import Language.Haskell.TH
 
+import OSC.Expr.Bitraversable
 import OSC.Expr.Functors
-import OSC.Expr.Plate
 
 -- Documentation ---------------------------------------------------------------
 --
@@ -110,44 +110,22 @@ data Diff1 exp
   | D1_Add2 exp [exp]
   | D1_Mul (Maybe (Either String [exp])) exp
   | D1_FuncRef Int
-  -- deriving (Functor, Foldable, Traversable)
+  deriving (Functor, Foldable, Traversable)
 
--- Generating a BiPlate Instance:
--- -------------------------------
+-- Creating a Bitraversable Type:
+-- ----------------------------
 --
--- $(genBiPlateInstance "S1_" ''Sum1 "" ''Value "D1_" ''Diff1)
---
--- This generates a BiPlate instance that transforms between Sum1 and Value,
--- using Diff1 for constructors not in Value. Constructors from Value are
--- wrapped, while others are passed to the transformation function:
-
-instance BiPlate Sum1 Value Diff1 where
-  transformBiM unwrap wrap f expr = do
-    inner <- unwrap expr
-    case inner of
-      -- Constructors from Value: wrap the result
-      S1_Const n -> wrap =<< (Const <$> pure n)
-      S1_Arr as  -> wrap =<< (Arr <$> traverse (transformBiM unwrap wrap f) as)
-
-      -- Constructors from Diff1: apply transformation function
-      S1_NoFields ->  f =<< pure D1_NoFields
-      S1_Add a b -> f =<< (D1_Add <$> (transformBiM unwrap wrap f) a <*> transformBiM unwrap wrap f b)
-      S1_Mul a b -> f =<< (D1_Mul <$> (traverse (traverse (traverse (transformBiM unwrap wrap f)))) a <*> transformBiM unwrap wrap f b)
-
-      -- Constructors from FuncRef
-      S1_FuncRef a ->  f =<< pure (D1_FuncRef a)
-      _ -> undefined
 
 instance Bitraversable Sum1 Value Diff1 where
-  bitraverse g f (S1_Const n) = Const <$> pure n
-  bitraverse g f (S1_Arr as) = Arr <$> traverse g as
+  bitraverse _ _ (S1_Const n) = Const <$> pure n
+  bitraverse g _ (S1_Arr as) = Arr <$> traverse g as
 
-  bitraverse g f (S1_Add a b) = f (D1_Add a b)
-  bitraverse g f (S1_Add2 a b) = f (D1_Add2 a b)
-  bitraverse g f (S1_Mul a b) = f (D1_Mul a b)
-  bitraverse g f (S1_FuncRef a) = f (D1_FuncRef a)
+  bitraverse _ f (S1_Add a b) = f (D1_Add a b)
+  bitraverse _ f (S1_Add2 a b) = f (D1_Add2 a b)
+  bitraverse _ f (S1_Mul a b) = f (D1_Mul a b)
+  bitraverse _ f (S1_FuncRef a) = f (D1_FuncRef a)
 
-  bitraverse g f _ = undefined -- ...
+  bitraverse _ _ _ = undefined -- ...
 
 -- Helper functions ------------------------------------------------------------
 
@@ -403,60 +381,6 @@ replaceExpWithWrapped fVar typeName typ = case typ of
   AppT t1 t2 -> AppT (replaceExpWithWrapped fVar typeName t1) (replaceExpWithWrapped fVar typeName t2)
   ConT name -> ConT name
   _ -> typ
-
---------------------------------------------------------------------------------
-
-genBiPlateInstance :: String -> Name -> String -> Name -> String -> Name -> Q [Dec]
-genBiPlateInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefix diffTypeName = do
-  -- Get constructors of sum type
-  sumInfo <- reify sumTypeName
-  let sumCons = getConstructors sumInfo
-  
-  -- Get constructors of dest type
-  destInfo <- reify destTypeName
-  let destCons = getConstructors destInfo
-  
-  -- Build a map from base names to dest constructors
-  let destMap = [ (baseName, (conName, fields)) 
-                | (conName, fields) <- destCons
-                , Just baseName <- [stripPrefix destPrefix (nameBase conName)]
-                ]
-  
-  let unwrapVar = mkName "unwrap"
-  let wrapVar = mkName "wrap"
-  let fVar = mkName "f"
-  let exprVar = mkName "expr"
-  let innerVar = mkName "inner"
-  
-  -- For each sum constructor, match it to dest or diff by name
-  matches <- matchSumConstructors sumPrefix sumCons destMap
-    (\(sumConName, fields) (destConName, _) _ ->
-      genSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar
-    )
-    (\(sumConName, fields) baseName -> do
-      let diffConName = mkName (diffPrefix ++ baseName)
-      genDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar
-    )
- 
-  -- Validate that all constructors were matched
-  when (length matches /= length sumCons) $
-    fail $ "Not all sum constructors were matched: expected " ++ show (length sumCons) ++ " but got " ++ show (length matches)
-
-  let transformBody = DoE Nothing
-        [ BindS (VarP innerVar) (AppE (VarE unwrapVar) (VarE exprVar))
-        , NoBindS (CaseE (VarE innerVar) matches)
-        ]
-
-  let transformClause = Clause 
-        [VarP unwrapVar, VarP wrapVar, VarP fVar, VarP exprVar]
-        (NormalB transformBody)
-        []
-
-  pure
-    [ InstanceD Nothing [] 
-        (AppT (AppT (AppT (ConT ''BiPlate) (ConT sumTypeName)) (ConT destTypeName)) (ConT diffTypeName))
-        [FunD 'transformBiM [transformClause]]
-    ]
 
 --------------------------------------------------------------------------------
 

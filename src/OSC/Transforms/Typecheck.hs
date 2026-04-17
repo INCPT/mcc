@@ -20,8 +20,8 @@ import Data.Set (Set)
 import qualified Data.Set as S
 import qualified Data.Graph as G
 
+import OSC.Expr.Bitraversable
 import OSC.Expr.Functors
-import OSC.Expr.Plate
 import OSC.Expr.TH
 import OSC.Expr.Comp (Number (..), Ident (..), TNumber (..), Type (..), Op (..))
 import qualified OSC.Expr.Comp as C
