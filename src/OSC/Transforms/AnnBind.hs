@@ -1,7 +1,4 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TupleSections #-}
-{-# LANGUAGE TypeFamilies #-}
 
 module OSC.Transforms.AnnBind where
 
@@ -9,7 +6,6 @@ import Control.Monad (when, unless)
 import Control.Monad.Identity (Identity(..), runIdentity)
 import Control.Monad.Trans.Class (lift)
 import qualified Control.Monad.Reader as R
-import qualified Control.Monad.Except as E
 import qualified Control.Monad.Writer as W
 import qualified Control.Monad.State as ST
 
@@ -17,12 +13,10 @@ import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Set (Set)
 import qualified Data.Set as S
-import qualified Data.Graph as G
 
 import OSC.Expr.Bitraversable
 import OSC.Expr.Functors
-import OSC.Expr.Comp (Number (..), Ident (..), TNumber (..), Type (..), Op (..))
-import qualified OSC.Expr.Comp as C
+import OSC.Expr.Comp (Ident, Type)
 import qualified OSC.Expr.Base as B
 import OSC.Expr.AnnBind
 
