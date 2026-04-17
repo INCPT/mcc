@@ -141,6 +141,36 @@ instance Bitraversable Sum1 Value Diff1 where
 -- Note: Trailing underscores are automatically stripped from constructor names,
 -- so you can use empty prefixes ("") when the sum types are in the same module.
 
+data Sum2 exp
+  -- from Value
+  = S2_Const Int
+  | S2_Arr [exp]
+
+  -- from Expr
+  | S2_Mul (Maybe (Either String [exp])) exp
+
+  -- from FuncRef
+  | S2_FuncRef Int
+  deriving (Functor, Foldable, Traversable)
+
+data Diff2 exp
+  = D2_NoFields
+  | D2_Add exp exp
+  | D2_Add2 exp [exp]
+
+data Part2 exp
+  = P2_Mul (Maybe (Either String [exp])) exp
+
+instance Partition Sum1 Sum2 Diff2 Part2 where
+   partition f1 f2 = rtraverse2 f3
+     where
+        -- f3 :: Monad m => RFunctor2 f f' => Sum1 (f Sum1) -> m (Sum2 (f' Sum2))
+        f3 _ (S1_Const n) = S2_Const <$> pure n
+        f3 _ (S1_Arr as) = S2_Arr <$> traverse (rtraverse2 f3) as
+        f3 _ (S1_Add a b) = f1 (D2_Add a b)
+        f3 _ (S1_Mul a b) = f2 (P2_Mul a b)
+        f3 _ _ = undefined
+
 -- Helper functions ------------------------------------------------------------
 
 foldl1M :: Monad m => (a -> a -> m a) -> [a] -> m a
