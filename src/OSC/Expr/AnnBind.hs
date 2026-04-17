@@ -4,14 +4,19 @@
 
 module OSC.Expr.AnnBind where
 
-import OSC.Expr.Bitraversable
 import OSC.Expr.Comp (Ident, Type)
 import OSC.Expr.TH
+import qualified OSC.Expr.Base as B
 import qualified OSC.Expr.Comp as C
 
--- data Lam exp = Lam Type [Ident] [(Ident, exp)] exp
+data AllocRegion = Local | Global
+  deriving Show
 
--- data Rec exp = Rec Type Int Ident [(Ident, exp)] exp
+data LamAnn exp = LamAnn_ Type [Ident] [(Ident, AllocRegion, exp)] exp
+data RecAnn exp = RecAnn_ Type Int Ident [(Ident, AllocRegion, exp)] exp
 
-$(genSum "" "Expr" [''C.Exp, ''C.Lam, ''C.Select, ''C.Rec])
--- $(genBiPlateInstance "" ''Expr "" ''Expr "" ''Empty)
+$(genSum "" "Expr" [''C.Exp, ''C.Select, ''LamAnn, ''RecAnn])
+
+$(genDiff "D" "Diff" "" ''B.Expr "" ''Expr)
+
+$(genBitraversableInstance "" ''B.Expr "" ''Expr "D" ''Diff)
