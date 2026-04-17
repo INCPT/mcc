@@ -21,13 +21,7 @@ class RFunctor f where
   rtraverse :: Functor m => (a (f a) -> m (b (f b))) -> f a -> m (f b)
 
 class RFunctor2 f f' where
-  rtraverse2 :: Functor m => ((forall. (x (f x) -> f x)) -> a (f a) -> m (b (f' b))) -> f a -> m (f' b)
-
--- class Inj f where
---   inject :: b (f b) -> f a -> f b
--- 
--- instance Inj Fix where
---   inject t (Fix _) = Fix t
+  rtraverse2 :: Functor m => (a (f a) -> m (b (f' b))) -> f a -> m (f' b)
 
 hoist :: Recursive f => Corecursive g => Functor a => f a -> g a
 hoist = embed . fmap hoist . project

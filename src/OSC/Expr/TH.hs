@@ -162,14 +162,13 @@ data Part2 exp
   = P2_Mul (Maybe (Either String [exp])) exp
 
 instance Partition Sum1 Sum2 Diff2 Part2 where
-   partition f1 f2 = rtraverse2 f3
+   partition trav f1 f2 = trav f3
      where
-        -- f3 :: Monad m => RFunctor2 f f' => Sum1 (f Sum1) -> m (Sum2 (f' Sum2))
-        f3 _ (S1_Const n) = S2_Const <$> pure n
-        f3 _ (S1_Arr as) = S2_Arr <$> traverse (rtraverse2 f3) as
-        f3 _ (S1_Add a b) = f1 (D2_Add a b)
-        f3 _ (S1_Mul a b) = f2 (P2_Mul a b)
-        f3 _ _ = undefined
+        f3 (S1_Const n) = S2_Const <$> pure n
+        f3 (S1_Arr as) = S2_Arr <$> traverse (trav f3) as
+        f3 (S1_Add a b) = f1 (D2_Add a b)
+        f3 (S1_Mul a b) = f2 (P2_Mul a b)
+        f3 _ = undefined
 
 -- Helper functions ------------------------------------------------------------
 

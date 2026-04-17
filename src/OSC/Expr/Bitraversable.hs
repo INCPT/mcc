@@ -1,9 +1,8 @@
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 
 module OSC.Expr.Bitraversable where
-
-import OSC.Expr.Functors
 
 class Bitraversable a b c | a c -> b, b c -> a, a b -> c where
   bitraverse
@@ -16,7 +15,9 @@ class Bitraversable a b c | a c -> b, b c -> a, a b -> c where
   
 class Partition source dest diff part where
   partition 
-    :: RFunctor2 f f' => Monad m
-    => (diff (f source) -> m (dest (f' dest)))
+    :: Monad m
+    => (forall a b. (a (f a) -> m (b (f' b))) -> f a -> m (f' b))
+
+    -> (diff (f source) -> m (dest (f' dest)))
     -> (part (f source) -> m (dest (f' dest)))
     -> f source -> m (f' dest)
