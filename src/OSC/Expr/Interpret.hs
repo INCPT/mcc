@@ -50,9 +50,9 @@ lookupE e m k = case M.lookup k m of
   Nothing -> error e
 
 interpret :: Ann C.Type Expr -> CircuitM SimM
-interpret (Ann (_, Const n)) = pure (pure $ VNumber n)
+interpret (Ann (_, PConst n)) = pure (pure $ VNumber n)
 
-interpret (Ann (_, Op op a b)) = do
+interpret (Ann (_, POp op a b)) = do
   sima <- interpret a
   simb <- interpret b
   pure $ do
@@ -137,19 +137,19 @@ interpret (Ann (_, Op op a b)) = do
 
       _ -> error $ "interpret Op: unsupported operation: " ++ show (op, a, b)
 
-interpret (Ann (_, Arr as)) = do
+interpret (Ann (_, PArr as)) = do
   simas <- traverse interpret as
   pure $ do
     as <- sequence simas
     pure $ VArr as
 
-interpret (Ann (_, Var n)) = do
+interpret (Ann (_, PVar n)) = do
   env <- R.ask
   case M.lookup n env of
     Just var -> pure var
     Nothing -> error $ "interpret: var not in scope: " <> show n
 
-interpret (Ann (_, Lam _ params bindings body)) = mdo
+interpret (Ann (_, PLam _ params bindings body)) = mdo
   simbindings <- fmap M.fromList $ sequence $ mconcat
     [ [ (p,) <$> pure (R.ask >>= \(SimEnv env) -> lookupE (show p) env p) | p <- params ]
     , [ fmap (n,) $ R.local (\env -> simbindings <> env) $ interpret bbody
@@ -162,7 +162,7 @@ interpret (Ann (_, Lam _ params bindings body)) = mdo
     SimEnv env <- R.ask
     pure $ VAbs $ \args -> R.local (\(SimEnv env') -> SimEnv (M.fromList (zip params args) <> env' <> env)) simbody
 
-interpret (Ann (_, App f params)) = do
+interpret (Ann (_, PApp f params)) = do
   simargs <- traverse interpret params
   simf <- interpret f
   pure $ do
@@ -171,7 +171,7 @@ interpret (Ann (_, App f params)) = do
       VAbs f -> f simargs
       _ -> error "App: f not a function"
 
-interpret (Ann (_, Select expr idx)) = do
+interpret (Ann (_, PSelect expr idx)) = do
   simexpr <- interpret expr
   simidx <- interpret idx
   pure $ do
@@ -182,7 +182,7 @@ interpret (Ann (_, Select expr idx)) = do
       (VArr as, VNumber (C.I64 i')) -> pure (as !! i')
       (e', i') -> error $ "Select: " <> show e' <> ", " <> show i'
 
-interpret (Ann (t, Rec _ _ param bindings body)) = mdo
+interpret (Ann (t, PRec _ _ param bindings body)) = mdo
   nextCell <- ST.gets (.nextCell)
 
   let delayBufferIdx = nextCell

@@ -52,9 +52,7 @@ library
       OSC.Expr.Functors
       OSC.Expr.Gen
       OSC.Expr.Interpret
-      OSC.Expr.Pretty
       OSC.Expr.TH
-      OSC.Expr.THTest
       OSC.Pretty
       OSC.Transforms.AnnBind
       OSC.Transforms.Typecheck

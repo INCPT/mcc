@@ -5,8 +5,6 @@
 
 module OSC.Expr.AnnBind where
 
-import OSC.Expr.Bitraversable
-import OSC.Expr.Functors
 import OSC.Expr.TH
 import qualified OSC.Expr.Base as B
 import qualified OSC.Expr.Comp as C

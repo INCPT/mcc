@@ -439,7 +439,6 @@ genBitraversableInstance sumTypeName destTypeName diffTypeName = do
         [FunD 'bitraverse [bitraverseClause]]
     ]
 
-
 -- Transform a field based on its type structure
 genFieldTransform :: Type -> Name -> Name -> Name -> Name -> Q Exp
 genFieldTransform typ var unwrapVar wrapVar fVar
