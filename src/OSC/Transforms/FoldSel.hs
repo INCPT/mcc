@@ -83,4 +83,9 @@ foldSelections :: Ann Type SRC.Expr -> FoldSelM (Ann Type Expr)
 foldSelections = bitraverse rtraverse diff
   where
     diff :: Diff (Ann Type SRC.Expr) -> FoldSelM (Expr (Ann Type Expr))
-    diff = undefined
+    diff (DSelect sel idx) = do
+      let Ann (t, _) = sel
+      ST.modify ((t, idx) :)
+      sel' <- foldSelections sel
+      ST.modify tail
+      pure $ project sel'
