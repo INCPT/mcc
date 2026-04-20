@@ -584,8 +584,11 @@ genPatternSynonym outerTypeName typeVars patternName outerConName innerConName i
   let outerPat = ConP outerConName [] [innerPat]
   
   -- Build the type signature
-  -- Replace inner type variables with the outer type's type variables from typeVars
-  let paramTypes = [ replaceTypeVars typeVars (stripBang typ) | (_, typ) <- innerFields ]
+  -- Use the exact type variable Names from typeVars throughout
+  let paramTypes = case typeVars of
+        [expVar] -> [ replaceAllTypeVars expVar (stripBang typ) | (_, typ) <- innerFields ]
+        _ -> [ stripBang typ | (_, typ) <- innerFields ]
+  
   -- Apply type variables to the result type: Expr exp
   let resultType = foldl AppT (ConT outerTypeName) (fmap VarT typeVars)
   
@@ -601,14 +604,30 @@ genPatternSynonym outerTypeName typeVars patternName outerConName innerConName i
   
   pure [patSigDec, patSynDec]
 
+-- Replace all type variables in a type with a specific Name
+replaceAllTypeVars :: Name -> Type -> Type
+replaceAllTypeVars expVar = go
+  where
+    go typ = case typ of
+      VarT _ -> VarT expVar
+      AppT t1 t2 -> AppT (go t1) (go t2)
+      ListT -> ListT
+      TupleT n -> TupleT n
+      ArrowT -> ArrowT
+      ConT name -> ConT name
+      _ -> typ
+
 -- Generate a simple pattern synonym for a non-nested constructor
 genSimplePatternSynonym :: Name -> [Name] -> Name -> Name -> [BangType] -> Q [Dec]
 genSimplePatternSynonym typeName typeVars patternName conName fields = do
   paramVars <- forM [1..length fields] $ \i -> pure $ mkName ("a" ++ show i)
   
   let pat = ConP conName [] (fmap VarP paramVars)
-  -- Replace any type variables in the fields with the outer type's type variables
-  let paramTypes = [ replaceTypeVars typeVars (stripBang typ) | (_, typ) <- fields ]
+  -- Use the exact type variable Names from typeVars throughout
+  let paramTypes = case typeVars of
+        [expVar] -> [ replaceAllTypeVars expVar (stripBang typ) | (_, typ) <- fields ]
+        _ -> [ stripBang typ | (_, typ) <- fields ]
+  
   -- Apply type variables to the result type: Expr exp
   let resultType = foldl AppT (ConT typeName) (fmap VarT typeVars)
   
@@ -631,18 +650,20 @@ stripBang typ = typ
 -- This ensures we use consistent type variable names (e.g., 'exp' instead of 'exp_i26cu')
 -- We recursively traverse the entire type structure to replace all occurrences
 replaceTypeVars :: [Name] -> Type -> Type
-replaceTypeVars typeVars = go
+replaceTypeVars typeVars typ = case typeVars of
+  [v] -> replaceAllVars v typ
+  _ -> typ  -- Multiple type variables - keep as is for now
   where
-    go typ = case typ of
-      VarT _ -> case typeVars of
-        [v] -> VarT v  -- Single type variable case
-        _ -> typ       -- Multiple type variables - keep as is for now
-      AppT t1 t2 -> AppT (go t1) (go t2)
-      ListT -> ListT
-      TupleT n -> TupleT n
-      ArrowT -> ArrowT
-      ConT name -> ConT name
-      _ -> typ
+    replaceAllVars v = go
+      where
+        go t = case t of
+          VarT _ -> VarT v
+          AppT t1 t2 -> AppT (go t1) (go t2)
+          ListT -> ListT
+          TupleT n -> TupleT n
+          ArrowT -> ArrowT
+          ConT name -> ConT name
+          _ -> t
 
 -- Replace inner type variables with the outer type's type argument
 -- innerTypeArg is the type argument from the outer constructor (e.g., VarT exp from Expr (C.Expr exp))
