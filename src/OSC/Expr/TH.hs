@@ -591,9 +591,10 @@ genPatternSynonym outerTypeName typeVars patternName outerConName innerConName i
   let resultType = foldl AppT (ConT outerTypeName) (fmap VarT typeVars)
   
   -- Build the full type with forall if we have type variables
+  -- Use InferredSpec instead of SpecifiedSpec to avoid showing type variables in error messages
   let patType = case typeVars of
         [] -> foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
-        _ -> ForallT (fmap (\v -> PlainTV v SpecifiedSpec) typeVars) []
+        _ -> ForallT (fmap PlainTV typeVars) []
                (foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes)
   
   -- Pattern synonym declaration
@@ -614,9 +615,10 @@ genSimplePatternSynonym typeName typeVars patternName conName fields = do
   let resultType = foldl AppT (ConT typeName) (fmap VarT typeVars)
   
   -- Build the full type with forall if we have type variables
+  -- Use InferredSpec instead of SpecifiedSpec to avoid showing type variables in error messages
   let patType = case typeVars of
         [] -> foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
-        _ -> ForallT (fmap (\v -> PlainTV v SpecifiedSpec) typeVars) []
+        _ -> ForallT (fmap PlainTV typeVars) []
                (foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes)
   
   let patSynDec = PatSynD patternName (PrefixPatSyn paramVars) ImplBidir pat
@@ -649,10 +651,10 @@ replaceTypeVars typeVars = go
 -- innerTypeArg is the type argument from the outer constructor (e.g., VarT exp from Expr (C.Expr exp))
 -- This replaces any VarT in the inner fields with innerTypeArg
 replaceInnerTypeVar :: Type -> Type -> Type
-replaceInnerTypeVar replacement = go
+replaceInnerTypeVar innerTypeArg = go
   where
     go typ = case typ of
-      VarT _ -> replacement
+      VarT _ -> innerTypeArg
       AppT t1 t2 -> AppT (go t1) (go t2)
       ListT -> ListT
       TupleT n -> TupleT n
