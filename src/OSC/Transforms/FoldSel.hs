@@ -10,79 +10,12 @@ import qualified OSC.Expr.AnnBind as SRC
 
 --------------------------------------------------------------------------------
 
-{-
-type FoldSelectionsM = Stack (Type, Term Sig0) (Term Sig1)
+type FoldSelM = ST.State [Ann Type SRC.Expr]
 
-foldSelections :: Term Sig0 -> Term Sig1
-foldSelections = runStack . expr
-  where
-    rhs :: Term Sig1 -> FoldSelectionsM
-    rhs expr = do
-      idxs <- ST.get
-      case idxs of
-        [] -> pure expr
-        _ -> pure $ inject $ FoldedSelectR expr (fmap (foldSelections . snd) idxs)
-
-    expr :: Term Sig0 -> FoldSelectionsM
-    expr term = case project term of
-      -- Handle Value constructors
-      Just (Const n) -> rhs $ inject (Const n)
-      Just (Arr es) -> do
-        s <- pop
-        case s of
-          Just (t, idx) -> do
-            es' <- traverse expr es
-            push (t, idx)
-            pure $ inject $ FoldedSelectL es' (foldSelections idx)
-          Nothing -> pure $ inject $ Arr (fmap foldSelections es)
-      
-      -- Handle Exp constructors
-      Nothing -> case project term of
-        Just (Op a b) -> rhs $ inject $ Op (foldSelections a) (foldSelections b)
-        Just (Var n) -> rhs $ inject $ Var n
-        Just (App f args) -> rhs $ inject $ App (foldSelections f) (fmap foldSelections args)
-        
-        -- Handle Lam constructor
-        Nothing -> case project term of
-          Just (Lam params locals body) -> 
-            rhs $ inject $ Lam params (fmap (fmap foldSelections) locals) (foldSelections body)
-          
-          -- Handle Select constructor
-          Nothing -> case project term of
-            Just (Select sel idx) -> do
-              push (exprType term, idx)
-              sel' <- expr sel
-              _ <- pop
-              pure sel'
-            Nothing -> error "foldSelections: unknown constructor"
-
-    exprType :: Term Sig0 -> Type
-    exprType term = case project term of
-      Just (Const _) -> TNumber TI32  -- Assuming constants are I32
-      Just (Arr es) -> case es of
-        [] -> error "exprType: empty array"
-        (e:_) -> TArr (exprType e) (length es)
-      Nothing -> case project term of
-        Just (Op _ _) -> TNumber TI32  -- Assuming ops return I32
-        Just (Var _) -> error "exprType: cannot determine type of variable"
-        Just (App _ _) -> error "exprType: cannot determine type of application"
-        Nothing -> case project term of
-          Just (Lam _ _ _) -> error "exprType: cannot determine type of lambda"
-          Nothing -> case project term of
-            Just (Select e _) -> peelType (exprType e)
-            Nothing -> error "exprType: unknown constructor"
-    
-    peelType :: Type -> Type
-    peelType (TArr t _) = t
-    peelType t = error $ "peelType: cannot peel type " ++ show t
--}
-
-type FoldSelM = ST.State [(Type, Ann Type SRC.Expr)]
-
-push :: (Type, Ann Type SRC.Expr) -> FoldSelM ()
+push :: Ann Type SRC.Expr -> FoldSelM ()
 push s = ST.modify (s:)
 
-pop :: FoldSelM (Maybe ((Type, Ann Type SRC.Expr)))
+pop :: FoldSelM (Maybe (Ann Type SRC.Expr))
 pop = do
   as <- ST.get
   case as of
@@ -91,30 +24,27 @@ pop = do
       pure (Just a)
     _ -> pure Nothing
 
--- TODO: PFoldedSelectR
 foldSelections :: Ann Type SRC.Expr -> FoldSelM (Ann Type Expr)
-foldSelections = bitraverse (rtraverse . trav) diff
+foldSelections = bitraverse (\rmap expr@(Ann (exprt, _)) -> rtraverse (trav rmap exprt) expr) diff
   where
-    rhs expr = do
-      idxs <- ST.get
-      case idxs of
-        [] -> pure expr
-        _ -> pure undefined -- $ PFoldedSelectR expr (fmap (foldSelections . snd) idxs)
-
-    trav _ (SRC.PArr elems) = do
+    trav _ _ (SRC.PArr elems) = do
      s <- pop
      case s of
-       Just (t, idx) -> do
+       Just idx -> do
          elems' <- traverse foldSelections elems
-         push (t, idx)
-         PFoldedSelectL elems' <$> (foldSelections idx)
+         push idx
+         PFoldedSelectL elems' <$> foldSelections idx
        Nothing -> PArr <$> traverse foldSelections elems
-    trav rmap e = rhs $ rmap e
+
+    trav rmap exprt expr = do
+      idxs <- ST.get
+      case idxs of
+        [] -> rmap expr
+        _ -> PFoldedSelectR <$> foldSelections (Ann (exprt, expr)) <*> traverse foldSelections idxs
 
     diff :: Diff (Ann Type SRC.Expr) -> FoldSelM (Expr (Ann Type Expr))
     diff (DSelect sel idx) = do
-      let Ann (t, _) = sel
-      push (t, idx)
+      push idx
       sel' <- foldSelections sel
       _ <- pop
       pure $ project sel'
