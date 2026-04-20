@@ -25,9 +25,8 @@ import OSC.Expr.Functors
 -- code for working with recursive expression types. It supports:
 --
 -- 1. Creating sum types that combine multiple expression types
--- 2. Generating Plate instances for generic traversal
--- 3. Creating difference types (sum minus a subset)
--- 4. Generating BiPlate instances for transformations between types
+-- 2. Creating difference types (sum minus a subset)
+-- 3. Generating Bitraversable instances for transformations between types
 --
 -- Example Usage:
 -- ==============
@@ -35,15 +34,19 @@ import OSC.Expr.Functors
 -- Given the following input types:
 
 data Value exp  = Const Int | Arr [exp]
+  deriving (Functor, Foldable, Traversable)
 
 data Expr exp
   = NoFields
   | Add exp exp
   | Mul (Maybe (Either String [exp])) exp
+  deriving (Functor, Foldable, Traversable)
 
 data FuncRef exp = FuncRef Int
+  deriving (Functor, Foldable, Traversable)
 
 data Lambda exp = Lambda String [(String, exp)] exp
+  deriving (Functor, Foldable, Traversable)
 
 -- Creating smart constructors:
 -- --------------------
@@ -70,8 +73,8 @@ add a b = embed $ Add a b
 mul :: Corecursive f => (Maybe (Either String [f Expr])) -> f Expr -> f Expr
 mul a b = embed $ Mul a b
 
--- The generated functions have a Wrap constraint and return f Expr, allowing them
--- to work with any wrapper type (Fix, Ann, Dag, etc.) that implements Wrap.
+-- The generated functions have a Corecursive constraint and return f Expr, allowing them
+-- to work with any wrapper type (Fix, Ann, Dag, etc.) that implements Corecursive.
 
 -- Creating a Sum Type:
 -- --------------------
@@ -82,18 +85,9 @@ mul a b = embed $ Mul a b
 -- and FuncRef, prefixing each constructor name with "S1_":
 
 data Sum1 exp
-  -- from Value
-  = S1_Const Int
-  | S1_Arr [exp]
-
-  -- from Expr
-  | S1_NoFields
-  | S1_Add exp exp
-  | S1_Add2 exp [exp]
-  | S1_Mul (Maybe (Either String [exp])) exp
-
-  -- from FuncRef
-  | S1_FuncRef Int
+  = S1_Value (Value exp)
+  | S1_Expr (Expr exp)
+  | S1_FuncRef (FuncRef exp)
   deriving (Functor, Foldable, Traversable)
 
 -- Creating a Difference Type:
@@ -105,11 +99,8 @@ data Sum1 exp
 -- in Value. The result is Sum1 minus Value, with constructors prefixed by "D1_":
 
 data Diff1 exp
-  = D1_NoFields
-  | D1_Add exp exp
-  | D1_Add2 exp [exp]
-  | D1_Mul (Maybe (Either String [exp])) exp
-  | D1_FuncRef Int
+  = D1_Expr (Expr exp)
+  | D1_FuncRef (FuncRef exp)
   deriving (Functor, Foldable, Traversable)
 
 -- Creating a Bitraversable Instance:
@@ -128,17 +119,13 @@ data Diff1 exp
 instance Bitraversable Sum1 Value Diff1 where
   bitraverse trav f = trav go
     where
-      go (S1_Const n) = Const <$> pure n
-      go (S1_Arr as) = Arr <$> traverse (trav go) as
+      go (S1_Value v) = traverse (trav go) v
 
       -- For diff constructors (those NOT in Value), it forwards the arguments to f,
       -- which is responsible for handling the transformation:
 
-      go (S1_NoFields) = f D1_NoFields
-      go (S1_Add a b) = f (D1_Add a b)
-      go (S1_Add2 a b) = f (D1_Add2 a b)
-      go (S1_Mul a b) = f (D1_Mul a b)
-      go (S1_FuncRef a) = f (D1_FuncRef a)
+      go (S1_Expr e) = f (D1_Expr e)
+      go (S1_FuncRef e) = f (D1_FuncRef e)
 
 -- Note: Trailing underscores are automatically stripped from constructor names,
 -- so you can use empty prefixes ("") when the sum types are in the same module.
@@ -163,14 +150,14 @@ data Diff2 exp
 data Part2 exp
   = P2_Mul (Maybe (Either String [exp])) exp
 
-instance Partition Sum1 Sum2 Diff2 Part2 where
-   partition trav f1 f2 = trav f3
-     where
-        f3 (S1_Const n) = S2_Const <$> pure n
-        f3 (S1_Arr as) = S2_Arr <$> traverse (trav f3) as
-        f3 (S1_Add a b) = f1 (D2_Add a b)
-        f3 (S1_Mul a b) = f2 (P2_Mul a b)
-        f3 _ = undefined
+-- instance Partition Sum1 Sum2 Diff2 Part2 where
+--    partition trav f1 f2 = trav f3
+--      where
+--         f3 (S1_Const n) = S2_Const <$> pure n
+--         f3 (S1_Arr as) = S2_Arr <$> traverse (trav f3) as
+--         f3 (S1_Add a b) = f1 (D2_Add a b)
+--         f3 (S1_Mul a b) = f2 (P2_Mul a b)
+--         f3 _ = undefined
 
 -- Helper functions ------------------------------------------------------------
 
