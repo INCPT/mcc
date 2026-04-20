@@ -618,11 +618,18 @@ stripBang typ = typ
 
 -- Replace any type variables in a type with the provided type variables
 -- This ensures we use consistent type variable names (e.g., 'exp' instead of 'exp_i26cu')
+-- We recursively traverse the entire type structure to replace all occurrences
 replaceTypeVars :: [Name] -> Type -> Type
-replaceTypeVars typeVars typ = case typ of
-  VarT _ -> case typeVars of
-    [v] -> VarT v  -- Single type variable case
-    _ -> typ       -- Multiple type variables - keep as is for now
-  AppT t1 t2 -> AppT (replaceTypeVars typeVars t1) (replaceTypeVars typeVars t2)
-  _ -> typ
+replaceTypeVars typeVars = go
+  where
+    go typ = case typ of
+      VarT _ -> case typeVars of
+        [v] -> VarT v  -- Single type variable case
+        _ -> typ       -- Multiple type variables - keep as is for now
+      AppT t1 t2 -> AppT (go t1) (go t2)
+      ListT -> ListT
+      TupleT n -> TupleT n
+      ArrowT -> ArrowT
+      ConT name -> ConT name
+      _ -> typ
 
