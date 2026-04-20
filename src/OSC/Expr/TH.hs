@@ -583,19 +583,26 @@ genPatternSynonym outerTypeName typeVars patternName outerConName innerConName i
   let innerPat = ConP innerConName [] (fmap VarP paramVars)
   let outerPat = ConP outerConName [] [innerPat]
   
+  -- Create fresh type variable names that we control
+  freshTypeVars <- case typeVars of
+    [_] -> do
+      expVar <- newName "exp"
+      pure [expVar]
+    _ -> pure typeVars
+  
   -- Build the type signature
-  -- Use the exact type variable Names from typeVars throughout
-  let paramTypes = case typeVars of
+  -- Use the fresh type variable Names throughout
+  let paramTypes = case freshTypeVars of
         [expVar] -> [ replaceAllTypeVars expVar (stripBang typ) | (_, typ) <- innerFields ]
         _ -> [ stripBang typ | (_, typ) <- innerFields ]
   
   -- Apply type variables to the result type: Expr exp
-  let resultType = foldl AppT (ConT outerTypeName) (fmap VarT typeVars)
+  let resultType = foldl AppT (ConT outerTypeName) (fmap VarT freshTypeVars)
   
   -- Build the full type with forall if we have type variables
-  let patType = case typeVars of
+  let patType = case freshTypeVars of
         [] -> foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
-        _ -> ForallT (fmap (\v -> PlainTV v SpecifiedSpec) typeVars) []
+        _ -> ForallT (fmap (\v -> PlainTV v SpecifiedSpec) freshTypeVars) []
                (foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes)
   
   -- Pattern synonym declaration
@@ -623,18 +630,26 @@ genSimplePatternSynonym typeName typeVars patternName conName fields = do
   paramVars <- forM [1..length fields] $ \i -> pure $ mkName ("a" ++ show i)
   
   let pat = ConP conName [] (fmap VarP paramVars)
-  -- Use the exact type variable Names from typeVars throughout
-  let paramTypes = case typeVars of
+  
+  -- Create fresh type variable names that we control
+  freshTypeVars <- case typeVars of
+    [_] -> do
+      expVar <- newName "exp"
+      pure [expVar]
+    _ -> pure typeVars
+  
+  -- Use the fresh type variable Names throughout
+  let paramTypes = case freshTypeVars of
         [expVar] -> [ replaceAllTypeVars expVar (stripBang typ) | (_, typ) <- fields ]
         _ -> [ stripBang typ | (_, typ) <- fields ]
   
   -- Apply type variables to the result type: Expr exp
-  let resultType = foldl AppT (ConT typeName) (fmap VarT typeVars)
+  let resultType = foldl AppT (ConT typeName) (fmap VarT freshTypeVars)
   
   -- Build the full type with forall if we have type variables
-  let patType = case typeVars of
+  let patType = case freshTypeVars of
         [] -> foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
-        _ -> ForallT (fmap (\v -> PlainTV v SpecifiedSpec) typeVars) []
+        _ -> ForallT (fmap (\v -> PlainTV v SpecifiedSpec) freshTypeVars) []
                (foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes)
   
   let patSynDec = PatSynD patternName (PrefixPatSyn paramVars) ImplBidir pat
