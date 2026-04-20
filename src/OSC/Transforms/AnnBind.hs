@@ -85,7 +85,8 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
     diff (PRec t delay param bindings body) = do
       (prev, env) <- R.ask
    
-      paramSubst <- M.singleton <$> pure param <*> Just <$> nextName
+      paramSubstName <- nextName
+      let paramSubst = M.singleton param (Just paramSubstName)
       let bindingNames = M.fromList (fmap ((, Nothing) . fst) bindings)
    
       -- Process bindings recursively
@@ -101,23 +102,18 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
       W.tell ((capturedByBindings <> capturedByBody) S.\\ (S.fromList $ M.keys (paramSubst <> bindingNames)))
       
       let allCaptured = capturedByBindings <> capturedByBody
-   
+
       bindings'' <- sequence $ mconcat
         [ [ do
               when (S.member n allCaptured) $ lift $ lift $ lift $ ST.modify (M.insert n t)
               pure (n, if S.member n allCaptured then C.Global else C.Local, Ann (t, e))
           | (n, Ann (t, e)) <- bindings'
           ]
-        , [ do
-              lift $ lift $ lift $ ST.modify (M.insert paramSubst t)
-              pure (paramSubst, C.Global, Ann (t, Expr $ C.Var p))
-          | (p, t) <- zip [param] [t]
-          , S.member p allCaptured
-          , Just (Just paramSubst) <- [ M.lookup p paramSubst ]
-          ]
         ]
-   
-      pure $ PRecAnn t delay param bindings'' body'
 
-annCapturedBindings :: Ann Type SRC.Expr -> ((Ann Type Expr, Set Ident), Map Ident Type)
-annCapturedBindings = flip ST.runState mempty . flip ST.evalStateT 0 . W.runWriterT . flip R.runReaderT mempty . annCapturedBindings_
+      lift $ lift $ lift $ ST.modify (M.insert paramSubstName (C.TArr t delay))
+   
+      pure $ PRecAnn t delay paramSubstName bindings'' body'
+
+annCapturedBindings :: Ann Type SRC.Expr -> (Ann Type Expr, Map Ident Type)
+annCapturedBindings = flip ST.runState mempty . fmap fst . flip ST.evalStateT 0 . W.runWriterT . flip R.runReaderT mempty . annCapturedBindings_

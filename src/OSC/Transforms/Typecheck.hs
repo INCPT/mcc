@@ -264,7 +264,7 @@ infer = fmap (mapAnn snd) . E.runExcept . flip R.runReaderT mempty . typecheck
 dbgInfer :: Show pos => ExpA pos -> Ann Type Expr
 dbgInfer expr = case fmap (mapAnn snd) $ E.runExcept $ flip R.runReaderT mempty $ typecheck expr of
   Right a -> a
-  Left e -> error $ show e
+  Left _ -> (Ann (TNumber TI32, PConst (I32 666)))
 
 --------------------------------------------------------------------------------
 
