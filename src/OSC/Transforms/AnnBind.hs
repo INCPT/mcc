@@ -1,6 +1,3 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE TupleSections #-}
-
 module OSC.Transforms.AnnBind where
 
 import Control.Monad (when)

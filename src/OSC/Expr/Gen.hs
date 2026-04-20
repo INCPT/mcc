@@ -1,10 +1,5 @@
 {-# OPTIONS -Wno-orphans #-}
 
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-
 module OSC.Expr.Gen where
 
 import qualified OSC.Expr.Comp as C

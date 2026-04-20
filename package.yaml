@@ -42,7 +42,19 @@ dependencies:
     - transformers
     - template-haskell
 
-default-extensions: OverloadedStrings, LambdaCase
+default-extensions:
+  - DeriveTraversable
+  - DeriveFunctor
+  - DeriveGeneric
+  - FlexibleContexts
+  - FlexibleInstances
+  - GeneralizedNewtypeDeriving
+  - LambdaCase
+  - OverloadedStrings
+  - OverloadedStrings
+  - RankNTypes
+  - ScopedTypeVariables
+  - TupleSections
 
 library:
   source-dirs: src

@@ -1,8 +1,5 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE RecursiveDo #-}
-{-# LANGUAGE TupleSections #-}
 
 module OSC.Expr.Interpret where
 

@@ -79,13 +79,42 @@ foldSelections = runStack . expr
 
 type FoldSelM = ST.State [(Type, Ann Type SRC.Expr)]
 
+push :: (Type, Ann Type SRC.Expr) -> FoldSelM ()
+push s = ST.modify (s:)
+
+pop :: FoldSelM (Maybe ((Type, Ann Type SRC.Expr)))
+pop = do
+  as <- ST.get
+  case as of
+    (a:as) -> do
+      ST.put as
+      pure (Just a)
+    _ -> pure Nothing
+
+-- TODO: PFoldedSelectR
 foldSelections :: Ann Type SRC.Expr -> FoldSelM (Ann Type Expr)
-foldSelections = bitraverse rtraverse diff
+foldSelections = bitraverse (rtraverse . trav) diff
   where
+    rhs expr = do
+      idxs <- ST.get
+      case idxs of
+        [] -> pure expr
+        _ -> pure undefined -- $ PFoldedSelectR expr (fmap (foldSelections . snd) idxs)
+
+    trav _ (SRC.PArr elems) = do
+     s <- pop
+     case s of
+       Just (t, idx) -> do
+         elems' <- traverse foldSelections elems
+         push (t, idx)
+         PFoldedSelectL elems' <$> (foldSelections idx)
+       Nothing -> PArr <$> traverse foldSelections elems
+    trav rmap e = rhs $ rmap e
+
     diff :: Diff (Ann Type SRC.Expr) -> FoldSelM (Expr (Ann Type Expr))
     diff (DSelect sel idx) = do
       let Ann (t, _) = sel
-      ST.modify ((t, idx) :)
+      push (t, idx)
       sel' <- foldSelections sel
-      ST.modify tail
+      _ <- pop
       pure $ project sel'

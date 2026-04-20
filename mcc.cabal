@@ -63,7 +63,18 @@ library
   hs-source-dirs:
       src
   default-extensions:
-      OverloadedStrings, LambdaCase
+      DeriveTraversable
+      DeriveFunctor
+      DeriveGeneric
+      FlexibleContexts
+      FlexibleInstances
+      GeneralizedNewtypeDeriving
+      LambdaCase
+      OverloadedStrings
+      OverloadedStrings
+      RankNTypes
+      ScopedTypeVariables
+      TupleSections
   ghc-options: -Wall -fno-warn-name-shadowing -Wincomplete-uni-patterns
   build-depends:
       BNFC
@@ -99,7 +110,18 @@ executable mcc
   hs-source-dirs:
       app
   default-extensions:
-      OverloadedStrings, LambdaCase
+      DeriveTraversable
+      DeriveFunctor
+      DeriveGeneric
+      FlexibleContexts
+      FlexibleInstances
+      GeneralizedNewtypeDeriving
+      LambdaCase
+      OverloadedStrings
+      OverloadedStrings
+      RankNTypes
+      ScopedTypeVariables
+      TupleSections
   ghc-options: -Wall -fno-warn-name-shadowing -Wincomplete-uni-patterns
   build-tools:
       alex

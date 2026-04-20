@@ -1,8 +1,4 @@
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
 
 module OSC.Pretty where
 
