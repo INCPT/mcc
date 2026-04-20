@@ -179,14 +179,13 @@ interpret (Ann (_, PSelect expr idx)) = do
       (VArr as, VNumber (C.I64 i')) -> pure (as !! i')
       (e', i') -> error $ "Select: " <> show e' <> ", " <> show i'
 
-interpret (Ann (t, PRec _ _ param bindings body)) = mdo
+interpret (Ann (t, PRec _ delay param bindings body)) = mdo
   nextCell <- ST.gets (.nextCell)
 
   let delayBufferIdx = nextCell
   let delayIndexIdx = nextCell + 1
 
-  let initialValue = alloc t
-  let delay = getDelay t
+  let initialValue = alloc (C.TArr t delay)
 
   ST.modify $ \st -> st
     { nextCell = st.nextCell + 2
@@ -198,7 +197,7 @@ interpret (Ann (t, PRec _ _ param bindings body)) = mdo
         let delayIdx = lookupE "delayIdx" mem delayIndexIdx
         case (delayBuffer, delayIdx) of
           (VArr ds, VNumber (C.I32 i)) -> pure (ds !! ((i - offset) `mod` delay))
-          _ -> error "delayLine (this is a bug)"
+          _ -> error $ "delayLine: (this is a bug): " <> show delayBuffer <> ", " <> show delayIdx
 
   simbindings <- fmap M.fromList $ sequence $ mconcat
     [ [ pure (param, delayLine delay) ]
@@ -223,7 +222,7 @@ interpret (Ann (t, PRec _ _ param bindings body)) = mdo
             [ (delayBufferIdx, VArr $ replace i nextValue ds)
             , (delayIndexIdx, VNumber (C.I32 ((i + 1) `mod` delay)))
             ]
-          _ -> error "delayLine (this is a bug)"
+          _ -> error "delayLine2 (this is a bug)"
 
       , mem'
       ]
@@ -231,9 +230,6 @@ interpret (Ann (t, PRec _ _ param bindings body)) = mdo
     delayLine 0
   where
     replace i a as = take i as <> [a] <> drop (i + 1) as
-
-    getDelay (C.TArr _ n) = n
-    getDelay _ = error "interpret: Rec: expected array type for delay"
 
     alloc (C.TNumber C.TI32) = VNumber (C.I32 0)
     alloc (C.TNumber C.TF32) = VNumber (C.F32 0)

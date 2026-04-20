@@ -347,7 +347,7 @@ genRec ctx recType = do
 instance Arbitrary (Fix Expr) where
   arbitrary = do
     returnType <- genSimpleType
-    genExprOfType emptyCtx (C.TLam [] returnType)
+    genExprOfType emptyCtx returnType
   
   shrink (Fix (PConst (C.I32 n))) = [Fix (PConst (C.I32 n')) | n' <- shrink n]
   shrink (Fix (PConst (C.I64 n))) = [Fix (PConst (C.I64 n')) | n' <- shrink n]
@@ -380,11 +380,10 @@ randomExprWithDepth depth = do
   targetType <- genType 2
   genExprOfType (emptyCtx { maxDepth = depth }) targetType
 
--- | Generate a random ERec expression for testing in GHCi
---
--- Usage:
---   > sample randomERec
 randomERec :: Gen (Fix Expr)
 randomERec = do
   recType <- genNonFuncType 2
   genRec emptyCtx recType
+
+sample' :: Show a => Gen a -> IO ()
+sample' = sample

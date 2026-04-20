@@ -27,8 +27,8 @@ zeroValue (TAbs _ _) = VNumber (I32 0)
 allocateVars :: [(Type, Idx)] -> VarTable
 allocateVars allocs = M.fromList [ (idx, zeroValue t) | (t, idx) <- allocs ]
 
-interpretToList :: Int -> IR -> Type -> FuncRef -> [Value]
-interpretToList steps ir mainType mainFuncFR = evalState (replicateM steps runTick) globalTable
+irInterpretToList :: Int -> IR -> Type -> FuncRef -> [Value]
+irInterpretToList steps ir mainType mainFuncFR = evalState (replicateM steps runTick) globalTable
   where
     maxIdx = maximum [ idx | (_, Global idx) <- ir.globalAllocations ]
     retIdx = Global (maxIdx + 1)
