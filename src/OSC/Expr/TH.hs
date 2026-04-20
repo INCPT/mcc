@@ -398,14 +398,9 @@ genBitraversableInstance sumTypeName destTypeName diffTypeName = do
   diffInfo <- reify diffTypeName
   let diffCons = getConstructors diffInfo
 
-  -- Extract wrapped type names from dest and diff constructors
-  destTypeNames <- forM destCons $ \(conName, fields) -> case fields of
-    [(_, AppT (ConT typeName) _)] -> pure typeName
-    _ -> fail $ "Constructor " ++ nameBase conName ++ " in " ++ nameBase destTypeName ++ " must wrap exactly one type"
-
-  diffTypeNames <- forM diffCons $ \(conName, fields) -> case fields of
-    [(_, AppT (ConT typeName) _)] -> pure typeName
-    _ -> fail $ "Constructor " ++ nameBase conName ++ " in " ++ nameBase diffTypeName ++ " must wrap exactly one type"
+  -- Build maps from wrapped type name to constructor name
+  let destTypeMap = [ (tn, cn) | (cn, [(_, AppT (ConT tn) _)]) <- destCons ]
+  let diffTypeMap = [ (tn, cn) | (cn, [(_, AppT (ConT tn) _)]) <- diffCons ]
 
   let travVar = mkName "trav"
   let fVar = mkName "f"
@@ -417,21 +412,18 @@ genBitraversableInstance sumTypeName destTypeName diffTypeName = do
       let varName = mkName "v"
       let pat = ConP sumConName [] [VarP varName]
 
-      if wrappedTypeName `elem` destTypeNames
-        then do
-          -- Subset constructor: traverse (trav go) v
-          let body = NormalB $ AppE (AppE (VarE 'traverse) (AppE (VarE travVar) (VarE goVar))) (VarE varName)
+      case lookup wrappedTypeName destTypeMap of
+        Just destConName -> do
+          -- Subset constructor: DestCon <$> traverse (trav go) v
+          let traverseExpr = AppE (AppE (VarE 'traverse) (AppE (VarE travVar) (VarE goVar))) (VarE varName)
+          let body = NormalB $ InfixE (Just (ConE destConName)) (VarE '(<$>)) (Just traverseExpr)
           pure $ Clause [pat] body []
-        else if wrappedTypeName `elem` diffTypeNames
-          then do
-            -- Diff constructor: find matching diff constructor and call f
-            diffConName <- case [ cn | (cn, [(_, AppT (ConT tn) _)]) <- diffCons, tn == wrappedTypeName ] of
-              [cn] -> pure cn
-              [] -> fail $ "No matching diff constructor for " ++ nameBase sumConName
-              _ -> fail $ "Multiple matching diff constructors for " ++ nameBase sumConName
+        Nothing -> case lookup wrappedTypeName diffTypeMap of
+          Just diffConName -> do
+            -- Diff constructor: f (DiffCon v)
             let body = NormalB $ AppE (VarE fVar) (AppE (ConE diffConName) (VarE varName))
             pure $ Clause [pat] body []
-          else fail $ "Constructor " ++ nameBase sumConName ++ " wraps type not in dest or diff"
+          Nothing -> fail $ "Constructor " ++ nameBase sumConName ++ " wraps type not in dest or diff"
     _ -> fail $ "Constructor " ++ nameBase sumConName ++ " must wrap exactly one type"
 
   let goFunc = FunD goVar goClauses
