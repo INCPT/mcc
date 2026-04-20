@@ -81,8 +81,7 @@ mul a b = embed $ Mul a b
 --
 -- $(genSum "S1_" "Sum1" [''Value, ''Expr, ''FuncRef])
 --
--- This generates a sum type that combines all constructors from Value, Expr,
--- and FuncRef, prefixing each constructor name with "S1_":
+-- This generates a sum type with single-valued constructors wrapping each type:
 
 data Sum1 exp
   = S1_Value (Value exp)
@@ -93,10 +92,10 @@ data Sum1 exp
 -- Creating a Difference Type:
 -- ----------------------------
 --
--- $(genDiff "D1_" "Diff1" "S1_" ''Sum1 "" ''Value)
+-- $(genDiff "D1_" "Diff1" ''Sum1 ''Value)
 --
--- This generates a type containing all constructors from Sum1 that are NOT
--- in Value. The result is Sum1 minus Value, with constructors prefixed by "D1_":
+-- This generates a type containing constructors from Sum1 whose wrapped type
+-- is NOT in Value. Constructors must be single-valued (wrapping exactly one type).
 
 data Diff1 exp
   = D1_Expr (Expr exp)
@@ -106,24 +105,16 @@ data Diff1 exp
 -- Creating a Bitraversable Instance:
 -- -----------------------------------
 --
--- $(genBitraversableInstance "S1_" ''Sum1 "" ''Value "D1_" ''Diff1)
+-- $(genBitraversableInstance ''Sum1 ''Value ''Diff1)
 --
 -- This generates a Bitraversable instance that allows transforming Sum1 expressions
--- into Value expressions. The bitraverse function takes:
---   trav :: forall a b. (a (f a) -> m (b (f' b))) -> f a -> m (f' b) - general traversal
---   f :: c (f a) -> m (b (f' b)) - transforms diff constructors
---
--- For subset constructors (those in Value), it applies trav to recursive fields and
--- returns the Value constructor directly:
+-- into Value expressions. For subset constructors (those wrapping Value), it unwraps
+-- and applies trav. For diff constructors, it rewraps in the diff type and calls f:
 
 instance Bitraversable Sum1 Value Diff1 where
   bitraverse trav f = trav go
     where
       go (S1_Value v) = traverse (trav go) v
-
-      -- For diff constructors (those NOT in Value), it forwards the arguments to f,
-      -- which is responsible for handling the transformation:
-
       go (S1_Expr e) = f (D1_Expr e)
       go (S1_FuncRef e) = f (D1_FuncRef e)
 
@@ -186,29 +177,6 @@ validateNoExistentials typeName (TyConI (DataD _ _ _ _ cons _)) = do
     _ -> pure ()
 validateNoExistentials _ _ = pure ()
 
--- Compare constructors by their fields only, ignoring names
--- Normalize type variables before comparing so we compare structure
-consEqualByFields :: (Name, [BangType]) -> (Name, [BangType]) -> Bool
-consEqualByFields (_, fields1) (_, fields2) = 
-  normalizeFields fields1 == normalizeFields fields2
-  where
-    normalizeFields = fmap normalizeBangType
-    normalizeBangType (bang, typ) = (bang, normalizeType typ)
-    normalizeType (VarT _) = VarT (mkName "a")
-    normalizeType (AppT f a) = AppT (normalizeType f) (normalizeType a)
-    normalizeType t = t
-
--- Strip a prefix from a string if present
-stripPrefix :: String -> String -> Maybe String
-stripPrefix prefix str
-  | prefix == take (length prefix) str = Just (drop (length prefix) str)
-  | otherwise = Nothing
-
--- Strip trailing underscores from a string
-stripTrailingUnderscore :: String -> String
-stripTrailingUnderscore str = case reverse str of
-  ('_':rest) -> reverse rest
-  _ -> str
 
 replaceExpType :: Name -> BangType -> BangType
 replaceExpType expVar (bang, typ) = (bang, replaceInType expVar typ)
@@ -236,29 +204,6 @@ containerDepth typ = case typ of
   AppT _ a -> 1 + containerDepth a
   _ -> 0
 
--- Match sum constructors to subset/dest constructors by name
--- For each sum constructor, strips the sum prefix and looks up the base name
--- in the subset map. Calls onSubset if found, onDiff if not found.
-matchSumConstructors
-  :: String                                    -- Sum prefix
-  -> [(Name, [BangType])]                      -- Sum constructors
-  -> [(String, (Name, [BangType]))]            -- Subset map (baseName -> (conName, fields))
-  -> ((Name, [BangType]) -> (Name, [BangType]) -> String -> Q a)  -- onSubset: sumCon -> subsetCon -> baseName -> result
-  -> ((Name, [BangType]) -> String -> Q a)     -- onDiff: sumCon -> baseName -> result
-  -> Q [a]
-matchSumConstructors sumPrefix sumCons subsetMap onSubset onDiff =
-  forM sumCons $ \sumCon@(sumConName, _) -> do
-    let sumName = nameBase sumConName
-    
-    case stripPrefix sumPrefix sumName of
-      Nothing -> fail $ "Sum constructor " ++ sumName ++ " doesn't have expected prefix " ++ sumPrefix
-      Just baseName -> do
-        case lookup baseName subsetMap of
-          Just (subsetConName, subsetFields) -> do
-            unless (consEqualByFields sumCon (subsetConName, subsetFields)) $
-              fail $ "Constructor " ++ sumName ++ " has different fields than subset constructor " ++ nameBase subsetConName
-            onSubset sumCon (subsetConName, subsetFields) baseName
-          Nothing -> onDiff sumCon baseName
 
 -- TODO: specialize once BiPlate is gone
 -- Build a constructor application with transformed fields using <$> and <*>
@@ -296,73 +241,57 @@ foldList = mconcat . fmap F.toList
 
 genSum :: String -> String -> [Name] -> Q [Dec]
 genSum prefix sumName typeNames = do
-  -- Get info about all the types
-  typeInfos <- forM typeNames $ \typeName -> do
-    info <- reify typeName
-    validateTypeParams typeName info
-    validateNoExistentials typeName info
-    pure (typeName, info)
-
-  -- Collect all constructors from all types
-  let allCons = mconcat [ getConstructors info | (_, info) <- typeInfos ]
-
-  -- Create the sum type
   let expVar = mkName "exp"
   let sumTypeName = mkName sumName
   
-  -- Build constructors for the sum type
-  sumCons <- forM allCons $ \(conName, fields) -> do
-    let baseName = stripTrailingUnderscore (nameBase conName)
+  -- Build constructors: one per input type, wrapping that type
+  sumCons <- forM typeNames $ \typeName -> do
+    let baseName = nameBase typeName
     let newConName = mkName (prefix ++ baseName)
-    let newFields = fmap (replaceExpType expVar) fields
-    pure $ NormalC newConName newFields
+    let wrappedType = AppT (ConT typeName) (VarT expVar)
+    pure $ NormalC newConName [(Bang NoSourceUnpackedness NoSourceStrictness, wrappedType)]
 
-  -- Create the data declaration
   let sumDataDec = DataD [] sumTypeName [PlainTV expVar BndrReq] Nothing sumCons
         [DerivClause Nothing [ConT ''Functor, ConT ''Foldable, ConT ''Traversable, ConT ''Show]]
 
   pure [sumDataDec]
 
-genDiff :: String -> String -> String -> Name -> String -> Name -> Q [Dec]
-genDiff prefix diffName sumPrefix sumTypeName subsetPrefix subsetTypeName = do
-  -- Get info about the sum type
-  sumInfo <- reify sumTypeName
-  validateTypeParams sumTypeName sumInfo
-  validateNoExistentials sumTypeName sumInfo
-  let sumCons = getConstructors sumInfo
+genDiff :: String -> String -> Name -> Name -> Q [Dec]
+genDiff prefix diffName type1Name type2Name = do
+  -- Get constructors of type1
+  type1Info <- reify type1Name
+  validateTypeParams type1Name type1Info
+  validateNoExistentials type1Name type1Info
+  let type1Cons = getConstructors type1Info
 
-  -- Get info about the subset type
-  subsetInfo <- reify subsetTypeName
-  validateTypeParams subsetTypeName subsetInfo
-  validateNoExistentials subsetTypeName subsetInfo
-  let subsetCons = getConstructors subsetInfo
+  -- Get constructors of type2
+  type2Info <- reify type2Name
+  validateTypeParams type2Name type2Info
+  validateNoExistentials type2Name type2Info
+  let type2Cons = getConstructors type2Info
 
-  -- Build a map from base names to subset constructors
-  let subsetMap = [ (baseName, (conName, fields))
-                  | (conName, fields) <- subsetCons
-                  , let strippedName = stripTrailingUnderscore (nameBase conName)
-                  , Just baseName <- [stripPrefix subsetPrefix strippedName]
-                  ]
+  -- Extract wrapped type names from type2 constructors
+  type2TypeNames <- forM type2Cons $ \(conName, fields) -> case fields of
+    [(_, AppT (ConT typeName) _)] -> pure typeName
+    _ -> fail $ "Constructor " ++ nameBase conName ++ " in " ++ nameBase type2Name ++ " must have exactly one field wrapping a type"
 
-  -- Create the diff type
   let expVar = mkName "exp"
   let diffTypeName = mkName diffName
-  
-  -- Build constructors for the diff type
-  -- Only include sum constructors that don't match any subset constructor
-  diffConsDecls <- matchSumConstructors sumPrefix sumCons subsetMap
-    (\_ _ _ -> pure Nothing)  -- Skip subset constructors
-    (\(_, fields) baseName -> do
-      let strippedBaseName = stripTrailingUnderscore baseName
-      let newConName = mkName (prefix ++ strippedBaseName)
-      let newFields = fmap (replaceExpType expVar) fields
-      pure $ Just $ NormalC newConName newFields
-    )
 
-  let diffConsDecls' = [ c | Just c <- diffConsDecls ]
+  -- Build diff constructors: include type1 constructors whose wrapped type is NOT in type2
+  diffCons <- foldMapM (\(conName, fields) -> case fields of
+    [(bang, AppT (ConT typeName) _)] ->
+      if typeName `elem` type2TypeNames
+        then pure []
+        else do
+          let baseName = nameBase conName
+          let newConName = mkName (prefix ++ baseName)
+          let wrappedType = AppT (ConT typeName) (VarT expVar)
+          pure [NormalC newConName [(bang, wrappedType)]]
+    _ -> fail $ "Constructor " ++ nameBase conName ++ " in " ++ nameBase type1Name ++ " must have exactly one field wrapping a type"
+    ) type1Cons
 
-  -- Create the data declaration
-  let diffDataDec = DataD [] diffTypeName [PlainTV expVar BndrReq] Nothing diffConsDecls' []
+  let diffDataDec = DataD [] diffTypeName [PlainTV expVar BndrReq] Nothing diffCons []
 
   pure [diffDataDec]
 
@@ -425,90 +354,69 @@ replaceExpWithWrapped fVar typeName typ = case typ of
 
 --------------------------------------------------------------------------------
 
-genBitraversableInstance :: String -> Name -> String -> Name -> String -> Name -> Q [Dec]
-genBitraversableInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefix diffTypeName = do
+genBitraversableInstance :: Name -> Name -> Name -> Q [Dec]
+genBitraversableInstance sumTypeName destTypeName diffTypeName = do
   -- Get constructors of sum type
   sumInfo <- reify sumTypeName
   let sumCons = getConstructors sumInfo
-  
+
   -- Get constructors of dest type
   destInfo <- reify destTypeName
   let destCons = getConstructors destInfo
-  
-  -- Build a map from base names to dest constructors
-  let destMap = [ (baseName, (conName, fields)) 
-                | (conName, fields) <- destCons
-                , let strippedName = stripTrailingUnderscore (nameBase conName)
-                , Just baseName <- [stripPrefix destPrefix strippedName]
-                ]
-  
+
+  -- Get constructors of diff type
+  diffInfo <- reify diffTypeName
+  let diffCons = getConstructors diffInfo
+
+  -- Extract wrapped type names from dest and diff constructors
+  destTypeNames <- forM destCons $ \(conName, fields) -> case fields of
+    [(_, AppT (ConT typeName) _)] -> pure typeName
+    _ -> fail $ "Constructor " ++ nameBase conName ++ " in " ++ nameBase destTypeName ++ " must wrap exactly one type"
+
+  diffTypeNames <- forM diffCons $ \(conName, fields) -> case fields of
+    [(_, AppT (ConT typeName) _)] -> pure typeName
+    _ -> fail $ "Constructor " ++ nameBase conName ++ " in " ++ nameBase diffTypeName ++ " must wrap exactly one type"
+
   let travVar = mkName "trav"
   let fVar = mkName "f"
   let goVar = mkName "go"
-  
-  -- For each sum constructor, match it to dest or diff by name
-  matches <- matchSumConstructors sumPrefix sumCons destMap
-    (\(sumConName, fields) (destConName, _) _ ->
-      genBitraverseSubsetMatch sumConName destConName fields travVar goVar
-    )
-    (\(sumConName, fields) baseName -> do
-      let strippedBaseName = stripTrailingUnderscore baseName
-      let diffConName = mkName (diffPrefix ++ strippedBaseName)
-      genBitraverseDiffMatch sumConName diffConName fields fVar
-    )
- 
-  -- Validate that all constructors were matched
-  when (length matches /= length sumCons) $
-    fail $ "Not all sum constructors were matched: expected " ++ show (length sumCons) ++ " but got " ++ show (length matches)
 
-  -- Build: bitraverse trav f = trav go
-  --   where go (S1_Const n) = Const <$> pure n
-  --         go (S1_Arr as) = Arr <$> traverse (trav go) as
-  --         go (S1_NoFields) = f D1_NoFields
-  --         ...
-  let goClauses = fmap (\(Match pat body decls) -> Clause [pat] body decls) matches
+  -- Generate clauses for each sum constructor
+  goClauses <- forM sumCons $ \(sumConName, fields) -> case fields of
+    [(_, AppT (ConT wrappedTypeName) _)] -> do
+      let varName = mkName "v"
+      let pat = ConP sumConName [] [VarP varName]
+
+      if wrappedTypeName `elem` destTypeNames
+        then do
+          -- Subset constructor: traverse (trav go) v
+          let body = NormalB $ AppE (AppE (VarE 'traverse) (AppE (VarE travVar) (VarE goVar))) (VarE varName)
+          pure $ Clause [pat] body []
+        else if wrappedTypeName `elem` diffTypeNames
+          then do
+            -- Diff constructor: find matching diff constructor and call f
+            diffConName <- case [ cn | (cn, [(_, AppT (ConT tn) _)]) <- diffCons, tn == wrappedTypeName ] of
+              [cn] -> pure cn
+              [] -> fail $ "No matching diff constructor for " ++ nameBase sumConName
+              _ -> fail $ "Multiple matching diff constructors for " ++ nameBase sumConName
+            let body = NormalB $ AppE (VarE fVar) (AppE (ConE diffConName) (VarE varName))
+            pure $ Clause [pat] body []
+          else fail $ "Constructor " ++ nameBase sumConName ++ " wraps type not in dest or diff"
+    _ -> fail $ "Constructor " ++ nameBase sumConName ++ " must wrap exactly one type"
+
   let goFunc = FunD goVar goClauses
   let bitraverseBody = AppE (VarE travVar) (VarE goVar)
-  let bitraverseClause = Clause 
+  let bitraverseClause = Clause
         [VarP travVar, VarP fVar]
         (NormalB bitraverseBody)
         [goFunc]
 
   pure
-    [ InstanceD Nothing [] 
+    [ InstanceD Nothing []
         (AppT (AppT (AppT (ConT ''Bitraversable) (ConT sumTypeName)) (ConT destTypeName)) (ConT diffTypeName))
         [FunD 'bitraverse [bitraverseClause]]
     ]
 
--- For subset constructors: wrap =<< (DestCon <$> transform fields)
-genSubsetMatch :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
-genSubsetMatch sumConName destConName fields unwrapVar wrapVar fVar = do
-  fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_a" ++ show i)
-  
-  let pat = ConP sumConName [] (fmap VarP fieldVars)
- 
-  body <- if null fields
-    then [| $(varE wrapVar) =<< pure $(conE destConName) |]
-    else do
-      conApp <- genConstructorApp destConName fields fieldVars unwrapVar wrapVar fVar
-      [| $(varE wrapVar) =<< $(pure conApp) |]
-
-  pure $ Match pat (NormalB body) []
-
--- For diff constructors: f =<< (DiffCon <$> transform fields)
-genDiffMatch :: Name -> Name -> [BangType] -> Name -> Name -> Name -> Q Match
-genDiffMatch sumConName diffConName fields unwrapVar wrapVar fVar = do
-  fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_a" ++ show i)
-  
-  let pat = ConP sumConName [] (fmap VarP fieldVars)
-  
-  body <- if null fields
-    then [| $(varE fVar) =<< pure $(conE diffConName) |]
-    else do
-      conApp <- genConstructorApp diffConName fields fieldVars unwrapVar wrapVar fVar
-      [| $(varE fVar) =<< $(pure conApp) |]
-
-  pure $ Match pat (NormalB body) []
 
 -- Transform a field based on its type structure
 genFieldTransform :: Type -> Name -> Name -> Name -> Name -> Q Exp
@@ -559,29 +467,3 @@ genBitraverseSubsetNestedTraverse depth var travVar goVar =
     buildTraverse 0 = [| $(varE travVar) $(varE goVar) |]
     buildTraverse n = [| traverse $(buildTraverse (n - 1)) |]
 
--- For subset constructors in bitraverse: DestCon <$> pure field1 <*> traverse (trav go) field2 ...
-genBitraverseSubsetMatch :: Name -> Name -> [BangType] -> Name -> Name -> Q Match
-genBitraverseSubsetMatch sumConName destConName fields travVar goVar = do
-  fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_a" ++ show i)
-  
-  let pat = ConP sumConName [] (fmap VarP fieldVars)
- 
-  body <- if null fields
-    then [| pure $(conE destConName) |]
-    else genConstructorAppWith destConName fields fieldVars $ \typ var ->
-      genBitraverseSubsetFieldTransform typ var travVar goVar
-
-  pure $ Match pat (NormalB body) []
-
--- For diff constructors in bitraverse: f (DiffCon _a1 _a2 ...)
-genBitraverseDiffMatch :: Name -> Name -> [BangType] -> Name -> Q Match
-genBitraverseDiffMatch sumConName diffConName fields fVar = do
-  fieldVars <- forM [1..length fields] $ \i -> pure $ mkName ("_a" ++ show i)
-  
-  let pat = ConP sumConName [] (fmap VarP fieldVars)
-  
-  -- Build the diff constructor application with the original field variables
-  let conApp = foldl AppE (ConE diffConName) (fmap VarE fieldVars)
-  let body = AppE (VarE fVar) conApp
-
-  pure $ Match pat (NormalB body) []
