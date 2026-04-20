@@ -40,7 +40,7 @@ foldSelections = bitraverse (\rmap expr@(Ann (exprt, _)) -> rtraverse (trav rmap
       idxs <- ST.get
       case idxs of
         [] -> rmap expr
-        _ -> PFoldedSelectR <$> foldSelections (Ann (exprt, expr)) <*> traverse foldSelections idxs
+        _ -> PFoldedSelectR <$> fmap (Ann . (exprt,)) (rmap expr) <*> traverse foldSelections idxs
 
     diff :: Diff (Ann Type SRC.Expr) -> FoldSelM (Expr (Ann Type Expr))
     diff (DSelect sel idx) = do
