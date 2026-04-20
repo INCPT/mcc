@@ -24,9 +24,9 @@ data RecAnn exp = RecAnn_ Type Int Ident [(Ident, AllocRegion, exp)] exp
 
 $(genSum "" "Expr" [''C.Exp, ''C.Select, ''LamAnn, ''RecAnn])
 
-$(genDiff "D" "Diff" "" ''B.Expr "" ''Expr)
+$(genDiff "" "Diff" "" ''B.Expr "" ''Expr)
 
-$(genBitraversableInstance "" ''B.Expr "" ''Expr "D" ''Diff)
+$(genBitraversableInstance "" ''B.Expr "" ''Expr "" ''Diff)
 
 -- | Pretty print a Fix Expr as an S-expression
 prettySexp :: Fix Expr -> Doc ann

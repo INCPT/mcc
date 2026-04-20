@@ -7,11 +7,12 @@ module OSC.Expr.Bitraversable where
 class Bitraversable a b c | a c -> b, b c -> a, a b -> c where
   bitraverse
     :: Monad m
-    => (f a -> m (f' b))         -- | Traversal
-    -> (c (f a) -> m (b (f' b))) -- | Differnce projection
+    => ((a (f a) -> m (b (f' b))) -> f a -> m (f' b)) -- | Traversal
 
-    -> a (f a)
-    -> m (b (f' b))
+    -> (c (f a) -> m (b (f' b))) -- | Diff projection
+
+    -> f a
+    -> m (f' b)
   
 class Partition source dest diff part where
   partition 

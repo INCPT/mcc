@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TupleSections #-}
 
 module OSC.Transforms.AnnBind where
@@ -26,48 +27,48 @@ type CaptureM = R.ReaderT (Map Ident (Maybe Ident), Map Ident (Maybe Ident)) (W.
 runCapture :: CaptureM a -> ((a, Set Ident), Map Ident Type)
 runCapture = flip ST.runState mempty . flip ST.evalStateT 0 . W.runWriterT . flip R.runReaderT mempty
 
-markCapturedBindings :: Type -> B.Expr (Ann Type B.Expr) -> CaptureM (Expr (Ann Type Expr))
-markCapturedBindings _ (B.Var n) = do
-  (_, env) <- R.ask
-
-  case M.lookup n env of
-    Just (Just subst) -> do
-      W.tell (S.singleton n)
-      pure (Var subst)
-    Just Nothing -> do
-      W.tell (S.singleton n)
-      pure (Var n)
-    Nothing -> pure (Var n)
-
-markCapturedBindings _ e = bitraverse (flow markCapturedBindings) go e
+markCapturedBindings :: Ann Type B.Expr -> CaptureM (Ann Type Expr)
+markCapturedBindings e@(Ann (t, _)) = bitraverse (rtraverse . trav) diff e
   where
-    flow f (Ann (t, e)) = Ann <$> (t,) <$> f t e
     nextName = do
       n <- ST.state $ \n -> (n, n + 1)
       pure $ Ident $ "_captured_" <> show n
+    
+    trav _ (B.Var n) = do
+      (_, env) <- R.ask
+    
+      case M.lookup n env of
+        Just (Just subst) -> do
+          W.tell (S.singleton n)
+          pure (Var subst)
+        Just Nothing -> do
+          W.tell (S.singleton n)
+          pure (Var n)
+        Nothing -> pure (Var n)
+    trav rmap e = rmap e
 
-    go :: Diff (Ann Type B.Expr) -> CaptureM (Expr (Ann Type Expr))
-    go (DLam t params bindings body) = do
+    diff :: Diff (Ann Type B.Expr) -> CaptureM (Expr (Ann Type Expr))
+    diff (Lam t params bindings body) = do
       (prev, env) <- R.ask
-
+   
       let bindingNames = M.fromList (fmap ((,Nothing) . fst) bindings)
       
       paramSubsts <- fmap M.fromList $ sequence [ (p,) <$> Just <$> nextName | p <- params ]
-
+   
       -- Process bindings recursively
       (bindings', capturedByBindings) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubsts <> bindingNames, prev <> env) $ sequence
-        [ (n,) <$> flow markCapturedBindings e
+        [ (n,) <$> markCapturedBindings e
         | (n, e) <- bindings
         ]
-
+   
       -- Process body recursively and capture free vars
-      (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubsts <> bindingNames, prev <> env) (flow markCapturedBindings body)
-
+      (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubsts <> bindingNames, prev <> env) (markCapturedBindings body)
+   
       -- Propagate captures excluding params and bindings
       W.tell ((capturedByBindings <> capturedByBody) S.\\ (S.fromList $ M.keys (paramSubsts <> bindingNames)))
-
+   
       let allCaptured = capturedByBindings <> capturedByBody
-
+   
       bindings'' <- sequence $ mconcat
         [ [ do
               when (S.member n allCaptured) $ lift $ lift $ lift $ ST.modify (M.insert n t)
@@ -82,30 +83,30 @@ markCapturedBindings _ e = bitraverse (flow markCapturedBindings) go e
           , Just (Just paramSubst) <- [ M.lookup p paramSubsts ]
           ]
         ]
-
+   
       -- Accumulate captured bindings
       pure $ LamAnn t params bindings'' body'
-
-    go (DRec t delay param bindings body) = do
+   
+    diff (Rec t delay param bindings body) = do
       (prev, env) <- R.ask
-
+   
       paramSubst <- M.singleton <$> pure param <*> Just <$> nextName
       let bindingNames = M.fromList (fmap ((, Nothing) . fst) bindings)
-
+   
       -- Process bindings recursively
       (bindings', capturedByBindings) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubst <> bindingNames, prev <> env) $ sequence
-        [ (n,) <$> flow markCapturedBindings e
+        [ (n,) <$> markCapturedBindings e
         | (n, e) <- bindings
         ]
-
+   
       -- Process body recursively and capture free vars
-      (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubst <> bindingNames, prev <> env) (flow markCapturedBindings body)
-
+      (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubst <> bindingNames, prev <> env) (markCapturedBindings body)
+   
       -- Propagate captures excluding params and bindings
       W.tell ((capturedByBindings <> capturedByBody) S.\\ (S.fromList $ M.keys (paramSubst <> bindingNames)))
       
       let allCaptured = capturedByBindings <> capturedByBody
-
+   
       bindings'' <- sequence $ mconcat
         [ [ do
               when (S.member n allCaptured) $ lift $ lift $ lift $ ST.modify (M.insert n t)
@@ -120,8 +121,5 @@ markCapturedBindings _ e = bitraverse (flow markCapturedBindings) go e
           , Just (Just paramSubst) <- [ M.lookup p paramSubst ]
           ]
         ]
-
+   
       pure $ RecAnn t delay param bindings'' body'
-
-markCapturedBindings_ :: Ann Type B.Expr -> ((Ann Type Expr, Set Ident), Map Ident Type)
-markCapturedBindings_ (Ann (t, e)) = runCapture (Ann <$> (t,) <$> markCapturedBindings t e)
