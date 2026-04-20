@@ -1,3 +1,6 @@
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module OSC.Expr.Comp where
@@ -56,21 +59,35 @@ data UOp = Sqrt | Abs | Neg | Ceil | Floor | Trunc | Nearest
 -- Building blocks -------------------------------------------------------------
 
 data Lam exp = Lam Type [Ident] [(Ident, exp)] exp
+  deriving (Functor, Foldable, Traversable, Show)
 
 data Rec exp = Rec Type Int Ident [(Ident, exp)] exp
+  deriving (Functor, Foldable, Traversable, Show)
 
 data Select exp = Select exp exp
+  deriving (Functor, Foldable, Traversable, Show)
 
 data FoldedSelect exp
   = FoldedSelectL [exp] exp
   | FoldedSelectR exp [exp]
+  deriving (Functor, Foldable, Traversable, Show)
 
-data Exp exp
+data Expr exp
   = Const Number
   | Arr [exp]
   | Op Op exp exp
   | Var Ident
   | App exp [exp]
+  deriving (Functor, Foldable, Traversable, Show)
+
+data AllocRegion = Local | Global
+  deriving Show
+
+data LamAnn exp = LamAnn Type [Ident] [(Ident, AllocRegion, exp)] exp
+  deriving (Functor, Foldable, Traversable, Show)
+
+data RecAnn exp = RecAnn Type Int Ident [(Ident, AllocRegion, exp)] exp
+  deriving (Functor, Foldable, Traversable, Show)
 
 --------------------------------------------------------------------------------
 

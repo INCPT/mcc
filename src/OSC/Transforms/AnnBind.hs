@@ -18,6 +18,7 @@ import OSC.Expr.Bitraversable
 import OSC.Expr.Functors
 import OSC.Expr.Comp (Ident (..), Type, paramTypes)
 import qualified OSC.Expr.Base as B
+import qualified OSC.Expr.Comp as C
 import OSC.Expr.AnnBind
 
 --------------------------------------------------------------------------------
@@ -34,21 +35,21 @@ markCapturedBindings e@(Ann (t, _)) = bitraverse (rtraverse . trav) diff e
       n <- ST.state $ \n -> (n, n + 1)
       pure $ Ident $ "_captured_" <> show n
     
-    trav _ (B.Var n) = do
+    trav _ (B.PVar n) = do
       (_, env) <- R.ask
     
       case M.lookup n env of
         Just (Just subst) -> do
           W.tell (S.singleton n)
-          pure (Var subst)
+          pure $ PVar subst
         Just Nothing -> do
           W.tell (S.singleton n)
-          pure (Var n)
-        Nothing -> pure (Var n)
+          pure $ PVar n
+        Nothing -> pure $ PVar n
     trav rmap e = rmap e
 
     diff :: Diff (Ann Type B.Expr) -> CaptureM (Expr (Ann Type Expr))
-    diff (Lam t params bindings body) = do
+    diff (PLam t params bindings body) = do
       (prev, env) <- R.ask
    
       let bindingNames = M.fromList (fmap ((,Nothing) . fst) bindings)
@@ -72,12 +73,12 @@ markCapturedBindings e@(Ann (t, _)) = bitraverse (rtraverse . trav) diff e
       bindings'' <- sequence $ mconcat
         [ [ do
               when (S.member n allCaptured) $ lift $ lift $ lift $ ST.modify (M.insert n t)
-              pure (n, if S.member n allCaptured then Global else Local, Ann (t, e))
+              pure (n, if S.member n allCaptured then C.Global else C.Local, Ann (t, e))
           | (n, Ann (t, e)) <- bindings'
           ]
         , [ do
               lift $ lift $ lift $ ST.modify (M.insert paramSubst t)
-              pure (paramSubst, Global, Ann (t, Var p))
+              pure (paramSubst, C.Global, Ann (t, Expr $ C.Var p))
           | (p, t) <- zip params (paramTypes ("markCapturedBindings: " <> show t) t)
           , S.member p allCaptured
           , Just (Just paramSubst) <- [ M.lookup p paramSubsts ]
@@ -85,9 +86,9 @@ markCapturedBindings e@(Ann (t, _)) = bitraverse (rtraverse . trav) diff e
         ]
    
       -- Accumulate captured bindings
-      pure $ LamAnn t params bindings'' body'
+      pure $ PLamAnn t params bindings'' body'
    
-    diff (Rec t delay param bindings body) = do
+    diff (PRec t delay param bindings body) = do
       (prev, env) <- R.ask
    
       paramSubst <- M.singleton <$> pure param <*> Just <$> nextName
@@ -110,16 +111,16 @@ markCapturedBindings e@(Ann (t, _)) = bitraverse (rtraverse . trav) diff e
       bindings'' <- sequence $ mconcat
         [ [ do
               when (S.member n allCaptured) $ lift $ lift $ lift $ ST.modify (M.insert n t)
-              pure (n, if S.member n allCaptured then Global else Local, Ann (t, e))
+              pure (n, if S.member n allCaptured then C.Global else C.Local, Ann (t, e))
           | (n, Ann (t, e)) <- bindings'
           ]
         , [ do
               lift $ lift $ lift $ ST.modify (M.insert paramSubst t)
-              pure (paramSubst, Global, Ann (t, Var p))
+              pure (paramSubst, C.Global, Ann (t, Expr $ C.Var p))
           | (p, t) <- zip [param] [t]
           , S.member p allCaptured
           , Just (Just paramSubst) <- [ M.lookup p paramSubst ]
           ]
         ]
    
-      pure $ RecAnn t delay param bindings'' body'
+      pure $ PRecAnn t delay param bindings'' body'

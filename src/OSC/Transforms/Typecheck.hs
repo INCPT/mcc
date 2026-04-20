@@ -5,13 +5,9 @@
 
 module OSC.Transforms.Typecheck where
 
-import Control.Monad (when, unless)
-import Control.Monad.Identity (Identity(..), runIdentity)
-import Control.Monad.Trans.Class (lift)
+import Control.Monad (when)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.Except as E
-import qualified Control.Monad.Writer as W
-import qualified Control.Monad.State as ST
 
 import Data.Map (Map)
 import qualified Data.Map as M
@@ -19,9 +15,8 @@ import Data.Set (Set)
 import qualified Data.Set as S
 import qualified Data.Graph as G
 
-import OSC.Expr.Bitraversable
 import OSC.Expr.Functors
-import OSC.Expr.Comp (Number (..), Ident (..), TNumber (..), Type (..), Op (..))
+import OSC.Expr.Comp (Ident (..), TNumber (..), Type (..), Op (..))
 import qualified OSC.Expr.Comp as C
 import OSC.Expr.Base
 import qualified OSC.Expr.Base as B
@@ -80,7 +75,7 @@ checkDuplicates pos bindings = do
 
 checkCycles :: Show ann => pos -> [(Ident, ExpA ann)] -> TypecheckM pos [(Ident, ExpA ann)]
 checkCycles pos bindings = do
-  let nodeEdges expr = S.fromList [ {- (\x -> trace ("VAR :" <> show x) x) $ -} n | Ann (_, Var n) <- universe' expr ]
+  let nodeEdges expr = S.fromList [ {- (\x -> trace ("VAR :" <> show x) x) $ -} n | Ann (_, Expr (C.Var n)) <- universe' expr ]
   case topsort nodeEdges bindings of
     Left scc -> E.throwError $ CyclicDependency pos scc
     Right sorted -> pure sorted
@@ -109,10 +104,10 @@ typecheckBindings pos bindings = do
 
 typecheck :: Show pos => ExpA pos -> TypecheckM pos (ExpA (pos, Type))
 typecheck expr = case unAnn expr of
-  (pos, Const n) -> 
-    pure $ Ann ((pos, C.numberType n), Const n)
+  (pos, PConst n) -> 
+    pure $ Ann ((pos, C.numberType n), PConst n)
   
-  (pos, Op op a b) -> do
+  (pos, POp op a b) -> do
     a' <- typecheck a
     b' <- typecheck b
     
@@ -123,54 +118,54 @@ typecheck expr = case unAnn expr of
     
     case (op, at, bt) of
       -- Arithmetic operations: return same type as operands
-      (Add, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (Sub, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (Mul, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (Div, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (Mod, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (Rem, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (Min, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (Max, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (CopySign, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (Add, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), POp op a' b')
+      (Sub, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), POp op a' b')
+      (Mul, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), POp op a' b')
+      (Div, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), POp op a' b')
+      (Mod, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), POp op a' b')
+      (Rem, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), POp op a' b')
+      (Min, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), POp op a' b')
+      (Max, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), POp op a' b')
+      (CopySign, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber t), Expr $ C.Op op a' b')
       
       -- Bitwise operations: integer types only
-      (And, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (Or, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (Xor, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (Shl, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (Shr, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (Rotl, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
-      (Rotr, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), Op op a' b')
+      (And, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), POp op a' b')
+      (Or, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), POp op a' b')
+      (Xor, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), POp op a' b')
+      (Shl, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), POp op a' b')
+      (Shr, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), POp op a' b')
+      (Rotl, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), POp op a' b')
+      (Rotr, TNumber t, TNumber u) | t == u && (t == TI32 || t == TI64) -> pure $ Ann ((pos, TNumber t), POp op a' b')
       
       -- Comparison operations: return I32 (boolean)
-      (Eq, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
-      (Ne, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
-      (Gt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
-      (Lt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
-      (GEt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
-      (LEt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), Op op a' b')
+      (Eq, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), POp op a' b')
+      (Ne, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), POp op a' b')
+      (Gt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), POp op a' b')
+      (Lt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), POp op a' b')
+      (GEt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), POp op a' b')
+      (LEt, TNumber t, TNumber u) | t == u -> pure $ Ann ((pos, TNumber TI32), POp op a' b')
       
       -- Type mismatch error
       (_, TNumber t, TNumber u) | t /= u -> E.throwError $ BinOpTypeMismatch apos bpos op at bt
       _ -> E.throwError $ BinOpInvalidTypes apos bpos op at bt
   
-  (pos, Arr []) -> E.throwError $ EmptyArray pos
-  (pos, Arr (a:as)) -> do
+  (pos, PArr []) -> E.throwError $ EmptyArray pos
+  (pos, PArr (a:as)) -> do
     a' <- typecheck a
     as' <- traverse typecheck as
     let at = snd . fst . unAnn $ a'
     let types = fmap (snd . fst . unAnn) as'
     if all (== at) types
-      then pure $ Ann ((pos, TArr at (length as + 1)), Arr (a':as'))
+      then pure $ Ann ((pos, TArr at (length as + 1)), PArr (a':as'))
       else E.throwError $ ArrayElementTypeMismatch pos (at:types)
   
-  (pos, Var n) -> do
+  (pos, PVar n) -> do
     env <- R.ask
     case M.lookup n env of
-      Just t -> pure $ Ann ((pos, t), Var n)
+      Just t -> pure $ Ann ((pos, t), PVar n)
       Nothing -> E.throwError $ UnknownBinding pos n
   
-  (pos, Lam t params bindings body) -> do
+  (pos, PLam t params bindings body) -> do
     -- Check for duplicate parameters  
     checkDuplicates pos [(p, ()) | p <- params]
     checkDuplicates pos bindings
@@ -198,11 +193,11 @@ typecheck expr = case unAnn expr of
         when (bodyType /= retType) $
           E.throwError $ FunctionReturnTypeMismatch pos retType bodyType
         
-        pure $ Ann ((pos, t), Lam t params bindings' body')
+        pure $ Ann ((pos, t), PLam t params bindings' body')
       
       _ -> E.throwError $ NotAFunction pos t
   
-  (pos, App func args) -> do
+  (pos, PApp func args) -> do
     func' <- typecheck func
     args' <- traverse typecheck args
     
@@ -222,10 +217,10 @@ typecheck expr = case unAnn expr of
           | (i, (pt, (at, arg))) <- zip [0..] $ zip paramTypes $ zip argTypes args'
           ]
         
-        pure $ Ann ((pos, retType), App func' args')
+        pure $ Ann ((pos, retType), PApp func' args')
       _ -> E.throwError $ NotAFunction (fst . fst . unAnn $ func') funcType
   
-  (pos, Select sel idx) -> do
+  (pos, PSelect sel idx) -> do
     sel' <- typecheck sel
     idx' <- typecheck idx
     
@@ -235,12 +230,12 @@ typecheck expr = case unAnn expr of
     case selType of
       TArr elemType _ -> do
         case idxType of
-          TNumber TI32 -> pure $ Ann ((pos, elemType), Select sel' idx')
-          TNumber TI64 -> pure $ Ann ((pos, elemType), Select sel' idx')
+          TNumber TI32 -> pure $ Ann ((pos, elemType), PSelect sel' idx')
+          TNumber TI64 -> pure $ Ann ((pos, elemType), PSelect sel' idx')
           _ -> E.throwError $ InvalidIndexType (fst . fst . unAnn $ idx') idxType
       _ -> E.throwError $ NotAnArray (fst . fst . unAnn $ sel') selType
   
-  (pos, Rec t delay param bindings body) -> do
+  (pos, PRec t delay param bindings body) -> do
     -- Check for duplicates
     checkDuplicates pos bindings
     
@@ -264,7 +259,7 @@ typecheck expr = case unAnn expr of
     when (bodyType /= t) $
       E.throwError $ RecReturnTypeMismatch pos t bodyType
     
-    pure $ Ann ((pos, t), Rec t delay param bindings' body')
+    pure $ Ann ((pos, t), PRec t delay param bindings' body')
 
 --------------------------------------------------------------------------------
 
@@ -283,7 +278,7 @@ e1 = select (arr [(op Add (cnst $ C.I32 4) (cnst $ C.I32 8))]) (cnst $ C.I32 0)
   where
     cnst = B.const
 
-e2 :: ExpA ()
-e2 = Ann {unAnn = ((),Lam (TLam [] (TNumber TF32)) [] [(Ident "g756",Ann {unAnn = ((),Rec (TNumber TI64) 2 (Ident "b500") [(Ident "f453",Ann {unAnn = ((),App (Ann {unAnn = ((),Lam (TLam [TNumber TI64,TArr (TNumber TI32) 3] (TArr (TNumber TI32) 1)) [Ident "c130",Ident "f982"] [(Ident "b182",Ann {unAnn = ((),Const (F64 0.5030272493895455))}),(Ident "a179",Ann {unAnn = ((),Const (I32 0))}),(Ident "b8",Ann {unAnn = ((),Const (F64 (-1.0)))})] (Ann {unAnn = ((),Arr [Ann {unAnn = ((),Var (Ident "a179"))}])}))}) [Ann {unAnn = ((),Const (I64 1))},Ann {unAnn = ((),Arr [Ann {unAnn = ((),Const (I32 1))},Ann {unAnn = ((),Const (I32 (-1)))},Ann {unAnn = ((),Const (I32 (-1)))}])}])}),(Ident "y862",Ann {unAnn = ((),Const (F64 0.7922093797675532))}),(Ident "y851",Ann {unAnn = ((),Lam (TLam [] (TNumber TF64)) [] [(Ident "x699",Ann {unAnn = ((),Var (Ident "y862"))}),(Ident "g666",Ann {unAnn = ((),Const (F32 (-1.0)))})] (Ann {unAnn = ((),Var (Ident "x699"))}))})] (Ann {unAnn = ((),Op Add (Ann {unAnn = ((),Op Sub (Ann {unAnn = ((),Var (Ident "b500"))}) (Ann {unAnn = ((),Const (I64 1))}))}) (Ann {unAnn = ((),Const (I64 (-1)))}))}))})] (Ann {unAnn = ((),Const (F32 1.5))}))}
-
-e3 = Ann {unAnn = ((),Lam (TLam [] (TNumber TF32)) [] [(Ident "x568",Ann {unAnn = ((),Const (F32 (-1.0)))}),(Ident "f477",Ann {unAnn = ((),Var (Ident "x568"))}),(Ident "a193",Ann {unAnn = ((),Const (F64 0.9879229879464689))})] (Ann {unAnn = ((),Const (F32 (-1.0)))}))}
+-- e2 :: ExpA ()
+-- e2 = Ann {unAnn = ((),Lam (TLam [] (TNumber TF32)) [] [(Ident "g756",Ann {unAnn = ((),Rec (TNumber TI64) 2 (Ident "b500") [(Ident "f453",Ann {unAnn = ((),App (Ann {unAnn = ((),Lam (TLam [TNumber TI64,TArr (TNumber TI32) 3] (TArr (TNumber TI32) 1)) [Ident "c130",Ident "f982"] [(Ident "b182",Ann {unAnn = ((),Const (F64 0.5030272493895455))}),(Ident "a179",Ann {unAnn = ((),Const (I32 0))}),(Ident "b8",Ann {unAnn = ((),Const (F64 (-1.0)))})] (Ann {unAnn = ((),Arr [Ann {unAnn = ((),Var (Ident "a179"))}])}))}) [Ann {unAnn = ((),Const (I64 1))},Ann {unAnn = ((),Arr [Ann {unAnn = ((),Const (I32 1))},Ann {unAnn = ((),Const (I32 (-1)))},Ann {unAnn = ((),Const (I32 (-1)))}])}])}),(Ident "y862",Ann {unAnn = ((),Const (F64 0.7922093797675532))}),(Ident "y851",Ann {unAnn = ((),Lam (TLam [] (TNumber TF64)) [] [(Ident "x699",Ann {unAnn = ((),Var (Ident "y862"))}),(Ident "g666",Ann {unAnn = ((),Const (F32 (-1.0)))})] (Ann {unAnn = ((),Var (Ident "x699"))}))})] (Ann {unAnn = ((),Op Add (Ann {unAnn = ((),Op Sub (Ann {unAnn = ((),Var (Ident "b500"))}) (Ann {unAnn = ((),Const (I64 1))}))}) (Ann {unAnn = ((),Const (I64 (-1)))}))}))})] (Ann {unAnn = ((),Const (F32 1.5))}))}
+-- 
+-- e3 = Ann {unAnn = ((),Lam (TLam [] (TNumber TF32)) [] [(Ident "x568",Ann {unAnn = ((),Const (F32 (-1.0)))}),(Ident "f477",Ann {unAnn = ((),Var (Ident "x568"))}),(Ident "a193",Ann {unAnn = ((),Const (F64 0.9879229879464689))})] (Ann {unAnn = ((),Const (F32 (-1.0)))}))}

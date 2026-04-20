@@ -13,8 +13,6 @@ module OSC.Expr.TH (genSum, genDiff, genBitraversableInstance, genSmartConstruct
 import Control.Monad (forM_, forM, foldM)
 import Data.Char (toLower)
 
-import qualified Data.Foldable as F
-
 import Language.Haskell.TH
 
 import OSC.Expr.Bitraversable
@@ -220,17 +218,6 @@ validateNoExistentials typeName (TyConI (DataD _ _ _ _ cons _)) = do
     _ -> pure ()
 validateNoExistentials _ _ = pure ()
 
-
-replaceExpType :: Name -> BangType -> BangType
-replaceExpType expVar (bang, typ) = (bang, replaceInType expVar typ)
-
-replaceInType :: Name -> Type -> Type
-replaceInType expVar typ = case typ of
-  VarT _ -> VarT expVar
-  AppT f a -> AppT (replaceInType expVar f) (replaceInType expVar a)
-  ConT name -> ConT name
-  _ -> typ
-
 -- Check if a type contains a type variable in positive position (i.e., is recursive)
 -- This handles cases like Maybe f, [f], Either a f, etc.
 isRecursiveType :: Type -> Bool
@@ -247,38 +234,11 @@ containerDepth typ = case typ of
   AppT _ a -> 1 + containerDepth a
   _ -> 0
 
-
--- TODO: specialize once BiPlate is gone
--- Build a constructor application with transformed fields using <$> and <*>
--- Takes a field transformation function as a parameter
-genConstructorAppWith :: Name -> [BangType] -> [Name] -> (Type -> Name -> Q Exp) -> Q Exp
-genConstructorAppWith conName fields fieldVars transformField = do
-  transformedFields <- forM (zip fields fieldVars) $ \((_, typ), var) ->
-    transformField typ var
-  
-  let con = conE conName
-  case transformedFields of
-    [] -> error "genConstructorAppWith: empty fields"
-    [field] -> [| $(con) <$> $(pure field) |]
-    (field:rest) -> do
-      initial <- [| $(con) <$> $(pure field) |]
-      foldM (\acc f -> [| $(pure acc) <*> $(pure f) |]) initial rest
-
--- Build a constructor application with transformed fields using <$> and <*>
-genConstructorApp :: Name -> [BangType] -> [Name] -> Name -> Name -> Name -> Q Exp
-genConstructorApp conName fields fieldVars unwrapVar wrapVar fVar =
-  genConstructorAppWith conName fields fieldVars $ \typ var ->
-    genFieldTransform typ var unwrapVar wrapVar fVar
-
 --------------------------------------------------------------------------------
 
 {-# INLINE foldMapM #-}
 foldMapM :: Applicative f => Monoid b => (a -> f b) -> [a] -> f b
 foldMapM f = fmap mconcat . traverse f
-
-{-# INLINE foldList #-}
-foldList :: Foldable t => [t a] -> [a]
-foldList = mconcat . fmap F.toList
 
 --------------------------------------------------------------------------------
 
@@ -547,21 +507,21 @@ genPatternSynonyms typeName = do
   
   -- Get type variables from the outer type
   typeVars <- case info of
-    TyConI (DataD _ _ tvbs _ _ _) -> pure [ name | PlainTV name _ <- tvbs ]
+    TyConI (DataD _ _ tvbs _ _ _) -> pure [ name | KindedTV name _ _ <- tvbs ]
     _ -> fail $ "Expected a data type declaration for " ++ nameBase typeName
   
   let cons = getConstructors info
   
   -- Generate pattern synonyms for each constructor
   (patternDecs, patternNames) <- fmap mconcat . forM cons $ \(conName, fields) -> case fields of
-    [(_, AppT (ConT innerTypeName) innerTypeArg)] -> do
+    [(_, AppT (ConT innerTypeName) _)] -> do
       -- This constructor wraps another type, generate patterns for inner constructors
       -- innerTypeArg tells us how the outer type variable maps to the inner type
       innerInfo <- reify innerTypeName
       let innerCons = getConstructors innerInfo
       fmap mconcat . forM innerCons $ \(innerConName, innerFields) -> do
         let patternName = mkName ("P" ++ nameBase innerConName)
-        decs <- genPatternSynonym typeName typeVars patternName conName innerConName innerFields innerTypeArg
+        decs <- genPatternSynonym typeName typeVars patternName conName innerConName innerFields
         pure (decs, [patternName])
     _ -> do
       -- Regular constructor - generate a simple pattern
@@ -575,8 +535,8 @@ genPatternSynonyms typeName = do
   pure (patternDecs ++ [completePragma])
 
 -- Generate a pattern synonym for a nested constructor
-genPatternSynonym :: Name -> [Name] -> Name -> Name -> Name -> [BangType] -> Type -> Q [Dec]
-genPatternSynonym outerTypeName typeVars patternName outerConName innerConName innerFields innerTypeArg = do
+genPatternSynonym :: Name -> [Name] -> Name -> Name -> Name -> [BangType] -> Q [Dec]
+genPatternSynonym outerTypeName typeVars patternName outerConName innerConName innerFields = do
   paramVars <- forM [1..length innerFields] $ \i -> pure $ mkName ("a" ++ show i)
   
   -- Build the pattern: OuterCon (InnerCon a1 a2 ...)
@@ -679,19 +639,3 @@ replaceTypeVars typeVars typ = case typeVars of
           ArrowT -> ArrowT
           ConT name -> ConT name
           _ -> t
-
--- Replace inner type variables with the outer type's type argument
--- innerTypeArg is the type argument from the outer constructor (e.g., VarT exp from Expr (C.Expr exp))
--- This replaces any VarT in the inner fields with innerTypeArg
-replaceInnerTypeVar :: Type -> Type -> Type
-replaceInnerTypeVar innerTypeArg = go
-  where
-    go typ = case typ of
-      VarT _ -> innerTypeArg
-      AppT t1 t2 -> AppT (go t1) (go t2)
-      ListT -> ListT
-      TupleT n -> TupleT n
-      ArrowT -> ArrowT
-      ConT name -> ConT name
-      _ -> typ
-

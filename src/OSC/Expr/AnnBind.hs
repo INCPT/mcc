@@ -23,7 +23,7 @@ data Expr exp
   | Select (C.Select exp)
   | LamAnn (C.LamAnn exp)
   | RecAnn (C.RecAnn exp)
-  deriving (Functor, Foldable, Traversable, Show)
+ deriving (Functor, Foldable, Traversable, Show)
 
 $(genPatternSynonyms ''Expr)
 $(genSmartConstructors ''Expr)
