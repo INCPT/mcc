@@ -505,10 +505,11 @@ genPatternSynonyms typeName = do
   validateTypeParams typeName info
   validateNoExistentials typeName info
   
-  -- Get type variables from the outer type
-  typeVars <- case info of
-    TyConI (DataD _ _ tvbs _ _ _) -> pure [ name | KindedTV name _ _ <- tvbs ]
-    _ -> fail $ "Expected a data type declaration for " ++ nameBase typeName
+  -- Get type variable from the outer type
+  typeVar <- case info of
+    TyConI (DataD _ _ [PlainTV name _] _ _ _) -> pure name
+    TyConI (DataD _ _ [KindedTV name _ _] _ _ _) -> pure name
+    _ -> fail $ "Expected a data type declaration with exactly one type parameter for " ++ nameBase typeName
   
   let cons = getConstructors info
   
@@ -516,17 +517,16 @@ genPatternSynonyms typeName = do
   (patternDecs, patternNames) <- fmap mconcat . forM cons $ \(conName, fields) -> case fields of
     [(_, AppT (ConT innerTypeName) _)] -> do
       -- This constructor wraps another type, generate patterns for inner constructors
-      -- innerTypeArg tells us how the outer type variable maps to the inner type
       innerInfo <- reify innerTypeName
       let innerCons = getConstructors innerInfo
       fmap mconcat . forM innerCons $ \(innerConName, innerFields) -> do
         let patternName = mkName ("P" ++ nameBase innerConName)
-        decs <- genPatternSynonym typeName typeVars patternName conName innerConName innerFields
+        decs <- genPatternSynonym typeName typeVar patternName conName innerConName innerFields
         pure (decs, [patternName])
     _ -> do
       -- Regular constructor - generate a simple pattern
       let patternName = mkName ("P" ++ nameBase conName)
-      decs <- genSimplePatternSynonym typeName typeVars patternName conName fields
+      decs <- genSimplePatternSynonym typeName typeVar patternName conName fields
       pure (decs, [patternName])
   
   -- Generate COMPLETE pragma
@@ -535,35 +535,19 @@ genPatternSynonyms typeName = do
   pure (patternDecs ++ [completePragma])
 
 -- Generate a pattern synonym for a nested constructor
-genPatternSynonym :: Name -> [Name] -> Name -> Name -> Name -> [BangType] -> Q [Dec]
-genPatternSynonym outerTypeName typeVars patternName outerConName innerConName innerFields = do
+genPatternSynonym :: Name -> Name -> Name -> Name -> Name -> [BangType] -> Q [Dec]
+genPatternSynonym outerTypeName typeVar patternName outerConName innerConName innerFields = do
   paramVars <- forM [1..length innerFields] $ \i -> pure $ mkName ("a" ++ show i)
   
   -- Build the pattern: OuterCon (InnerCon a1 a2 ...)
   let innerPat = ConP innerConName [] (fmap VarP paramVars)
   let outerPat = ConP outerConName [] [innerPat]
   
-  -- Create fresh type variable names that we control
-  freshTypeVars <- case typeVars of
-    [_] -> do
-      expVar <- newName "exp"
-      pure [expVar]
-    _ -> pure typeVars
-  
   -- Build the type signature
-  -- Use the fresh type variable Names throughout
-  let paramTypes = case freshTypeVars of
-        [expVar] -> [ replaceAllTypeVars expVar (stripBang typ) | (_, typ) <- innerFields ]
-        _ -> [ stripBang typ | (_, typ) <- innerFields ]
-  
-  -- Apply type variables to the result type: Expr exp
-  let resultType = foldl AppT (ConT outerTypeName) (fmap VarT freshTypeVars)
-  
-  -- Build the full type with forall if we have type variables
-  let patType = case freshTypeVars of
-        [] -> foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
-        _ -> ForallT (fmap (\v -> PlainTV v SpecifiedSpec) freshTypeVars) []
-               (foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes)
+  let paramTypes = [ replaceAllTypeVars typeVar typ | (_, typ) <- innerFields ]
+  let resultType = AppT (ConT outerTypeName) (VarT typeVar)
+  let patType = ForallT [PlainTV typeVar SpecifiedSpec] []
+                  (foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes)
   
   -- Pattern synonym declaration
   let patSynDec = PatSynD patternName (PrefixPatSyn paramVars) ImplBidir outerPat
@@ -585,57 +569,18 @@ replaceAllTypeVars expVar = go
       _ -> typ
 
 -- Generate a simple pattern synonym for a non-nested constructor
-genSimplePatternSynonym :: Name -> [Name] -> Name -> Name -> [BangType] -> Q [Dec]
-genSimplePatternSynonym typeName typeVars patternName conName fields = do
+genSimplePatternSynonym :: Name -> Name -> Name -> Name -> [BangType] -> Q [Dec]
+genSimplePatternSynonym typeName typeVar patternName conName fields = do
   paramVars <- forM [1..length fields] $ \i -> pure $ mkName ("a" ++ show i)
   
   let pat = ConP conName [] (fmap VarP paramVars)
-  
-  -- Create fresh type variable names that we control
-  freshTypeVars <- case typeVars of
-    [_] -> do
-      expVar <- newName "exp"
-      pure [expVar]
-    _ -> pure typeVars
-  
-  -- Use the fresh type variable Names throughout
-  let paramTypes = case freshTypeVars of
-        [expVar] -> [ replaceAllTypeVars expVar (stripBang typ) | (_, typ) <- fields ]
-        _ -> [ stripBang typ | (_, typ) <- fields ]
-  
-  -- Apply type variables to the result type: Expr exp
-  let resultType = foldl AppT (ConT typeName) (fmap VarT freshTypeVars)
-  
-  -- Build the full type with forall if we have type variables
-  let patType = case freshTypeVars of
-        [] -> foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
-        _ -> ForallT (fmap (\v -> PlainTV v SpecifiedSpec) freshTypeVars) []
-               (foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes)
+  let paramTypes = [ replaceAllTypeVars typeVar typ | (_, typ) <- fields ]
+  let resultType = AppT (ConT typeName) (VarT typeVar)
+  let patType = ForallT [PlainTV typeVar SpecifiedSpec] []
+                  (foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes)
   
   let patSynDec = PatSynD patternName (PrefixPatSyn paramVars) ImplBidir pat
   let patSigDec = PatSynSigD patternName patType
   
   pure [patSigDec, patSynDec]
 
--- Strip bang annotations from a type
-stripBang :: Type -> Type
-stripBang typ = typ
-
--- Replace any type variables in a type with the provided type variables
--- This ensures we use consistent type variable names (e.g., 'exp' instead of 'exp_i26cu')
--- We recursively traverse the entire type structure to replace all occurrences
-replaceTypeVars :: [Name] -> Type -> Type
-replaceTypeVars typeVars typ = case typeVars of
-  [v] -> replaceAllVars v typ
-  _ -> typ  -- Multiple type variables - keep as is for now
-  where
-    replaceAllVars v = go
-      where
-        go t = case t of
-          VarT _ -> VarT v
-          AppT t1 t2 -> AppT (go t1) (go t2)
-          ListT -> ListT
-          TupleT n -> TupleT n
-          ArrowT -> ArrowT
-          ConT name -> ConT name
-          _ -> t
