@@ -584,9 +584,8 @@ genPatternSynonym outerTypeName typeVars patternName outerConName innerConName i
   let outerPat = ConP outerConName [] [innerPat]
   
   -- Build the type signature
-  -- innerTypeArg is how the outer type variable appears in the wrapped type (e.g., VarT exp)
-  -- We need to replace inner type variables with the outer type's type variables
-  let paramTypes = [ replaceInnerTypeVar innerTypeArg (stripBang typ) | (_, typ) <- innerFields ]
+  -- Replace inner type variables with the outer type's type variables from typeVars
+  let paramTypes = [ replaceTypeVars typeVars (stripBang typ) | (_, typ) <- innerFields ]
   -- Apply type variables to the result type: Expr exp
   let resultType = foldl AppT (ConT outerTypeName) (fmap VarT typeVars)
   
