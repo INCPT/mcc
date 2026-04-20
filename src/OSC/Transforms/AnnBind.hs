@@ -20,7 +20,7 @@ import OSC.Expr.AnnBind
 
 --------------------------------------------------------------------------------
 
-type CaptureM = R.ReaderT (Map Ident (Maybe Ident), Map Ident (Maybe Ident)) (W.WriterT (Set Ident) (ST.StateT Int (ST.State (Map Ident Type))))
+type CaptureM = R.ReaderT (Map Ident (Maybe Ident), Map Ident (Maybe Ident)) (W.WriterT (Set Ident) (ST.State Int))
 
 annCapturedBindings_ :: Ann Type SRC.Expr -> CaptureM (Ann Type Expr)
 annCapturedBindings_ = bitraverse (rtraverse . trav) diff
@@ -64,20 +64,16 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
    
       let allCaptured = capturedByBindings <> capturedByBody
    
-      bindings'' <- sequence $ mconcat
-        [ [ do
-              when (S.member n allCaptured) $ lift $ lift $ lift $ ST.modify (M.insert n t)
-              pure (n, if S.member n allCaptured then C.Global else C.Local, Ann (t, e))
-          | (n, Ann (t, e)) <- bindings'
-          ]
-        , [ do
-              lift $ lift $ lift $ ST.modify (M.insert paramSubst t)
-              pure (paramSubst, C.Global, Ann (t, Expr $ C.Var p))
-          | (p, t) <- zip params (paramTypes ("markCapturedBindings: " <> show t) t)
-          , S.member p allCaptured
-          , Just (Just paramSubst) <- [ M.lookup p paramSubsts ]
-          ]
-        ]
+      let bindings'' = mconcat
+            [ [ (n, if S.member n allCaptured then C.Global else C.Local, Ann (t, e))
+              | (n, Ann (t, e)) <- bindings'
+              ]
+            , [ (paramSubst, C.Global, Ann (t, Expr $ C.Var p))
+              | (p, t) <- zip params (paramTypes ("markCapturedBindings: " <> show t) t)
+              , S.member p allCaptured
+              , Just (Just paramSubst) <- [ M.lookup p paramSubsts ]
+              ]
+            ]
    
       -- Accumulate captured bindings
       pure $ PLamAnn t params bindings'' body'
@@ -103,17 +99,12 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
       
       let allCaptured = capturedByBindings <> capturedByBody
 
-      bindings'' <- sequence $ mconcat
-        [ [ do
-              when (S.member n allCaptured) $ lift $ lift $ lift $ ST.modify (M.insert n t)
-              pure (n, if S.member n allCaptured then C.Global else C.Local, Ann (t, e))
-          | (n, Ann (t, e)) <- bindings'
-          ]
-        ]
-
-      lift $ lift $ lift $ ST.modify (M.insert paramSubstName (C.TArr t delay))
+      let bindings'' =
+            [ (n, if S.member n allCaptured then C.Global else C.Local, Ann (t, e))
+            | (n, Ann (t, e)) <- bindings'
+            ]
    
       pure $ PRecAnn t delay paramSubstName bindings'' body'
 
-annCapturedBindings :: Ann Type SRC.Expr -> (Ann Type Expr, Map Ident Type)
-annCapturedBindings = flip ST.runState mempty . fmap fst . flip ST.evalStateT 0 . W.runWriterT . flip R.runReaderT mempty . annCapturedBindings_
+annCapturedBindings :: Ann Type SRC.Expr -> Ann Type Expr
+annCapturedBindings = fst . flip ST.evalState 0 . W.runWriterT . flip R.runReaderT mempty . annCapturedBindings_

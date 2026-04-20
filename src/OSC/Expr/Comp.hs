@@ -124,12 +124,6 @@ instance Pretty UOp where
     Promote -> "promote"
     Reinterpret -> "reinterpret"
 
-newtype FuncRef = FuncRef Int
-  deriving (Eq, Ord, Show)
-
-instance Pretty FuncRef where
-  pretty (FuncRef fr) = "fr:" <> pretty fr
-
 -- Building blocks -------------------------------------------------------------
 
 data Lam exp = Lam Type [Ident] [(Ident, exp)] exp
