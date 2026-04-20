@@ -33,15 +33,7 @@ data Diff exp
   | Rec (C.Rec exp)
 
 $(genPatternSynonyms ''Diff)
-
-instance Bitraversable B.Expr Expr Diff where
-  bitraverse trav f = trav go
-    where
-        go (B.Expr v) = Expr <$> traverse (trav go) v
-        go (B.Select v) = Select <$> traverse (trav go) v
-
-        go (B.Lam v) = f (Lam v)
-        go (B.Rec v) = f (Rec v)
+$(genBitraversableInstance ''B.Expr ''Expr ''Diff)
 
 -- -- | Pretty print a Fix Expr as an S-expression
 -- prettySexp :: Fix Expr -> Doc ann
