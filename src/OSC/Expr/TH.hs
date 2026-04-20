@@ -583,7 +583,8 @@ genPatternSynonym outerTypeName typeVars patternName outerConName innerConName i
   let outerPat = ConP outerConName [] [innerPat]
   
   -- Build the type signature
-  let paramTypes = [ stripBang typ | (_, typ) <- innerFields ]
+  -- Replace any type variables in the inner fields with the outer type's type variables
+  let paramTypes = [ replaceTypeVars typeVars (stripBang typ) | (_, typ) <- innerFields ]
   -- Apply type variables to the result type: Expr exp
   let resultType = foldl AppT (ConT outerTypeName) (fmap VarT typeVars)
   let patType = foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
@@ -600,7 +601,8 @@ genSimplePatternSynonym typeName typeVars patternName conName fields = do
   paramVars <- forM [1..length fields] $ \i -> pure $ mkName ("a" ++ show i)
   
   let pat = ConP conName [] (fmap VarP paramVars)
-  let paramTypes = [ stripBang typ | (_, typ) <- fields ]
+  -- Replace any type variables in the fields with the outer type's type variables
+  let paramTypes = [ replaceTypeVars typeVars (stripBang typ) | (_, typ) <- fields ]
   -- Apply type variables to the result type: Expr exp
   let resultType = foldl AppT (ConT typeName) (fmap VarT typeVars)
   let patType = foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
@@ -613,4 +615,14 @@ genSimplePatternSynonym typeName typeVars patternName conName fields = do
 -- Strip bang annotations from a type
 stripBang :: Type -> Type
 stripBang typ = typ
+
+-- Replace any type variables in a type with the provided type variables
+-- This ensures we use consistent type variable names (e.g., 'exp' instead of 'exp_i26cu')
+replaceTypeVars :: [Name] -> Type -> Type
+replaceTypeVars typeVars typ = case typ of
+  VarT _ -> case typeVars of
+    [v] -> VarT v  -- Single type variable case
+    _ -> typ       -- Multiple type variables - keep as is for now
+  AppT t1 t2 -> AppT (replaceTypeVars typeVars t1) (replaceTypeVars typeVars t2)
+  _ -> typ
 
