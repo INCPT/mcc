@@ -9,7 +9,7 @@
 
 module OSC.Expr.TH (genSum, genDiff, genBitraversableInstance, genSmartConstructors) where
 
-import Control.Monad (forM_, forM, foldM, unless, when)
+import Control.Monad (forM_, forM, foldM)
 import Data.Char (toLower)
 
 import qualified Data.Foldable as F
