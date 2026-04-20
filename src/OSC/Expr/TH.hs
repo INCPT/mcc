@@ -479,7 +479,8 @@ genBitraversableInstance sumPrefix sumTypeName destPrefix destTypeName diffPrefi
   --         go (S1_Arr as) = Arr <$> traverse (trav go) as
   --         go (S1_NoFields) = f D1_NoFields
   --         ...
-  let goFunc = FunD goVar (fmap (\m -> Clause [] (NormalB (LamCaseE [m])) []) matches)
+  let goClauses = fmap (\(Match pat body decls) -> Clause [pat] body decls) matches
+  let goFunc = FunD goVar goClauses
   let bitraverseBody = AppE (VarE travVar) (VarE goVar)
   let bitraverseClause = Clause 
         [VarP travVar, VarP fVar]
