@@ -591,10 +591,9 @@ genPatternSynonym outerTypeName typeVars patternName outerConName innerConName i
   let resultType = foldl AppT (ConT outerTypeName) (fmap VarT typeVars)
   
   -- Build the full type with forall if we have type variables
-  -- Use InferredSpec instead of SpecifiedSpec to avoid showing type variables in error messages
   let patType = case typeVars of
         [] -> foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
-        _ -> ForallT (fmap PlainTV typeVars) []
+        _ -> ForallT (fmap (\v -> PlainTV v InferredSpec) typeVars) []
                (foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes)
   
   -- Pattern synonym declaration
@@ -615,10 +614,9 @@ genSimplePatternSynonym typeName typeVars patternName conName fields = do
   let resultType = foldl AppT (ConT typeName) (fmap VarT typeVars)
   
   -- Build the full type with forall if we have type variables
-  -- Use InferredSpec instead of SpecifiedSpec to avoid showing type variables in error messages
   let patType = case typeVars of
         [] -> foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
-        _ -> ForallT (fmap PlainTV typeVars) []
+        _ -> ForallT (fmap (\v -> PlainTV v InferredSpec) typeVars) []
                (foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes)
   
   let patSynDec = PatSynD patternName (PrefixPatSyn paramVars) ImplBidir pat
