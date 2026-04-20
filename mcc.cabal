@@ -55,6 +55,7 @@ library
       OSC.Expr.Pretty
       OSC.Expr.TH
       OSC.Expr.THTest
+      OSC.Pretty
       OSC.Transforms.AnnBind
       OSC.Transforms.Typecheck
   other-modules:
