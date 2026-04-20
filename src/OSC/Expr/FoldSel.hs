@@ -5,10 +5,10 @@
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module OSC.Expr.AnnBind where
+module OSC.Expr.FoldSel where
 
 import OSC.Expr.TH
-import qualified OSC.Expr.Base as SRC
+import qualified OSC.Expr.AnnBind as SRC
 import qualified OSC.Expr.Comp as C
 
 import Prettyprinter
@@ -18,7 +18,7 @@ import GHC.Generics
 
 data Expr exp
   = Expr (C.Expr exp)
-  | Select (C.Select exp)
+  | FoldedSelect (C.FoldedSelect exp)
   | LamAnn (C.LamAnn exp)
   | RecAnn (C.RecAnn exp)
  deriving (Functor, Foldable, Traversable, Generic, Show)
@@ -30,8 +30,7 @@ instance Pretty exp => Pretty (Expr exp) where
   pretty = genPretty
 
 data Diff exp
-  = Lam (C.Lam exp)
-  | Rec (C.Rec exp)
+  = Select (C.Select exp)
 
-$(genPatternSynonyms "P" ''Diff)
+$(genPatternSynonyms "D" ''Diff)
 $(genBitraversableInstance ''SRC.Expr ''Expr ''Diff)

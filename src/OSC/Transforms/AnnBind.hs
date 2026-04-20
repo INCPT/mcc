@@ -17,7 +17,7 @@ import qualified Data.Set as S
 import OSC.Expr.Bitraversable
 import OSC.Expr.Functors
 import OSC.Expr.Comp (Ident (..), Type, paramTypes)
-import qualified OSC.Expr.Base as B
+import qualified OSC.Expr.Base as SRC
 import qualified OSC.Expr.Comp as C
 import OSC.Expr.AnnBind
 
@@ -28,14 +28,14 @@ type CaptureM = R.ReaderT (Map Ident (Maybe Ident), Map Ident (Maybe Ident)) (W.
 runCapture :: CaptureM a -> ((a, Set Ident), Map Ident Type)
 runCapture = flip ST.runState mempty . flip ST.evalStateT 0 . W.runWriterT . flip R.runReaderT mempty
 
-markCapturedBindings :: Ann Type B.Expr -> CaptureM (Ann Type Expr)
+markCapturedBindings :: Ann Type SRC.Expr -> CaptureM (Ann Type Expr)
 markCapturedBindings = bitraverse (rtraverse . trav) diff
   where
     nextName = do
       n <- ST.state $ \n -> (n, n + 1)
       pure $ Ident $ "_captured_" <> show n
     
-    trav _ (B.PVar n) = do
+    trav _ (SRC.PVar n) = do
       (_, env) <- R.ask
     
       case M.lookup n env of
@@ -48,7 +48,7 @@ markCapturedBindings = bitraverse (rtraverse . trav) diff
         Nothing -> pure $ PVar n
     trav rmap e = rmap e
 
-    diff :: Diff (Ann Type B.Expr) -> CaptureM (Expr (Ann Type Expr))
+    diff :: Diff (Ann Type SRC.Expr) -> CaptureM (Expr (Ann Type Expr))
     diff (PLam t params bindings body) = do
       (prev, env) <- R.ask
    

@@ -49,12 +49,14 @@ library
       OSC.Expr.Base
       OSC.Expr.Bitraversable
       OSC.Expr.Comp
+      OSC.Expr.FoldSel
       OSC.Expr.Functors
       OSC.Expr.Gen
       OSC.Expr.Interpret
       OSC.Expr.TH
       OSC.Pretty
       OSC.Transforms.AnnBind
+      OSC.Transforms.FoldSel
       OSC.Transforms.Typecheck
   other-modules:
       Paths_mcc
