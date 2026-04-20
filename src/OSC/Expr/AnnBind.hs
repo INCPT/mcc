@@ -5,7 +5,7 @@
 module OSC.Expr.AnnBind where
 
 import OSC.Expr.TH
-import qualified OSC.Expr.Base as SRC
+import qualified OSC.Expr.FoldSel as SRC
 import qualified OSC.Expr.Comp as C
 
 import Prettyprinter
@@ -15,7 +15,7 @@ import GHC.Generics
 
 data Expr exp
   = Expr (C.Expr exp)
-  | Select (C.Select exp)
+  | FoldedSelect (C.FoldedSelect exp)
   | LamAnn (C.LamAnn exp)
   | RecAnn (C.RecAnn exp)
  deriving (Functor, Foldable, Traversable, Generic, Show)

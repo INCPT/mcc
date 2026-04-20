@@ -5,7 +5,7 @@
 module OSC.Expr.FoldSel where
 
 import OSC.Expr.TH
-import qualified OSC.Expr.AnnBind as SRC
+import qualified OSC.Expr.Base as SRC
 import qualified OSC.Expr.Comp as C
 
 import Prettyprinter
@@ -16,8 +16,8 @@ import GHC.Generics
 data Expr exp
   = Expr (C.Expr exp)
   | FoldedSelect (C.FoldedSelect exp)
-  | LamAnn (C.LamAnn exp)
-  | RecAnn (C.RecAnn exp)
+  | Lam (C.Lam exp)
+  | Rec (C.Rec exp)
  deriving (Functor, Foldable, Traversable, Generic, Show)
 
 $(genPatternSynonyms "P" ''Expr)

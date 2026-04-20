@@ -14,7 +14,7 @@ import qualified Data.Set as S
 import OSC.Expr.Bitraversable
 import OSC.Expr.Functors
 import OSC.Expr.Comp (Ident (..), Type, paramTypes)
-import qualified OSC.Expr.Base as SRC
+import qualified OSC.Expr.FoldSel as SRC
 import qualified OSC.Expr.Comp as C
 import OSC.Expr.AnnBind
 

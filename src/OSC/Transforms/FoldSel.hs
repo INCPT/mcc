@@ -6,7 +6,7 @@ import OSC.Expr.Functors
 import OSC.Expr.Bitraversable
 import OSC.Expr.Comp (Type(..))
 import OSC.Expr.FoldSel
-import qualified OSC.Expr.AnnBind as SRC
+import qualified OSC.Expr.Base as SRC
 
 --------------------------------------------------------------------------------
 
@@ -47,7 +47,7 @@ foldSelections_ = bitraverse trav diff
     trav rmap expr@(Ann (t, _)) = do
       idxs <- ST.get
       case idxs of
-        [] -> rtraverse rmap expr -- pure $ foldSelections expr
+        [] -> rtraverse rmap expr
         _ -> pure $ Ann (peelOffIndices (length idxs) t, PFoldedSelectR (foldSelections expr) (fmap foldSelections idxs))
 
     diff :: Diff (Ann Type SRC.Expr) -> FoldSelM (Expr (Ann Type Expr))
