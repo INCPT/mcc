@@ -583,4 +583,3 @@ genSimplePatternSynonym typeName typeVar patternName conName fields = do
   let patSigDec = PatSynSigD patternName patType
   
   pure [patSigDec, patSynDec]
-
