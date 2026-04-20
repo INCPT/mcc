@@ -5,6 +5,7 @@
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module OSC.Expr.TH (genSum, genDiff, genBitraversableInstance, genSmartConstructors, genPatternSynonyms) where
@@ -77,16 +78,21 @@ mul a b = embed $ Mul a b
 -- to work with any wrapper type (Fix, Ann, Dag, etc.) that implements Corecursive.
 
 -- For nested types like:
---   data A = A1 a b | A2 c
---   data Comp = CompA A | CompB B
---
+
+data A exp = A1 Int String | A2 Float
+data B exp = B1 String
+data Comp exp = CompA (A exp) | CompB (B exp)
+
 -- $(genSmartConstructors ''Comp) generates:
 
-a1 :: Corecursive f => a -> b -> f Comp
+a1 :: Corecursive f => Int -> String -> f Comp
 a1 a b = embed $ CompA $ A1 a b
 
-a2 :: Corecursive f => c -> f Comp
+a2 :: Corecursive f => Float -> f Comp
 a2 c = embed $ CompA $ A2 c
+
+b1 :: Corecursive f => String -> f Comp
+b1 c = embed $ CompB $ B1 c
 
 -- Creating pattern synonyms:
 -- ---------------------------
@@ -100,14 +106,14 @@ a2 c = embed $ CompA $ A2 c
 --
 -- This generates pattern synonyms that match through both layers:
 
-pattern PA1 :: a -> b -> Comp
+pattern PA1 :: Int -> String -> (Comp exp)
 pattern PA1 a b = CompA (A1 a b)
 
-pattern PA2 :: c -> Comp
+pattern PA2 :: Float -> (Comp exp)
 pattern PA2 c = CompA (A2 c)
 
-pattern PB1 :: d -> e -> Comp
-pattern PB1 d e = CompB (B1 d e)
+pattern PB1 :: String -> (Comp exp)
+pattern PB1 c = CompB (B1 c)
 
 -- And a COMPLETE pragma:
 
