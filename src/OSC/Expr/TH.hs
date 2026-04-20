@@ -585,11 +585,16 @@ genPatternSynonym outerTypeName typeVars patternName outerConName innerConName i
   
   -- Build the type signature
   -- innerTypeArg is how the outer type variable appears in the wrapped type (e.g., VarT exp)
-  -- We need to replace inner type variables with this
+  -- We need to replace inner type variables with the outer type's type variables
   let paramTypes = [ replaceInnerTypeVar innerTypeArg (stripBang typ) | (_, typ) <- innerFields ]
   -- Apply type variables to the result type: Expr exp
   let resultType = foldl AppT (ConT outerTypeName) (fmap VarT typeVars)
-  let patType = foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
+  
+  -- Build the full type with forall if we have type variables
+  let patType = case typeVars of
+        [] -> foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
+        _ -> ForallT (fmap (\v -> PlainTV v SpecifiedSpec) typeVars) []
+               (foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes)
   
   -- Pattern synonym declaration
   let patSynDec = PatSynD patternName (PrefixPatSyn paramVars) ImplBidir outerPat
@@ -607,7 +612,12 @@ genSimplePatternSynonym typeName typeVars patternName conName fields = do
   let paramTypes = [ replaceTypeVars typeVars (stripBang typ) | (_, typ) <- fields ]
   -- Apply type variables to the result type: Expr exp
   let resultType = foldl AppT (ConT typeName) (fmap VarT typeVars)
-  let patType = foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
+  
+  -- Build the full type with forall if we have type variables
+  let patType = case typeVars of
+        [] -> foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
+        _ -> ForallT (fmap (\v -> PlainTV v SpecifiedSpec) typeVars) []
+               (foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes)
   
   let patSynDec = PatSynD patternName (PrefixPatSyn paramVars) ImplBidir pat
   let patSigDec = PatSynSigD patternName patType
