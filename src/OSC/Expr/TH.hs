@@ -7,7 +7,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module OSC.Expr.TH (genSum, genDiff, genBitraversableInstance, genSmartConstructors) where
+module OSC.Expr.TH (genSum, genDiff, genBitraversableInstance, genSmartConstructors, genPatternSynonyms) where
 
 import Control.Monad (forM_, forM, foldM)
 import Data.Char (toLower)
@@ -57,7 +57,7 @@ data Lambda exp = Lambda String [(String, exp)] exp
 -- Each smart constructor:
 -- 1. Takes the same arguments as the original constructor
 -- 2. Replaces occurrences of the recursive type variable with the concrete type (f Expr)
--- 3. Calls wrap before returning
+-- 3. Calls embed before returning
 --
 -- For example, given:
 --   data Expr exp = NoFields | Add exp exp | Mul (Maybe (Either String [exp])) exp
@@ -75,6 +75,43 @@ mul a b = embed $ Mul a b
 
 -- The generated functions have a Corecursive constraint and return f Expr, allowing them
 -- to work with any wrapper type (Fix, Ann, Dag, etc.) that implements Corecursive.
+
+-- For nested types like:
+--   data A = A1 a b | A2 c
+--   data Comp = CompA A | CompB B
+--
+-- $(genSmartConstructors ''Comp) generates:
+
+a1 :: Corecursive f => a -> b -> f Comp
+a1 a b = embed $ CompA $ A1 a b
+
+a2 :: Corecursive f => c -> f Comp
+a2 c = embed $ CompA $ A2 c
+
+-- Creating pattern synonyms:
+-- ---------------------------
+--
+-- $(genPatternSynonyms ''Comp)
+--
+-- For a type with constructors wrapping other types:
+--   data A = A1 a b | A2 c
+--   data B = B1 d e
+--   data Comp = CompA A | CompB B
+--
+-- This generates pattern synonyms that match through both layers:
+
+pattern PA1 :: a -> b -> Comp
+pattern PA1 a b = CompA (A1 a b)
+
+pattern PA2 :: c -> Comp
+pattern PA2 c = CompA (A2 c)
+
+pattern PB1 :: d -> e -> Comp
+pattern PB1 d e = CompB (B1 d e)
+
+-- And a COMPLETE pragma:
+
+{-# COMPLETE PA1, PA2, PB1 #-}
 
 -- Creating a Sum Type:
 -- --------------------
@@ -304,39 +341,66 @@ genSmartConstructors typeName = do
   validateNoExistentials typeName info
   
   let cons = getConstructors info
-  let expVar = mkName "exp"
   let fVar = mkName "f"
   
-  -- Generate a smart constructor for each constructor
-  mconcat <$> forM cons (\(conName, fields) -> do
-    let smartName = mkName (lowerFirst (nameBase conName))
-    genSmartConstructor typeName smartName conName fields fVar)
+  -- Generate smart constructors for each constructor
+  -- If a constructor wraps another type, generate smart constructors for the inner type's constructors
+  mconcat <$> forM cons (\(conName, fields) -> case fields of
+    [(_, AppT (ConT innerTypeName) _)] -> do
+      -- This constructor wraps another type, generate smart constructors for inner constructors
+      innerInfo <- reify innerTypeName
+      let innerCons = getConstructors innerInfo
+      mconcat <$> forM innerCons (\(innerConName, innerFields) -> do
+        let smartName = mkName (lowerFirst (nameBase innerConName))
+        genNestedSmartConstructor typeName conName innerConName innerFields fVar)
+    _ -> do
+      -- Regular constructor
+      let smartName = mkName (lowerFirst (nameBase conName))
+      genSmartConstructor typeName smartName conName fields fVar)
 
 -- Helper to lowercase the first character
 lowerFirst :: String -> String
 lowerFirst [] = []
 lowerFirst (c:cs) = toLower c : cs
 
--- Generate a single smart constructor
+-- Generate a single smart constructor for a regular constructor
 genSmartConstructor :: Name -> Name -> Name -> [BangType] -> Name -> Q [Dec]
 genSmartConstructor typeName smartName conName fields fVar = do
-  -- Generate parameter names
   paramVars <- forM [1..length fields] $ \i -> pure $ mkName ("a" ++ show i)
   
-  -- Build the type signature
   let wrapConstraint = AppT (ConT ''Corecursive) (VarT fVar)
   let returnType = AppT (VarT fVar) (ConT typeName)
-  
-  -- Replace exp with (f TypeName) in field types
   let paramTypes = [ replaceExpWithWrapped fVar typeName typ | (_, typ) <- fields ]
   
   let funType = ForallT [PlainTV fVar SpecifiedSpec] [wrapConstraint] $
         foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) returnType paramTypes
   
-  -- Build the function body: embed (ConName a1 a2 ...)
   let conApp = foldl AppE (ConE conName) (fmap VarE paramVars)
   let body = AppE (VarE 'embed) conApp
+  let funClause = Clause (fmap VarP paramVars) (NormalB body) []
   
+  pure
+    [ SigD smartName funType
+    , FunD smartName [funClause]
+    ]
+
+-- Generate a smart constructor for a nested constructor (outer wraps inner)
+genNestedSmartConstructor :: Name -> Name -> Name -> [BangType] -> Name -> Q [Dec]
+genNestedSmartConstructor outerTypeName outerConName innerConName innerFields fVar = do
+  paramVars <- forM [1..length innerFields] $ \i -> pure $ mkName ("a" ++ show i)
+  
+  let smartName = mkName (lowerFirst (nameBase innerConName))
+  let wrapConstraint = AppT (ConT ''Corecursive) (VarT fVar)
+  let returnType = AppT (VarT fVar) (ConT outerTypeName)
+  let paramTypes = [ replaceExpWithWrapped fVar outerTypeName typ | (_, typ) <- innerFields ]
+  
+  let funType = ForallT [PlainTV fVar SpecifiedSpec] [wrapConstraint] $
+        foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) returnType paramTypes
+  
+  -- Build: embed $ OuterCon $ InnerCon a1 a2 ...
+  let innerConApp = foldl AppE (ConE innerConName) (fmap VarE paramVars)
+  let outerConApp = AppE (ConE outerConName) innerConApp
+  let body = AppE (VarE 'embed) outerConApp
   let funClause = Clause (fmap VarP paramVars) (NormalB body) []
   
   pure
@@ -466,4 +530,74 @@ genBitraverseSubsetNestedTraverse depth var travVar goVar =
   where
     buildTraverse 0 = [| $(varE travVar) $(varE goVar) |]
     buildTraverse n = [| traverse $(buildTraverse (n - 1)) |]
+
+--------------------------------------------------------------------------------
+
+genPatternSynonyms :: Name -> Q [Dec]
+genPatternSynonyms typeName = do
+  info <- reify typeName
+  validateTypeParams typeName info
+  validateNoExistentials typeName info
+  
+  let cons = getConstructors info
+  
+  -- Generate pattern synonyms for each constructor
+  (patternDecs, patternNames) <- fmap mconcat . forM cons $ \(conName, fields) -> case fields of
+    [(_, AppT (ConT innerTypeName) _)] -> do
+      -- This constructor wraps another type, generate patterns for inner constructors
+      innerInfo <- reify innerTypeName
+      let innerCons = getConstructors innerInfo
+      fmap mconcat . forM innerCons $ \(innerConName, innerFields) -> do
+        let patternName = mkName ("P" ++ nameBase innerConName)
+        decs <- genPatternSynonym typeName patternName conName innerConName innerFields
+        pure (decs, [patternName])
+    _ -> do
+      -- Regular constructor - generate a simple pattern
+      let patternName = mkName ("P" ++ nameBase conName)
+      decs <- genSimplePatternSynonym typeName patternName conName fields
+      pure (decs, [patternName])
+  
+  -- Generate COMPLETE pragma
+  let completePragma = PragmaD $ CompleteP patternNames Nothing
+  
+  pure (patternDecs ++ [completePragma])
+
+-- Generate a pattern synonym for a nested constructor
+genPatternSynonym :: Name -> Name -> Name -> Name -> [BangType] -> Q [Dec]
+genPatternSynonym outerTypeName patternName outerConName innerConName innerFields = do
+  paramVars <- forM [1..length innerFields] $ \i -> pure $ mkName ("a" ++ show i)
+  
+  -- Build the pattern: OuterCon (InnerCon a1 a2 ...)
+  let innerPat = ConP innerConName [] (fmap VarP paramVars)
+  let outerPat = ConP outerConName [] [innerPat]
+  
+  -- Build the type signature
+  let paramTypes = [ stripBang typ | (_, typ) <- innerFields ]
+  let resultType = ConT outerTypeName
+  let patType = foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
+  
+  -- Pattern synonym declaration
+  let patSynDec = PatSynD patternName (PrefixPatSyn paramVars) ImplBidir outerPat
+  let patSigDec = PatSynSigD patternName patType
+  
+  pure [patSigDec, patSynDec]
+
+-- Generate a simple pattern synonym for a non-nested constructor
+genSimplePatternSynonym :: Name -> Name -> Name -> [BangType] -> Q [Dec]
+genSimplePatternSynonym typeName patternName conName fields = do
+  paramVars <- forM [1..length fields] $ \i -> pure $ mkName ("a" ++ show i)
+  
+  let pat = ConP conName [] (fmap VarP paramVars)
+  let paramTypes = [ stripBang typ | (_, typ) <- fields ]
+  let resultType = ConT typeName
+  let patType = foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
+  
+  let patSynDec = PatSynD patternName (PrefixPatSyn paramVars) ImplBidir pat
+  let patSigDec = PatSynSigD patternName patType
+  
+  pure [patSigDec, patSynDec]
+
+-- Strip bang annotations from a type
+stripBang :: Type -> Type
+stripBang typ = typ
 

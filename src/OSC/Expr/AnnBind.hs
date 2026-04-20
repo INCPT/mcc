@@ -25,27 +25,14 @@ data Expr exp
   | RecAnn (C.RecAnn exp)
   deriving (Functor, Foldable, Traversable, Show)
 
-pattern PLamAnn a b c d = LamAnn (C.LamAnn a b c d) 
-
--- $(genSmartConstructors ''Expr)
+$(genPatternSynonyms ''Expr)
+$(genSmartConstructors ''Expr)
 
 data Diff exp
   = Lam (C.Lam exp)
   | Rec (C.Rec exp)
 
-pattern PConst n = Expr (C.Const n) 
-pattern PVar n = Expr (C.Var n) 
-
-pattern PLam a b c d = Lam (C.Lam a b c d) 
-pattern PRec a b c d e = Rec (C.Rec a b c d e) 
-
-{-# COMPLETE PLam, PRec #-}
-
--- lamAnn :: Type -> [Ident] -> [(Ident, C.AllocRegion, exp)] -> exp -> Expr exp
--- lamAnn a b c d = LamAnn $ C.LamAnn a b c d
-
-lamAnnR :: Corecursive f => Type -> [Ident] -> [(Ident, C.AllocRegion, f Expr)] -> f Expr -> f Expr
-lamAnnR a b c d = embed $ LamAnn $ C.LamAnn a b c d
+$(genPatternSynonyms ''Diff)
 
 instance Bitraversable B.Expr Expr Diff where
   bitraverse trav f = trav go
