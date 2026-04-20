@@ -10,6 +10,7 @@ module OSC.Expr.Functors where
 import Data.Functor.Identity (runIdentity)
 
 import qualified Control.Monad.Reader as R
+import Prettyprinter
 
 class Corecursive f where
   embed :: a (f a) -> f a
@@ -36,6 +37,9 @@ instance Recursive Fix where project = unFix
 instance Corecursive Fix where embed = Fix
 instance RFunctor Fix where rtraverse g (Fix f) = Fix <$> g f
 
+instance Pretty (f (Fix f)) => Pretty (Fix f) where
+  pretty (Fix f) = pretty f
+
 -- Ann -------------------------------------------------------------------------
 
 newtype Ann ann f = Ann { unAnn :: (ann, f (Ann ann f)) }
@@ -45,6 +49,9 @@ deriving instance (Show ann, Show (f (Ann ann f))) => Show (Ann ann f)
 instance Recursive (Ann ann) where project = snd . unAnn
 instance Monoid ann => Corecursive (Ann ann) where embed a = Ann (mempty, a)
 instance RFunctor (Ann ann) where rtraverse g (Ann (ann, f)) = Ann <$> ((ann,) <$> g f)
+
+instance Pretty (f (Ann ann f)) => Pretty (Ann ann f) where
+  pretty (Ann (_, f)) = pretty f
 
 mapAnnM :: Traversable f => Monad m => (ann -> m ann') -> Ann ann f -> m (Ann ann' f)
 mapAnnM h (Ann (ann, f)) = Ann <$> ((,) <$> h ann <*> traverse (mapAnnM h) f)

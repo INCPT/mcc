@@ -29,7 +29,7 @@ runCapture :: CaptureM a -> ((a, Set Ident), Map Ident Type)
 runCapture = flip ST.runState mempty . flip ST.evalStateT 0 . W.runWriterT . flip R.runReaderT mempty
 
 markCapturedBindings :: Ann Type B.Expr -> CaptureM (Ann Type Expr)
-markCapturedBindings e@(Ann (t, _)) = bitraverse (rtraverse . trav) diff e
+markCapturedBindings = bitraverse (rtraverse . trav) diff
   where
     nextName = do
       n <- ST.state $ \n -> (n, n + 1)

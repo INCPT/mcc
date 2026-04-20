@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PatternSynonyms #-}
@@ -9,12 +10,20 @@ import qualified OSC.Expr.Comp as C
 
 import OSC.Expr.TH
 
+import Prettyprinter
+import OSC.Pretty
+
+import GHC.Generics
+
 data Expr exp
   = Expr (C.Expr exp)
   | Lam (C.Lam exp)
   | Select (C.Select exp)
   | Rec (C.Rec exp)
-  deriving (Functor, Foldable, Traversable, Show)
+  deriving (Functor, Foldable, Traversable, Generic, Show)
 
 $(genSmartConstructors ''Expr)
 $(genPatternSynonyms ''Expr)
+
+instance Pretty exp => Pretty (Expr exp) where
+  pretty = genPretty

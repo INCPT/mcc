@@ -354,16 +354,16 @@ instance Arbitrary (Fix Expr) where
     returnType <- genSimpleType
     genExprOfType emptyCtx (C.TLam [] returnType)
   
-  shrink (Fix (Const (C.I32 n))) = [Fix (Const (C.I32 n')) | n' <- shrink n]
-  shrink (Fix (Const (C.I64 n))) = [Fix (Const (C.I64 n')) | n' <- shrink n]
-  shrink (Fix (Const (C.F32 n))) = [Fix (Const (C.F32 n')) | n' <- shrink n]
-  shrink (Fix (Const (C.F64 n))) = [Fix (Const (C.F64 n')) | n' <- shrink n]
-  shrink (Fix (Op _ a b)) = [a, b]
-  shrink (Fix (Arr es)) = es
-  shrink (Fix (Select arr _)) = [arr]
-  shrink (Fix (App f args)) = f : args
-  shrink (Fix (Lam _ _ bindings body)) = body : [e | (_,  e) <- bindings]
-  shrink (Fix (Rec _ _ _ bindings body)) = body : [e | (_,  e) <- bindings]
+  shrink (Fix (PConst (C.I32 n))) = [Fix (PConst (C.I32 n')) | n' <- shrink n]
+  shrink (Fix (PConst (C.I64 n))) = [Fix (PConst (C.I64 n')) | n' <- shrink n]
+  shrink (Fix (PConst (C.F32 n))) = [Fix (PConst (C.F32 n')) | n' <- shrink n]
+  shrink (Fix (PConst (C.F64 n))) = [Fix (PConst (C.F64 n')) | n' <- shrink n]
+  shrink (Fix (POp _ a b)) = [a, b]
+  shrink (Fix (PArr es)) = es
+  shrink (Fix (PSelect arr _)) = [arr]
+  shrink (Fix (PApp f args)) = f : args
+  shrink (Fix (PLam _ _ bindings body)) = body : [e | (_,  e) <- bindings]
+  shrink (Fix (PRec _ _ _ bindings body)) = body : [e | (_,  e) <- bindings]
   shrink _ = []
 
 -- | Generate a random expression for testing in GHCi
