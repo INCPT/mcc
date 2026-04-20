@@ -1,6 +1,5 @@
 module OSC.Transforms.AnnBind where
 
-import Control.Monad (when)
 import Control.Monad.Trans.Class (lift)
 import qualified Control.Monad.Reader as R
 import qualified Control.Monad.Writer as W
