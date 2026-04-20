@@ -589,6 +589,7 @@ type ExprSel sel = Expr (Lambda sel) (sel (Lambda sel)) Type
 
 type FoldSelectionsM = Stack (Type, ExprSel Selection) (ExprSel FoldedSelection)
 
+{-
 foldSelections :: ExprSel Selection -> ExprSel FoldedSelection
 foldSelections = runStack . expr
   where
@@ -632,7 +633,7 @@ foldSelections = runStack . expr
       sel' <- expr sel
       _ <- pop
       pure sel'
-
+-}
 --------------------------------------------------------------------------------
 
 data Func' = Func'

@@ -8,6 +8,7 @@ import OSC.Expr.Base
 import OSC.Expr.Functors
 
 import Test.QuickCheck
+import qualified Test.QuickCheck as T
 import Control.Monad (replicateM)
 import qualified Data.Map as M
 import Data.Map (Map)
@@ -385,5 +386,5 @@ randomERec = do
   recType <- genNonFuncType 2
   genRec emptyCtx recType
 
-sample' :: Show a => Gen a -> IO ()
-sample' = sample
+sample' :: Gen a -> IO [a]
+sample' = T.sample'

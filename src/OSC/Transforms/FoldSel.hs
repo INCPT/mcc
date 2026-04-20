@@ -4,7 +4,7 @@ import qualified Control.Monad.State as ST
 
 import OSC.Expr.Functors
 import OSC.Expr.Bitraversable
-import OSC.Expr.Comp (Type)
+import OSC.Expr.Comp (Type(..))
 import OSC.Expr.FoldSel
 import qualified OSC.Expr.AnnBind as SRC
 
@@ -24,27 +24,35 @@ pop = do
       pure (Just a)
     _ -> pure Nothing
 
-foldSelections :: Ann Type SRC.Expr -> FoldSelM (Ann Type Expr)
-foldSelections = bitraverse (\rmap expr@(Ann (exprt, _)) -> rtraverse (trav rmap exprt) expr) diff
+foldSelections :: Ann Type SRC.Expr -> Ann Type Expr
+foldSelections = flip ST.evalState [] . foldSelections_
+
+foldSelections_ :: Ann Type SRC.Expr -> FoldSelM (Ann Type Expr)
+foldSelections_ = bitraverse trav diff
   where
-    trav _ _ (SRC.PArr elems) = do
+    peelOffIndices :: Int -> Type -> Type
+    peelOffIndices 0 t = t
+    peelOffIndices n (TArr t _) = peelOffIndices (n - 1) t
+    peelOffIndices n t = error $ "cexprType: cannot peel " <> show n <> " indices from type " <> show t <> " (this is a bug)"
+
+    trav _ (Ann (t, SRC.PArr elems)) = do
      s <- pop
      case s of
        Just idx -> do
-         elems' <- traverse foldSelections elems
+         elems' <- traverse foldSelections_ elems
          push idx
-         PFoldedSelectL elems' <$> foldSelections idx
-       Nothing -> PArr <$> traverse foldSelections elems
+         pure $ Ann (t, PFoldedSelectL elems' (foldSelections idx))
+       Nothing -> pure $ Ann (t, PArr $ fmap foldSelections elems)
 
-    trav rmap exprt expr = do
+    trav rmap expr@(Ann (t, _)) = do
       idxs <- ST.get
       case idxs of
-        [] -> rmap expr
-        _ -> PFoldedSelectR <$> fmap (Ann . (exprt,)) (rmap expr) <*> traverse foldSelections idxs
+        [] -> rtraverse rmap expr -- pure $ foldSelections expr
+        _ -> pure $ Ann (peelOffIndices (length idxs) t, PFoldedSelectR (foldSelections expr) (fmap foldSelections idxs))
 
     diff :: Diff (Ann Type SRC.Expr) -> FoldSelM (Expr (Ann Type Expr))
     diff (DSelect sel idx) = do
       push idx
-      sel' <- foldSelections sel
+      sel' <- foldSelections_ sel
       _ <- pop
       pure $ project sel'

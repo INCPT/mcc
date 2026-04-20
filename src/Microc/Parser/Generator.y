@@ -3,8 +3,6 @@ module Microc.Parser.Generator where
 import Microc.Scanner.Generator
 import Microc.Ast
 import Data.Text (pack)
-import Prelude hiding (fst, snd)
-
 }
 
 %name parse
@@ -72,13 +70,13 @@ import Prelude hiding (fst, snd)
 %%
 
 program:
-  decls { Program (reverse $ fst $1) (reverse $ snd $1) (reverse $ thd $1) }
+  decls { Program (reverse $ fst3 $1) (reverse $ snd3 $1) (reverse $ thd3 $1) }
 
 decls:
    {- empty -} { ([], [], []) }
- | decls sdecl { (($2 : fst $1), (snd $1), (thd $1)) }
- | decls vdecl { ((fst $1), ($2 : snd $1), (thd $1)) }
- | decls fdecl { ((fst $1), (snd $1), ($2 : thd $1)) }
+ | decls sdecl { (($2 : fst3 $1), (snd3 $1), (thd3 $1)) }
+ | decls vdecl { ((fst3 $1), ($2 : snd3 $1), (thd3 $1)) }
+ | decls fdecl { ((fst3 $1), (snd3 $1), ($2 : thd3 $1)) }
 
 fdecl:
    typ id '(' formals_opt ')' '{' vdecl_list stmt_list '}'
@@ -181,7 +179,7 @@ actuals_list:
 
 {
 parseError _ = error "Unable to parse tokens"
-fst (a, _, _) = a
-snd (_, b, _) = b
-thd (_, _, c) = c
+fst3 (a, _, _) = a
+snd3 (_, b, _) = b
+thd3 (_, _, c) = c
 }

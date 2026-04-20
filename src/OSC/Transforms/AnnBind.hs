@@ -22,11 +22,8 @@ import OSC.Expr.AnnBind
 
 type CaptureM = R.ReaderT (Map Ident (Maybe Ident), Map Ident (Maybe Ident)) (W.WriterT (Set Ident) (ST.StateT Int (ST.State (Map Ident Type))))
 
-runCapture :: CaptureM a -> ((a, Set Ident), Map Ident Type)
-runCapture = flip ST.runState mempty . flip ST.evalStateT 0 . W.runWriterT . flip R.runReaderT mempty
-
-markCapturedBindings :: Ann Type SRC.Expr -> CaptureM (Ann Type Expr)
-markCapturedBindings = bitraverse (rtraverse . trav) diff
+annCapturedBindings_ :: Ann Type SRC.Expr -> CaptureM (Ann Type Expr)
+annCapturedBindings_ = bitraverse (rtraverse . trav) diff
   where
     nextName = do
       n <- ST.state $ \n -> (n, n + 1)
@@ -55,12 +52,12 @@ markCapturedBindings = bitraverse (rtraverse . trav) diff
    
       -- Process bindings recursively
       (bindings', capturedByBindings) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubsts <> bindingNames, prev <> env) $ sequence
-        [ (n,) <$> markCapturedBindings e
+        [ (n,) <$> annCapturedBindings_ e
         | (n, e) <- bindings
         ]
    
       -- Process body recursively and capture free vars
-      (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubsts <> bindingNames, prev <> env) (markCapturedBindings body)
+      (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubsts <> bindingNames, prev <> env) (annCapturedBindings_ body)
    
       -- Propagate captures excluding params and bindings
       W.tell ((capturedByBindings <> capturedByBody) S.\\ (S.fromList $ M.keys (paramSubsts <> bindingNames)))
@@ -93,12 +90,12 @@ markCapturedBindings = bitraverse (rtraverse . trav) diff
    
       -- Process bindings recursively
       (bindings', capturedByBindings) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubst <> bindingNames, prev <> env) $ sequence
-        [ (n,) <$> markCapturedBindings e
+        [ (n,) <$> annCapturedBindings_ e
         | (n, e) <- bindings
         ]
    
       -- Process body recursively and capture free vars
-      (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubst <> bindingNames, prev <> env) (markCapturedBindings body)
+      (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubst <> bindingNames, prev <> env) (annCapturedBindings_ body)
    
       -- Propagate captures excluding params and bindings
       W.tell ((capturedByBindings <> capturedByBody) S.\\ (S.fromList $ M.keys (paramSubst <> bindingNames)))
@@ -121,3 +118,6 @@ markCapturedBindings = bitraverse (rtraverse . trav) diff
         ]
    
       pure $ PRecAnn t delay param bindings'' body'
+
+annCapturedBindings :: Ann Type SRC.Expr -> ((Ann Type Expr, Set Ident), Map Ident Type)
+annCapturedBindings = flip ST.runState mempty . flip ST.evalStateT 0 . W.runWriterT . flip R.runReaderT mempty . annCapturedBindings_
