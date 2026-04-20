@@ -49,6 +49,7 @@ library
       OSC.Expr.Base
       OSC.Expr.Bitraversable
       OSC.Expr.Comp
+      OSC.Expr.Defunc
       OSC.Expr.FoldSel
       OSC.Expr.Functors
       OSC.Expr.Gen
@@ -56,6 +57,7 @@ library
       OSC.Expr.TH
       OSC.Pretty
       OSC.Transforms.AnnBind
+      OSC.Transforms.Defunc
       OSC.Transforms.FoldSel
       OSC.Transforms.Typecheck
   other-modules:
