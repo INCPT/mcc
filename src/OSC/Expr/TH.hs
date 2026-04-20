@@ -554,13 +554,14 @@ genPatternSynonyms typeName = do
   
   -- Generate pattern synonyms for each constructor
   (patternDecs, patternNames) <- fmap mconcat . forM cons $ \(conName, fields) -> case fields of
-    [(_, AppT (ConT innerTypeName) _)] -> do
+    [(_, AppT (ConT innerTypeName) innerTypeArg)] -> do
       -- This constructor wraps another type, generate patterns for inner constructors
+      -- innerTypeArg tells us how the outer type variable maps to the inner type
       innerInfo <- reify innerTypeName
       let innerCons = getConstructors innerInfo
       fmap mconcat . forM innerCons $ \(innerConName, innerFields) -> do
         let patternName = mkName ("P" ++ nameBase innerConName)
-        decs <- genPatternSynonym typeName typeVars patternName conName innerConName innerFields
+        decs <- genPatternSynonym typeName typeVars patternName conName innerConName innerFields innerTypeArg
         pure (decs, [patternName])
     _ -> do
       -- Regular constructor - generate a simple pattern
@@ -574,8 +575,8 @@ genPatternSynonyms typeName = do
   pure (patternDecs ++ [completePragma])
 
 -- Generate a pattern synonym for a nested constructor
-genPatternSynonym :: Name -> [Name] -> Name -> Name -> Name -> [BangType] -> Q [Dec]
-genPatternSynonym outerTypeName typeVars patternName outerConName innerConName innerFields = do
+genPatternSynonym :: Name -> [Name] -> Name -> Name -> Name -> [BangType] -> Type -> Q [Dec]
+genPatternSynonym outerTypeName typeVars patternName outerConName innerConName innerFields innerTypeArg = do
   paramVars <- forM [1..length innerFields] $ \i -> pure $ mkName ("a" ++ show i)
   
   -- Build the pattern: OuterCon (InnerCon a1 a2 ...)
@@ -583,8 +584,9 @@ genPatternSynonym outerTypeName typeVars patternName outerConName innerConName i
   let outerPat = ConP outerConName [] [innerPat]
   
   -- Build the type signature
-  -- Replace any type variables in the inner fields with the outer type's type variables
-  let paramTypes = [ replaceTypeVars typeVars (stripBang typ) | (_, typ) <- innerFields ]
+  -- innerTypeArg is how the outer type variable appears in the wrapped type (e.g., VarT exp)
+  -- We need to replace inner type variables with this
+  let paramTypes = [ replaceInnerTypeVar innerTypeArg (stripBang typ) | (_, typ) <- innerFields ]
   -- Apply type variables to the result type: Expr exp
   let resultType = foldl AppT (ConT outerTypeName) (fmap VarT typeVars)
   let patType = foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
@@ -626,6 +628,21 @@ replaceTypeVars typeVars = go
       VarT _ -> case typeVars of
         [v] -> VarT v  -- Single type variable case
         _ -> typ       -- Multiple type variables - keep as is for now
+      AppT t1 t2 -> AppT (go t1) (go t2)
+      ListT -> ListT
+      TupleT n -> TupleT n
+      ArrowT -> ArrowT
+      ConT name -> ConT name
+      _ -> typ
+
+-- Replace inner type variables with the outer type's type argument
+-- innerTypeArg is the type argument from the outer constructor (e.g., VarT exp from Expr (C.Expr exp))
+-- This replaces any VarT in the inner fields with innerTypeArg
+replaceInnerTypeVar :: Type -> Type -> Type
+replaceInnerTypeVar replacement = go
+  where
+    go typ = case typ of
+      VarT _ -> replacement
       AppT t1 t2 -> AppT (go t1) (go t2)
       ListT -> ListT
       TupleT n -> TupleT n
