@@ -545,6 +545,11 @@ genPatternSynonyms typeName = do
   validateTypeParams typeName info
   validateNoExistentials typeName info
   
+  -- Get type variables from the outer type
+  typeVars <- case info of
+    TyConI (DataD _ _ tvbs _ _ _) -> pure [ name | PlainTV name _ <- tvbs ]
+    _ -> fail $ "Expected a data type declaration for " ++ nameBase typeName
+  
   let cons = getConstructors info
   
   -- Generate pattern synonyms for each constructor
@@ -555,12 +560,12 @@ genPatternSynonyms typeName = do
       let innerCons = getConstructors innerInfo
       fmap mconcat . forM innerCons $ \(innerConName, innerFields) -> do
         let patternName = mkName ("P" ++ nameBase innerConName)
-        decs <- genPatternSynonym typeName patternName conName innerConName innerFields
+        decs <- genPatternSynonym typeName typeVars patternName conName innerConName innerFields
         pure (decs, [patternName])
     _ -> do
       -- Regular constructor - generate a simple pattern
       let patternName = mkName ("P" ++ nameBase conName)
-      decs <- genSimplePatternSynonym typeName patternName conName fields
+      decs <- genSimplePatternSynonym typeName typeVars patternName conName fields
       pure (decs, [patternName])
   
   -- Generate COMPLETE pragma
@@ -569,8 +574,8 @@ genPatternSynonyms typeName = do
   pure (patternDecs ++ [completePragma])
 
 -- Generate a pattern synonym for a nested constructor
-genPatternSynonym :: Name -> Name -> Name -> Name -> [BangType] -> Q [Dec]
-genPatternSynonym outerTypeName patternName outerConName innerConName innerFields = do
+genPatternSynonym :: Name -> [Name] -> Name -> Name -> Name -> [BangType] -> Q [Dec]
+genPatternSynonym outerTypeName typeVars patternName outerConName innerConName innerFields = do
   paramVars <- forM [1..length innerFields] $ \i -> pure $ mkName ("a" ++ show i)
   
   -- Build the pattern: OuterCon (InnerCon a1 a2 ...)
@@ -579,7 +584,8 @@ genPatternSynonym outerTypeName patternName outerConName innerConName innerField
   
   -- Build the type signature
   let paramTypes = [ stripBang typ | (_, typ) <- innerFields ]
-  let resultType = ConT outerTypeName
+  -- Apply type variables to the result type: Expr exp
+  let resultType = foldl AppT (ConT outerTypeName) (fmap VarT typeVars)
   let patType = foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
   
   -- Pattern synonym declaration
@@ -589,13 +595,14 @@ genPatternSynonym outerTypeName patternName outerConName innerConName innerField
   pure [patSigDec, patSynDec]
 
 -- Generate a simple pattern synonym for a non-nested constructor
-genSimplePatternSynonym :: Name -> Name -> Name -> [BangType] -> Q [Dec]
-genSimplePatternSynonym typeName patternName conName fields = do
+genSimplePatternSynonym :: Name -> [Name] -> Name -> Name -> [BangType] -> Q [Dec]
+genSimplePatternSynonym typeName typeVars patternName conName fields = do
   paramVars <- forM [1..length fields] $ \i -> pure $ mkName ("a" ++ show i)
   
   let pat = ConP conName [] (fmap VarP paramVars)
   let paramTypes = [ stripBang typ | (_, typ) <- fields ]
-  let resultType = ConT typeName
+  -- Apply type variables to the result type: Expr exp
+  let resultType = foldl AppT (ConT typeName) (fmap VarT typeVars)
   let patType = foldr (\paramType acc -> AppT (AppT ArrowT paramType) acc) resultType paramTypes
   
   let patSynDec = PatSynD patternName (PrefixPatSyn paramVars) ImplBidir pat
