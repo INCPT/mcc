@@ -118,25 +118,27 @@ data Diff1 exp
 -- $(genBitraversableInstance "S1_" ''Sum1 "" ''Value "D1_" ''Diff1)
 --
 -- This generates a Bitraversable instance that allows transforming Sum1 expressions
--- into Value or Diff1 expressions. The bitraverse function takes:
---   g :: f a -> m (f' b)       - transforms recursive positions (subset constructors)
+-- into Value expressions. The bitraverse function takes:
+--   trav :: forall a b. (a (f a) -> m (b (f' b))) -> f a -> m (f' b) - general traversal
 --   f :: c (f a) -> m (b (f' b)) - transforms diff constructors
 --
--- For subset constructors (those in Value), it applies g to recursive fields and
+-- For subset constructors (those in Value), it applies trav to recursive fields and
 -- returns the Value constructor directly:
 
 instance Bitraversable Sum1 Value Diff1 where
-  bitraverse g _ (S1_Const n) = Const <$> pure n
-  bitraverse g _ (S1_Arr as) = Arr <$> traverse g as
+  bitraverse trav f = trav go
+    where
+      go (S1_Const n) = Const <$> pure n
+      go (S1_Arr as) = Arr <$> traverse (trav go) as
 
--- For diff constructors (those NOT in Value), it forwards the arguments to f,
--- which is responsible for handling the transformation:
+      -- For diff constructors (those NOT in Value), it forwards the arguments to f,
+      -- which is responsible for handling the transformation:
 
-  bitraverse _ f (S1_NoFields) = f D1_NoFields
-  bitraverse _ f (S1_Add a b) = f (D1_Add a b)
-  bitraverse _ f (S1_Add2 a b) = f (D1_Add2 a b)
-  bitraverse _ f (S1_Mul a b) = f (D1_Mul a b)
-  bitraverse _ f (S1_FuncRef a) = f (D1_FuncRef a)
+      go (S1_NoFields) = f D1_NoFields
+      go (S1_Add a b) = f (D1_Add a b)
+      go (S1_Add2 a b) = f (D1_Add2 a b)
+      go (S1_Mul a b) = f (D1_Mul a b)
+      go (S1_FuncRef a) = f (D1_FuncRef a)
 
 -- Note: Trailing underscores are automatically stripped from constructor names,
 -- so you can use empty prefixes ("") when the sum types are in the same module.
