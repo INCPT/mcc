@@ -128,4 +128,33 @@ annPure (Ann (a, PConst n)) = Ann ((a, Pure), PConst n)
 annPure (Ann (a, PArr elems)) = Ann ((a, mconcat [ p | Ann ((_, p), _) <- elems' ]), PArr elems')
   where
     elems' = fmap annPure elems
-annPure _ = undefined
+annPure (Ann (a, PFoldedSelectL elems idx)) = Ann ((a, purity), PFoldedSelectL elems' idx')
+  where
+    elems' = fmap annPure elems
+    idx' = annPure idx
+    purity = mconcat ([ p | Ann ((_, p), _) <- elems' ] ++ [p' | Ann ((_, p'), _) <- [idx']])
+annPure (Ann (a, PFoldedSelectR expr elems)) = Ann ((a, purity), PFoldedSelectR expr' elems')
+  where
+    expr' = annPure expr
+    elems' = fmap annPure elems
+    purity = mconcat ([ p | Ann ((_, p), _) <- expr' : elems' ])
+annPure (Ann (a, PLamAnn typ params bindings body)) = Ann ((a, purity), PLamAnn typ params bindings' body')
+  where
+    bindings' = [ (n, region, annPure e) | (n, region, e) <- bindings ]
+    body' = annPure body
+    purity = mconcat ([ p | (_, _, Ann ((_, p), _)) <- bindings' ] ++ [p' | Ann ((_, p'), _) <- [body']])
+annPure (Ann (a, PRecAnn typ delay param bindings body)) = Ann ((a, Impure), PRecAnn typ delay param bindings' body')
+  where
+    bindings' = [ (n, region, annPure e) | (n, region, e) <- bindings ]
+    body' = annPure body
+annPure (Ann (a, POp op lhs rhs)) = Ann ((a, purity), POp op lhs' rhs')
+  where
+    lhs' = annPure lhs
+    rhs' = annPure rhs
+    purity = mconcat [ p | Ann ((_, p), _) <- [lhs', rhs'] ]
+annPure (Ann (a, PVar ident)) = Ann ((a, Pure), PVar ident)
+annPure (Ann (a, PApp func args)) = Ann ((a, purity), PApp func' args')
+  where
+    func' = annPure func
+    args' = fmap annPure args
+    purity = mconcat ([ p | Ann ((_, p), _) <- func' : args' ])
