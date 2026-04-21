@@ -56,3 +56,19 @@ foldSelections_ = bitraverse trav diff
       sel' <- foldSelections_ sel
       _ <- pop
       pure $ project sel'
+
+{-
+-- TODO: this must happen after inlining / CSE (otherwise things like let a = [1, 2, 3] in a[0] won't be optimized)
+elimConstIndices :: CExpr Abs -> CExpr Abs
+elimConstIndices = transformCExpr (\_ -> id) id go
+  where
+    go :: CExpr Abs -> CExpr Abs
+
+    -- Eliminate constant index selections by directly selecting the choice
+    -- It's ok to prune impure expressions here (since the index is constant those expressions will never be accessible)
+    go (CSel _ chs (CConst (I32 idx))) = chs !! idx
+    go (CSel _ chs (CConst (I64 idx))) = chs !! idx
+
+    -- Keep everything else as-is
+    go ch = ch
+-}

@@ -60,6 +60,7 @@ library
       OSC.Transforms.AnnBind
       OSC.Transforms.Defunc
       OSC.Transforms.FoldSel
+      OSC.Transforms.Optimize
       OSC.Transforms.Typecheck
   other-modules:
       Paths_mcc

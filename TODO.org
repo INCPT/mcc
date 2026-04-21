@@ -37,3 +37,17 @@
 ** two targets: WASM and C
 * TODO MCP server with retrieve-syntax, retrieve-type, retrieve-source, retrieve-docs, etc
 * TODO LSP server
+
+* TODO: in typechecking, check that static indices are within range
+** even better: attach range to index; then check if everything ok in range check
+***  otherwise expect a clamp() or wrap() range correcting fun
+** if not possible, then demand clamp/wrap in dynamic select index expressions
+* TODO: in the CallM monad, arguments that get written to the output can pass their array ctx slice to the argument expression, so no need for copy
+
+* TODO: optimization is performed on the CExpr datatype
+
+* TODO: alignment in AllocM!
+
+* TODO: what happens if part of the return value is a capture?
+** this is basically return value ref propagation up the binding chain
+** the most recent returned binding (or argument) gets tagged with "write to return value ref"
