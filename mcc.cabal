@@ -44,6 +44,7 @@ library
       OSC.Codegen
       OSC.Codegen.Backend
       OSC.Codegen.Interpret
+      OSC.Codegen.WASM
       OSC.Expr
       OSC.Expr.AnnBind
       OSC.Expr.Base

@@ -219,19 +219,17 @@ Shadow Stack: In complex modules, it is common to reserve the first few kilobyte
 -- alignment is important
 
 -- QUESTION: do we decide whether we return something on stack vs shadow stack etc here or do we leave it up to each backend?
-
-data Config = Config
-  { smallArrayMaxLength :: Int -- | Small arrays are returned on the stack
-  }
+-- let's not do it here; instead each ProgramFunc will have a type and the backend will decide what the calling convention will be
+-- here we only track the focus lens, gather allocations and Return stuff
 
 data ProgramFunc = ProgramFunc
-  { allocations :: Map Ident Type
+  { params :: [(Ident, Type)]
+  , locals :: Map Ident Type
   , instructions :: [Instruction]
-  , needsShadowStack :: Bool
   } deriving Show
 
 data Program = Program
-  { globalAllocations :: Map Ident Type
+  { globals :: Map Ident Type
   , funcMap :: Map FuncRef ProgramFunc
   , tickFunc :: ProgramFunc
   } deriving Show
@@ -243,18 +241,9 @@ type CodegenM = ST.State ()
 -- innerJoin :: Applicative f => Ord k => Map k (f a) -> Map k (f b) -> Map k (f (a, b))
 -- innerJoin = M.intersectionWith (\fa fb -> (,) <$> fa <*> fb)
 
-codegen :: Config -> DefuncMap (Ann Type) -> ExpA -> CodegenM Program
-codegen cfg dfm = undefined
+codegen :: DefuncMap (Ann Type) -> ExpA -> CodegenM Program
+codegen dfm = undefined
   where
-    needsStackMap :: Map FuncRef Bool
-    needsStackMap = fmap funcNeedsStack dfm.funcMap
-      where
-        funcNeedsStack (C.LamAnn typ _ bindings body) = or
-          [ C.sizeOfType typ > cfg.smallArrayMaxLength
-          , or [ M.findWithDefault False fr needsStackMap | Func fr <- universe body ]
-          , or [ M.findWithDefault False fr needsStackMap | (_, _, bbody) <- bindings, Func fr <- universe bbody ]
-          ]
-
     collectLamAllocations :: C.LamAnn ExpA -> ([Type], [Type])
     collectLamAllocations (C.LamAnn typ _ bindings _) = mconcat
       [ case region of
@@ -262,7 +251,6 @@ codegen cfg dfm = undefined
           C.AllocGlobal -> ([], [t])
       | (_, region, Ann (t, _)) <- bindings
       ]
-
 
 {-
 
