@@ -126,9 +126,6 @@ instance Semigroup Pure where
 
 type PureM = R.Reader (Map Ident Pure)
 
-annPure :: Ann a Expr -> Ann (a, Pure) Expr
-annPure expr = flip R.runReader mempty $ annPure_ expr
-
 annPure_ :: Ann a Expr -> PureM (Ann (a, Pure) Expr)
 annPure_ (Ann (a, expr)) = do
     (p, expr') <- case expr of
@@ -196,3 +193,6 @@ annPure_ (Ann (a, expr)) = do
   where
     extract :: [Ann (a, Pure) Expr] -> Pure
     extract = foldMap (snd . fst . unAnn)
+
+annPure :: Ann a Expr -> Ann (a, Pure) Expr
+annPure expr = flip R.runReader mempty $ annPure_ expr
