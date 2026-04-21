@@ -1,3 +1,4 @@
+* TODO array constants get initialized once at the top
 * TODO SOACs: actually probably better to have the "comptime" constructs like map and range translate to loops
 ** otherwise we must interpret the code during compilation, which in an online setting where the compiler is JS or WASM will be slower than executing WASM loops directly
 ** but maybe good to unroll for small arrays, but we'll still need to support SOACs in Expr
@@ -33,7 +34,7 @@
 **** (ERec _ _ _ (EConst n)) = n
 **** (ESelect [a, b, c])[1] = b
 **** (App (Abs f)) = can inline if feasible
-**** (Abs _ -> let b = xs in b) = (Abs _ -> xs) (bust this should be handled by inline-if-used-only-once rule)
+**** (Abs _ -> let b = xs in b) = (Abs _ -> xs) (but this should be handled by inline-if-used-only-once rule)
 * TODO if something is not referenced in delay, don't alloc delay box and compute it lazily in e.g. select
 ** e.g. bindings that do not reference the recusive head can be outside the rec block
 * TODO codegen

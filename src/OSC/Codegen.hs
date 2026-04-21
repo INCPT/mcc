@@ -210,6 +210,57 @@ Best Practices for Multiple Arrays
 
 Shadow Stack: In complex modules, it is common to reserve the first few kilobytes for static data (like these arrays) and start your dynamic "heap" at a higher GLOBAL_BASE address (e.g., 1024). 
 
+--- SELECTION
+
+In WebAssembly (Wasm), you can achieve "goto" functionality using the br_table instruction, which acts as a jump table or a "computed jump". This is the standard way to implement switch statements or dispatch logic in Wasm. 
+Implementation Methods
+
+    Method 1: Array Lookup (Compute-All)
+    Pre-calculate all possible results, store them in linear memory, and use a load instruction with the index.
+    Method 2: Binary Search (If-Tree)
+    Use a tree of if/else instructions to narrow down the index in
+    time. This is often faster for small sets because it avoids memory access entirely. 
+    Method 3: br_table (Wasm's "Goto")
+    Load the index onto the stack and use br_table. It jumps to a specific label based on the index value, allowing you to execute only the relevant pure computation.
+
+
+The Final Heuristic Formula
+
+(Total cost of all computations + one memory load)
+(Cost of logarithmic branches + one computation)
+(Cost of a jump table lookup + one computation)
+
+The following example shows how to calculate the -th element of [a, b, c] where a, b, c are results of pure computations.
+
+(func $lookup_expression (param $i i32) (result i32)
+  ;; Outer block to catch the result of the selected computation
+  (block $exit (result i32)
+    ;; Each nested block represents a "case" in the jump table
+    (block $case_c
+      (block $case_b
+        (block $case_a
+          ;; Load the index and jump. 
+          ;; If $i=0, jumps to $case_a. If $i=1, jumps to $case_b.
+          ;; If $i=2, jumps to $case_c. If $i > 2, it hits the 'default' (last label).
+          local.get $i
+          br_table $case_a $case_b $case_c $case_c
+        )
+        ;; Computation 'a' (e.g., 10 + 5)
+        i32.const 15
+        br $exit
+      )
+      ;; Computation 'b' (e.g., 20 * 2)
+      i32.const 40
+      br $exit
+    )
+    ;; Computation 'c' (e.g., 100 / 4)
+    i32.const 25
+  )
+)
+
+The Jump: When the index is provided, br_table pops it and jumps to the end of the corresponding block.
+Selective Execution: Because the jump skips everything before the target block's end marker, only the code following that specific block is executed. The br $exit at the end of each "case" ensures the other computations are skipped once yours is done.
+
 -}
 
 -- WASM NOTES
@@ -228,7 +279,39 @@ Shadow Stack: In complex modules, it is common to reserve the first few kilobyte
 
 -- QUESTION is FoldSelectL always good? e.g. [0, 1, 2, 3, 4, 5, 6][idx] will definitely be faster as a static array + i32.load
 -- well, depends on the complexity of element computations; if sum cost of instructions/elements < log 2 * legnth elements * cost of branch; then compute all + dynamic offset is better, else binary if
--- question doest the decision alloc upfront/binary if depend on whether a bindings is captured?
+-- question does the decision alloc upfront/binary if depend on whether a bindings is captured?
+---- yes, if captured (so not inlined), then alloc upfront must be used
+-- but also if array is pure (so doesn't depend on rec blocks or rwtables) then precompute once in the beginning
+-- otherewise - use nested ifs if elems < N (8-16?)
+-- otherewise - jumps
+
+-- PIPELINE
+-- typecheck/range propagation
+---- until fixpoint
+------ fusion/simplifications
+-------- calculate const expressions
+-------- [a, b, c][1] == b
+-------- rec |...| 5.0 == 5.0
+-------- (|a, b| a + b)(x, y) == x + y
+------ SOACs?
+------ CSE
+------ dead code elim
+------ inline (awlays inline if something used only once, otherwise heuristic)
+---- fold selections
+---- ann binds
+---- KR/AR propagation/float to the most top
+---- float const computations out of rec blocks
+---- pureness propagation
+---- forward to backend
+------ WASM
+-------- simple return values on stack, array in linear mem
+-------- assign array allocations
+---------- if captured (so not inlined), then alloc upfront
+---------- if array is pure (so doesn't depend on rec blocks or rwtables) then precompute once at init time
+---------- otherewise - use nested ifs if elems < N (8-16?)
+---------- otherewise - br_table jumps
+-------- allocate globals or locals per function (align at 4/8 bytes)
+-------- propagate shadow stack pointers to functions that need it (e.g. if they return an array or a subfunction returns an array (transitively))
 
 data ProgramFunc = ProgramFunc
   { params :: [(Ident, Type)]
