@@ -126,13 +126,15 @@ instance Semigroup Pure where
 annPure :: Ann a Expr -> Ann (a, Pure) Expr
 annPure expr = pile expr purity
   where
+    extract = snd . fst . unAnn . annPure
+
     purity :: Expr (Ann a Expr) -> Pure
     purity (PConst _) = Pure
-    purity (PArr elems) = mconcat [ snd (fst (unAnn (annPure e))) | e <- elems ]
-    purity (PFoldedSelectL elems idx) = mconcat ([ snd (fst (unAnn (annPure e))) | e <- elems ] <> [ snd (fst (unAnn (annPure idx))) ])
-    purity (PFoldedSelectR expr elems) = mconcat [ snd (fst (unAnn (annPure e))) | e <- expr : elems ]
-    purity (PLamAnn _ _ bindings body) = mconcat ([ snd (fst (unAnn (annPure e))) | (_, _, e) <- bindings ] <> [ snd (fst (unAnn (annPure body))) ])
+    purity (PArr elems) = mconcat [ extract e | e <- elems ]
+    purity (PFoldedSelectL elems idx) = mconcat $ [ extract e | e <- elems ] <> [ extract idx ]
+    purity (PFoldedSelectR expr elems) = mconcat [ extract e | e <- expr:elems ]
+    purity (PLamAnn _ _ bindings body) = mconcat $ [ extract e | (_, _, e) <- bindings ] <> [ extract body ]
     purity (PRecAnn _ _ _ _ _) = Impure
-    purity (POp _ lhs rhs) = mconcat [ snd (fst (unAnn (annPure e))) | e <- [lhs, rhs] ]
+    purity (POp _ lhs rhs) = mconcat [ extract e | e <- [lhs, rhs] ]
     purity (PVar _) = Pure
-    purity (PApp func args) = mconcat [ snd (fst (unAnn (annPure e))) | e <- func : args ]
+    purity (PApp func args) = mconcat [ extract e | e <- func:args ]
