@@ -129,7 +129,7 @@ type PureM = R.Reader (Map Ident Pure)
 annPure_ :: Ann a Expr -> PureM (Ann (a, Pure) Expr)
 annPure_ ann@(Ann (a, expr)) = case expr of
     PConst n -> pure $ Ann ((a, Pure), PConst n)
-    
+
     PLamAnn typ params bindings body -> do
       env <- R.ask
       mdo
@@ -144,7 +144,7 @@ annPure_ ann@(Ann (a, expr)) = case expr of
         
         let p = extract [ e' | (_, _, e') <- bindings' ] <> extract [body']
         pure $ Ann ((a, p), PLamAnn typ params bindings' body')
-    
+
     PRecAnn typ delay param bindings body -> do
       env <- R.ask
       mdo
@@ -159,7 +159,7 @@ annPure_ ann@(Ann (a, expr)) = case expr of
         
         -- RecAnn is always impure
         pure $ Ann ((a, Impure), PRecAnn typ delay param bindings' body')
-    
+
     PVar ident -> do
       env <- R.ask
       let p = M.findWithDefault Pure ident env
