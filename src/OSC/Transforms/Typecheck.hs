@@ -160,13 +160,13 @@ typecheck expr = case unAnn expr of
       Just t -> pure $ Ann ((pos, t), PVar n)
       Nothing -> E.throwError $ UnknownBinding pos n
   
-  (pos, PLam t params bindings body) -> do
+  (pos, PLam typ params bindings body) -> do
     -- Check for duplicate parameters  
     checkDuplicates pos [(p, ()) | p <- params]
     checkDuplicates pos bindings
     
     -- Extract parameter types and return type from the function type
-    case t of
+    case typ of
       TLam paramTypes retType -> do
         -- Check parameter count matches
         when (length params /= length paramTypes) $
@@ -188,9 +188,9 @@ typecheck expr = case unAnn expr of
         when (bodyType /= retType) $
           E.throwError $ FunctionReturnTypeMismatch pos retType bodyType
         
-        pure $ Ann ((pos, t), PLam t params bindings' body')
+        pure $ Ann ((pos, typ), PLam typ params bindings' body')
       
-      _ -> E.throwError $ NotAFunction pos t
+      _ -> E.throwError $ NotAFunction pos typ
   
   (pos, PApp func args) -> do
     func' <- typecheck func
@@ -230,16 +230,16 @@ typecheck expr = case unAnn expr of
           _ -> E.throwError $ InvalidIndexType (fst . fst . unAnn $ idx') idxType
       _ -> E.throwError $ NotAnArray (fst . fst . unAnn $ sel') selType
   
-  (pos, PRec t delay param bindings body) -> do
+  (pos, PRec typ delay param bindings body) -> do
     -- Check for duplicates
     checkDuplicates pos bindings
     
     -- Check that the type doesn't contain functions
-    when (typeContainsLam t) $
-      E.throwError $ RecTypeContainsFunction pos t
-    
+    when (typeContainsLam typ) $
+      E.throwError $ RecTypeContainsFunction pos typ
+
     -- Build parameter environment (the recursive parameter has the delay type)
-    let paramsEnv = M.singleton param t
+    let paramsEnv = M.singleton param typ
     
     -- Typecheck bindings in the context of the recursive parameter
     bindings' <- R.local (paramsEnv <>) $ typecheckBindings pos bindings
@@ -251,10 +251,10 @@ typecheck expr = case unAnn expr of
     let bodyType = snd . fst . unAnn $ body'
     
     -- Check return type matches the delay type
-    when (bodyType /= t) $
-      E.throwError $ RecReturnTypeMismatch pos t bodyType
+    when (bodyType /= typ) $
+      E.throwError $ RecReturnTypeMismatch pos typ bodyType
     
-    pure $ Ann ((pos, t), PRec t delay param bindings' body')
+    pure $ Ann ((pos, typ), PRec typ delay param bindings' body')
 
 --------------------------------------------------------------------------------
 

@@ -42,7 +42,7 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
     trav rmap e = rmap e
 
     diff :: Diff (Ann Type SRC.Expr) -> CaptureM (Expr (Ann Type Expr))
-    diff (PLam t params bindings body) = do
+    diff (PLam typ params bindings body) = do
       (prev, env) <- R.ask
    
       let bindingNames = M.fromList (fmap ((,Nothing) . fst) bindings)
@@ -68,16 +68,16 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
               | (n, Ann (t, e)) <- bindings'
               ]
             , [ (paramSubst, C.AllocGlobal, Ann (t, Expr $ C.Var p))
-              | (p, t) <- zip params (paramTypes ("markCapturedBindings: " <> show t) t)
+              | (p, t) <- zip params (paramTypes ("markCapturedBindings: " <> show typ) typ)
               , S.member p allCaptured
               , Just (Just paramSubst) <- [ M.lookup p paramSubsts ]
               ]
             ]
    
       -- Accumulate captured bindings
-      pure $ PLamAnn t params bindings'' body'
+      pure $ PLamAnn typ params bindings'' body'
    
-    diff (PRec t delay param bindings body) = do
+    diff (PRec typ delay param bindings body) = do
       (prev, env) <- R.ask
    
       paramSubstName <- nextName
@@ -103,7 +103,7 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
             | (n, Ann (t, e)) <- bindings'
             ]
    
-      pure $ PRecAnn t delay paramSubstName bindings'' body'
+      pure $ PRecAnn typ delay paramSubstName bindings'' body'
 
 annCapturedBindings :: Ann Type SRC.Expr -> Ann Type Expr
 annCapturedBindings = fst . flip ST.evalState 0 . W.runWriterT . flip R.runReaderT mempty . annCapturedBindings_

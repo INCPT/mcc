@@ -35,20 +35,20 @@ foldSelections_ = bitraverse trav diff
     peelOffIndices n (TArr t _) = peelOffIndices (n - 1) t
     peelOffIndices n t = error $ "cexprType: cannot peel " <> show n <> " indices from type " <> show t <> " (this is a bug)"
 
-    trav _ (Ann (t, SRC.PArr elems)) = do
+    trav _ (Ann (typ, SRC.PArr elems)) = do
      s <- pop
      case s of
        Just idx -> do
          elems' <- traverse foldSelections_ elems
          push idx
-         pure $ Ann (t, PFoldedSelectL elems' (foldSelections idx))
-       Nothing -> pure $ Ann (t, PArr $ fmap foldSelections elems)
+         pure $ Ann (typ, PFoldedSelectL elems' (foldSelections idx))
+       Nothing -> pure $ Ann (typ, PArr $ fmap foldSelections elems)
 
-    trav rmap expr@(Ann (t, _)) = do
+    trav rmap expr@(Ann (typ, _)) = do
       idxs <- ST.get
       case idxs of
         [] -> rtraverse rmap expr
-        _ -> pure $ Ann (peelOffIndices (length idxs) t, PFoldedSelectR (foldSelections expr) (fmap foldSelections idxs))
+        _ -> pure $ Ann (peelOffIndices (length idxs) typ, PFoldedSelectR (foldSelections expr) (fmap foldSelections idxs))
 
     diff :: Diff (Ann Type SRC.Expr) -> FoldSelM (Expr (Ann Type Expr))
     diff (DSelect sel idx) = do

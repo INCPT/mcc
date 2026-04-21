@@ -32,6 +32,7 @@ import qualified Control.Monad.Trans.Free as TF
 import Control.Monad.Trans.Free (FreeT (FreeT), FreeF)
 
 import OSC.Expr.Comp (Ident, Type (..), TNumber (..), Number (..), Op (..))
+import qualified OSC.Expr.Comp as C
 import OSC.Expr.Functors
 import OSC.Expr.Defunc
 
@@ -106,8 +107,145 @@ showBlock stmts = mconcat [ "  " <> line <> "\n" | stmt <- stmts, line <- lines 
 
 --------------------------------------------------------------------------------
 
-codegen :: Ann Type Expr -> ()
+{-
+
+In WebAssembly, a "statically known" array is implemented by reserving a specific offset in Linear Memory. You then use i32.load and i32.store to read and write to that address. 
+Here is a WAT (WebAssembly Text) example showing how to reserve an array of 10 integers starting at memory address 0, along with functions to get and set values.
+
+(module
+  ;; 1. Define memory. 1 page = 64KB.
+  (memory (export "memory") 1)
+
+  ;; 2. Optional: Pre-initialize the array with data at address 0
+  ;; This puts [10, 20, 30] at the start of memory.
+  (data (i32.const 0) "\0a\00\00\00\14\00\00\00\1e\00\00\00")
+
+  ;; Function to SET a value: array[index] = value
+  ;; The array starts at offset 0. Each i32 is 4 bytes.
+  (func (export "set_array_val") (param $index i32) (param $value i32)
+    ;; Calculate address: index * 4
+    local.get $index
+    i32.const 4
+    i32.mul
+    ;; Push value to store
+    local.get $value
+    ;; Store the value at (index * 4)
+    i32.store
+  )
+
+  ;; Function to GET a value: return array[index]
+  (func (export "get_array_val") (param $index i32) (result i32)
+    ;; Calculate address: index * 4
+    local.get $index
+    i32.const 4
+    i32.mul
+    ;; Load from memory at that address
+    i32.load
+  )
+)
+
+Key Technical Details
+
+    Addressing: Since memory is a byte array, you must multiply the index by the size of your type (4 bytes for i32, 8 for f64) to find the correct address. 
+    Static Reservation: In a real project, you manually track which addresses are "reserved" for your static arrays. For example, if Array A is at 0-40, you might start Array B at address 44.
+    Initialization: The (data ...) section allows you to bake initial values directly into the binary, which are loaded into memory when the module instantiates. 
+    Security: Wasm checks bounds automatically. If you try to access an address beyond your allocated memory pages, it will trap (crash).
+
+---
+
+Using the offset parameter is the standard way to handle multiple static arrays without an allocator. You effectively partition your linear memory into fixed blocks.
+Memory Layout Example
+Imagine you want two static arrays:
+
+    Array A: 10 integers (40 bytes), starting at address 0.
+    Array B: 5 integers (20 bytes), starting at address 100. 
+
+In WebAssembly, you don't "declare" these as separate objects; you simply use the immediate offset to target the correct starting point.
+
+(module
+  (memory (export "memory") 1)
+
+  ;; --- ARRAY A (Starts at address 0) ---
+  (func (export "set_A") (param $index i32) (param $val i32)
+    local.get $index
+    i32.const 4
+    i32.mul
+    local.get $val
+    ;; No offset needed (or offset=0)
+    i32.store 
+  )
+
+  ;; --- ARRAY B (Starts at address 100) ---
+  (func (export "set_B") (param $index i32) (param $val i32)
+    local.get $index
+    i32.const 4
+    i32.mul
+    local.get $val
+    ;; Static offset adds 100 to whatever index*4 is on the stack
+    i32.store offset=100
+  )
+
+  ;; --- ARRAY B CONSTANT ACCESS ---
+  ;; Accessing Array B's 3rd element (index 2) directly
+  (func (export "get_B_const") (result i32)
+    i32.const 0
+    ;; Effective address = 0 + 100 (base) + 8 (index 2 * 4 bytes)
+    i32.load offset=108 
+  )
+)
+
+Why this is powerful
+
+    Zero Runtime Cost: The engine adds the offset to the base address during the memory cycle. It's "free" math compared to doing an i32.add in code. 
+    Virtual Structs: This is how C/Rust compilers handle structs. A "pointer" to a struct is pushed to the stack, and every field access uses i32.load offset=N where N is the field's position inside that struct. 
+    Static Safety: By using a static offset for your "Base Address" and keeping your indices within bounds, you prevent your arrays from overlapping. 
+
+Best Practices for Multiple Arrays
+
+    Alignment: Try to align your starting offsets to 4 or 8 bytes. Wasm can handle unaligned loads, but they are often slower on some hardware. 
+    Data Sections: Use the (data ...) section to pre-fill these specific regions.
+
+(data (i32.const 0) "\01\02\03")   ;; Initial values for Array A
+(data (i32.const 100) "\09\08\07") ;; Initial values for Array B
+
+Shadow Stack: In complex modules, it is common to reserve the first few kilobytes for static data (like these arrays) and start your dynamic "heap" at a higher GLOBAL_BASE address (e.g., 1024). 
+
+-}
+
+-- WASM NOTES
+-- we can return multiple values on the stack, but it's probably good to reserve this for small arrays only?
+-- for larger arrays we can manage a linear mem shadow stack
+-- globals scalars are WASM globals, global arrays go in linear mem
+-- alignment is important
+
+data Config = Config
+  { smallArrayMaxLength :: Int -- | Small arrays are returned on the stack
+  }
+
+data Func = Func
+  { allocations :: [(Type, Idx)]
+  , instructions :: [Instruction]
+  , needsShadowStack :: Bool
+  } deriving Show
+
+data Program = Program
+  { globalAllocations :: [(Type, Idx)]
+  , funcMap :: Map FuncRef Func
+  , tickFunc :: Func
+  } deriving Show
+
+type CodegenM = ST.State ()
+
+codegen :: DefuncMap (Ann Type) -> Ann Type Expr -> CodegenM Program
 codegen = undefined
+  where
+    collectLamAllocations :: C.LamAnn (Ann Type Expr) -> ([Type], [Type])
+    collectLamAllocations (C.LamAnn typ _ bindings _) = mconcat
+      [ case region of
+          C.AllocLocal -> ([t], [])
+          C.AllocGlobal -> ([], [t])
+      | (_, region, Ann (t, _)) <- bindings
+      ]
 
 
 {-
