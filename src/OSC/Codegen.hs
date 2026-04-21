@@ -222,6 +222,14 @@ Shadow Stack: In complex modules, it is common to reserve the first few kilobyte
 -- let's not do it here; instead each ProgramFunc will have a type and the backend will decide what the calling convention will be
 -- here we only track the focus lens, gather allocations and Return stuff
 
+-- QUESTION: is it actually possible to dynamically address a local?
+-- NO LOL, ok, so then we WILL need the shadow stack and the linear mem
+-- except maybe for FoldSelectL because we use a binary if tree for that (but that's not actually addressing an element in an array but rather deciding which value to "run"/return as a result)
+
+-- QUESTION is FoldSelectL always good? e.g. [0, 1, 2, 3, 4, 5, 6][idx] will definitely be faster as a static array + i32.load
+-- well, depends on the complexity of element computations; if sum cost of instructions/elements < log 2 * legnth elements * cost of branch; then compute all + dynamic offset is better, else binary if
+-- question doest the decision alloc upfront/binary if depend on whether a bindings is captured?
+
 data ProgramFunc = ProgramFunc
   { params :: [(Ident, Type)]
   , locals :: Map Ident Type
