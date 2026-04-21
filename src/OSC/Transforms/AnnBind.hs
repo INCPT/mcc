@@ -26,7 +26,7 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
   where
     nextName = do
       n <- ST.state $ \n -> (n, n + 1)
-      pure $ Ident $ "_captured_" <> show n
+      pure $ Captured n
     
     trav _ (SRC.PVar n) = do
       (_, env) <- R.ask
@@ -64,10 +64,10 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
       let allCaptured = capturedByBindings <> capturedByBody
    
       let bindings'' = mconcat
-            [ [ (n, if S.member n allCaptured then C.Global else C.Local, Ann (t, e))
+            [ [ (n, if S.member n allCaptured then C.AllocGlobal else C.AllocLocal, Ann (t, e))
               | (n, Ann (t, e)) <- bindings'
               ]
-            , [ (paramSubst, C.Global, Ann (t, Expr $ C.Var p))
+            , [ (paramSubst, C.AllocGlobal, Ann (t, Expr $ C.Var p))
               | (p, t) <- zip params (paramTypes ("markCapturedBindings: " <> show t) t)
               , S.member p allCaptured
               , Just (Just paramSubst) <- [ M.lookup p paramSubsts ]
@@ -99,7 +99,7 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
       let allCaptured = capturedByBindings <> capturedByBody
 
       let bindings'' =
-            [ (n, if S.member n allCaptured then C.Global else C.Local, Ann (t, e))
+            [ (n, if S.member n allCaptured then C.AllocGlobal else C.AllocLocal, Ann (t, e))
             | (n, Ann (t, e)) <- bindings'
             ]
    

@@ -4,6 +4,8 @@
 
 module OSC.Expr.Defunc where
 
+import qualified Data.Map as M
+
 import qualified OSC.Expr.AnnBind as SRC
 import OSC.Expr.Comp (Ident)
 import qualified OSC.Expr.Comp as C
@@ -39,3 +41,8 @@ data Diff exp
 
 $(genPatternSynonyms "P" ''Diff)
 $(genBitraversableInstance ''SRC.Expr ''Expr ''Diff)
+
+data DefuncMap f = DefuncMap
+  { funcMap :: M.Map FuncRef (C.LamAnn (f Expr))
+  , recs :: [C.RecAnn (f Expr)]
+  }

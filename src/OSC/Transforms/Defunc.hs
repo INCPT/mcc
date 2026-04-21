@@ -11,19 +11,15 @@ import OSC.Expr.Functors
 import qualified OSC.Expr.AnnBind as SRC
 import OSC.Expr.Defunc
 
-data DefuncMap f = DefuncMap
-  { funcMap :: M.Map FuncRef (C.LamAnn (f Expr))
-  , recs :: [C.RecAnn (f Expr)]
-  }
-
 type DefuncM f = ST.State (Int, DefuncMap f)
 
 defunc_ :: RFunctor f => f SRC.Expr -> DefuncM f (f Expr)
 defunc_ = bitraverse rtraverse diff
   where
     diff (LamAnn lam) = do
+      fr <- ST.state $ \(fr, dfm) -> (FuncRef fr, (fr + 1, dfm))
       lam' <- traverse defunc_ lam
-      fr <- ST.state $ \(fr, dfm) -> (FuncRef (fr + 1), (fr + 1, dfm { funcMap = M.insert (FuncRef fr) lam' dfm.funcMap }))
+      ST.modify $ \(fr, dfm) -> (fr, dfm { funcMap = M.insert (FuncRef fr) lam' dfm.funcMap })
       pure $ Func fr
     diff (RecAnn rec_@(C.RecAnn _ _ param _ _)) = do
       rec_' <- traverse defunc_ rec_

@@ -30,15 +30,18 @@ import qualified Data.Map as M
 import Control.Monad.Free (Free (Free, Pure), liftF)
 import qualified Control.Monad.Trans.Free as TF
 import Control.Monad.Trans.Free (FreeT (FreeT), FreeF)
-import OSC.Codegen
+
+import OSC.Expr.Comp (Ident, Type (..), TNumber (..), Number (..), Op (..))
+import OSC.Expr.Functors
+import OSC.Expr.Defunc
 
 import Debug.Trace
 
-data Idx = Local Int | Global Int deriving (Eq, Ord)
+data Idx = IdxLocal Int | IdxGlobal Int deriving (Eq, Ord)
 
 instance Show Idx where
-  show (Local i) = "l" <> show i
-  show (Global i) = "g" <> show i
+  show (IdxLocal i) = "l" <> show i
+  show (IdxGlobal i) = "g" <> show i
 
 data Ref 
   = RArg Int
@@ -53,6 +56,16 @@ data Ref
 
   | RFuncRef FuncRef -- index into a global function table
   | RFuncRefRef Idx -- local or global var index with index into global function table (e.g. pointer to a function pointer)
+
+showType :: Type -> String
+showType (TNumber TI32) = "i32"
+showType (TNumber TF32) = "f32"
+showType (TNumber TI64) = "i64"
+showType (TNumber TF64) = "f64"
+showType (TArr t dim) = showType t <> "[" <> show dim <> "]"
+showType (TLam [] retType) = "() -> " <> showType retType
+showType (TLam params retType) = 
+  "(" <> intercalate ", " (map showType params) <> ") -> " <> showType retType
 
 instance Show Ref where
   show (RArg i) = "arg" <> show i
@@ -92,6 +105,12 @@ showBlock :: [Instruction] -> String
 showBlock stmts = mconcat [ "  " <> line <> "\n" | stmt <- stmts, line <- lines (show stmt) ]
 
 --------------------------------------------------------------------------------
+
+codegen :: Ann Type Expr -> ()
+codegen = undefined
+
+
+{-
 
 data Env = Env
   { bindings :: Map Ident Ref
@@ -378,6 +397,8 @@ toplevel globals funcRefMap = IR
               withBindingRefs Env {..} = Env { bindings = bindingRefs <> bindings, .. }
 
           local withBindingRefs $ retvalue body
+
+-}
 
 -- TODO: dead code elimination
 -- TODO: array interval OOB detection

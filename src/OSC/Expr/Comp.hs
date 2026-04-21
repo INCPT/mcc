@@ -1,6 +1,6 @@
 module OSC.Expr.Comp where
 
-import Data.String (IsString)
+import Data.String (IsString (..))
 import Prettyprinter
 
 data TNumber = TI32 | TF32 | TI64 | TF64
@@ -63,11 +63,15 @@ numberType (F32 _) = TNumber TF32
 numberType (I64 _) = TNumber TI64
 numberType (F64 _) = TNumber TF64
 
-newtype Ident = Ident String
-  deriving (Eq, Ord, Show, IsString)
+data Ident = Ident String | Captured Int
+  deriving (Eq, Ord, Show)
+
+instance IsString Ident where
+  fromString = Ident
 
 instance Pretty Ident where
   pretty (Ident name) = pretty name
+  pretty (Captured n) = "<captured_" <> pretty n <> ">"
 
 data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Rotl | Rotr 
         | Eq | Ne | Gt | Lt | GEt | LEt 
@@ -196,13 +200,13 @@ instance Pretty exp => Pretty (Expr exp) where
     where
       list docs = parens $ hsep docs
 
-data AllocRegion = Local | Global
+data AllocRegion = AllocLocal | AllocGlobal
   deriving Show
 
 instance Pretty AllocRegion where
   pretty = \case
-    Local -> "<local>"
-    Global -> "<global>"
+    AllocLocal -> "<local>"
+    AllocGlobal -> "<global>"
 
 data LamAnn exp = LamAnn Type [Ident] [(Ident, AllocRegion, exp)] exp
   deriving (Functor, Foldable, Traversable, Show)
