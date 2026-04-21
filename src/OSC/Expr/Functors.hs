@@ -5,6 +5,9 @@
 
 module OSC.Expr.Functors where
 
+import qualified Control.Category as C
+import qualified Control.Arrow as A
+
 import Data.Functor.Identity (runIdentity)
 
 import qualified Control.Monad.Reader as R
@@ -19,8 +22,8 @@ class Recursive f where
 class RFunctor f where
   rtraverse :: Functor m => (a (f a) -> m (b (f b))) -> f a -> m (f b)
 
-class RFunctor2 f f' where
-  rtraverse2 :: Functor m => (a (f a) -> m (b (f' b))) -> f a -> m (f' b)
+rmap :: RFunctor f => (a (f a) -> b (f b)) -> f a -> f b
+rmap = undefined
 
 hoist :: Recursive f => Corecursive g => Functor a => f a -> g a
 hoist = embed . fmap hoist . project
@@ -56,6 +59,25 @@ mapAnnM h (Ann (ann, f)) = Ann <$> ((,) <$> h ann <*> traverse (mapAnnM h) f)
 
 mapAnn :: Traversable f => Functor f => (ann -> ann') -> Ann ann f -> Ann ann' f
 mapAnn h = runIdentity . mapAnnM (fmap pure h)
+
+newtype AnnA m f a b = AnnA (Ann a f -> m (Ann b f))
+
+instance Monad m => C.Category (AnnA m f) where
+  id = AnnA pure
+  AnnA bc . AnnA ab = AnnA $ \a -> ab a >>= bc
+
+instance (Monad m, Traversable f) => A.Arrow (AnnA m f) where
+  arr f = AnnA (pure . mapAnn f)
+  first e@(AnnA g) = AnnA $ \(Ann ((a, b), f)) -> do
+    undefined
+    where
+      hm :: Monad m => (Ann a f -> m (Ann b f)) -> Ann (a, c) f -> m (Ann (b, c) f)
+      hm m (Ann ((a, c), f)) = do
+        Ann (b, f') <- m (Ann (a, fmap _ f))
+        undefined
+    -- Ann (c, f') <- g $ Ann (a, fmap (mapAnn fst) f)
+    -- f'' <- traverse _ f'
+    -- pure $ Ann ((c, b), f'')
 
 -- Ann -------------------------------------------------------------------------
 

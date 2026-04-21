@@ -13,6 +13,9 @@ import OSC.Expr.Defunc
 
 type DefuncM f = ST.State (Int, DefuncMap f)
 
+propagate :: (M.Map k b -> a -> b) -> M.Map k a -> M.Map k b
+propagate f m = let m' = fmap (f m') m in m'
+
 defunc_ :: RFunctor f => f SRC.Expr -> DefuncM f (f Expr)
 defunc_ = bitraverse rtraverse diff
   where

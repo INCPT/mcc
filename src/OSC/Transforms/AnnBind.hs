@@ -1,3 +1,5 @@
+{-# LANGUAGE KindSignatures #-}
+
 module OSC.Transforms.AnnBind where
 
 import Control.Monad.Trans.Class (lift)
@@ -108,3 +110,12 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
 
 annCapturedBindings :: Ann Type SRC.Expr -> Ann Type Expr
 annCapturedBindings = fst . flip ST.evalState 0 . W.runWriterT . flip R.runReaderT mempty . annCapturedBindings_
+
+--------------------------------------------------------------------------------
+
+data Pure = Pure | Impure
+  deriving Eq
+
+annPure :: Ann a Expr -> Ann (a, Pure) Expr
+annPure (Ann (a, PConst n)) = Ann ((a, Pure), PConst n)
+annPure _ = undefined
