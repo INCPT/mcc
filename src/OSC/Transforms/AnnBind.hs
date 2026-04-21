@@ -106,5 +106,8 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
    
       pure $ PRecAnn typ delay paramSubstName bindings'' body'
 
-annCapturedBindings :: Ann Type SRC.Expr -> Ann Type Expr
-annCapturedBindings = fst . flip ST.evalState 0 . W.runWriterT . flip R.runReaderT mempty . annCapturedBindings_
+dbgAnnCapturedBindings :: Ann Type SRC.Expr -> Ann Type Expr
+dbgAnnCapturedBindings = fst . flip ST.evalState 0 . W.runWriterT . flip R.runReaderT mempty . annCapturedBindings_
+
+annCapturedBindings :: Ann Type SRC.Expr -> ST.State Int (Ann Type Expr)
+annCapturedBindings = fmap fst . W.runWriterT . flip R.runReaderT mempty . annCapturedBindings_
