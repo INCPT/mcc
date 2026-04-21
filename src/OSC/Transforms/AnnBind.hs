@@ -114,7 +114,7 @@ annCapturedBindings = fst . flip ST.evalState 0 . W.runWriterT . flip R.runReade
 --------------------------------------------------------------------------------
 
 data Pure = Pure | Impure
-  deriving Eq
+  deriving (Eq, Ord)
 
 instance Monoid Pure where
   mempty = Pure
@@ -126,15 +126,15 @@ instance Semigroup Pure where
 annPure :: Ann a Expr -> Ann (a, Pure) Expr
 annPure expr = pile expr purity
   where
-    extract = snd . fst . unAnn . annPure
+    extract = foldMap (snd . fst . unAnn . annPure)
 
     purity :: Expr (Ann a Expr) -> Pure
     purity (PConst _) = Pure
-    purity (PArr elems) = mconcat [ extract e | e <- elems ]
-    purity (PFoldedSelectL elems idx) = mconcat $ [ extract e | e <- elems ] <> [ extract idx ]
-    purity (PFoldedSelectR expr elems) = mconcat [ extract e | e <- expr:elems ]
-    purity (PLamAnn _ _ bindings body) = mconcat $ [ extract e | (_, _, e) <- bindings ] <> [ extract body ]
+    purity (PArr elems) = extract elems
+    purity (PFoldedSelectL elems idx) = extract (idx:elems)
+    purity (PFoldedSelectR expr elems) = extract (expr:elems)
+    purity (PLamAnn _ _ bindings body) = extract [ e | (_, _, e) <- bindings ] <> extract [body]
     purity (PRecAnn _ _ _ _ _) = Impure
-    purity (POp _ lhs rhs) = mconcat [ extract e | e <- [lhs, rhs] ]
+    purity (POp _ lhs rhs) = extract [lhs, rhs]
     purity (PVar _) = Pure
-    purity (PApp func args) = mconcat [ extract e | e <- func:args ]
+    purity (PApp func args) = extract (func:args)
