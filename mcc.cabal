@@ -42,10 +42,8 @@ library
       Microc.Toplevel
       Microc.Utils
       OSC.Codegen
-      OSC.Codegen.Backend
+      OSC.Codegen.Backend.WASM
       OSC.Codegen.Interpret
-      OSC.Codegen.WASM
-      OSC.Expr
       OSC.Expr.AnnBind
       OSC.Expr.Base
       OSC.Expr.Bitraversable

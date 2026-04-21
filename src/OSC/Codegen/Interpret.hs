@@ -5,7 +5,6 @@ module OSC.Codegen.Interpret where
 import Control.Monad (replicateM, forM_)
 
 import OSC.Codegen
-import OSC.Codegen.Backend
 import qualified Data.Map as M
 import Data.Map (Map)
 import Control.Monad.State

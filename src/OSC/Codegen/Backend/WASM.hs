@@ -1,4 +1,4 @@
-module OSC.Codegen.WASM where
+module OSC.Codegen.Backend.WASM where
 
 data Config = Config
   { smallArrayMaxLength :: Int -- | Small arrays are returned on the stack

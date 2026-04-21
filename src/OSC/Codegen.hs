@@ -1,496 +1,62 @@
-{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NoFieldSelectors #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
-{-# LANGUAGE TypeAbstractions #-}
-{-# LANGUAGE TypeApplications #-}
 
 module OSC.Codegen where
 
-import Data.Functor.Identity (Identity (runIdentity))
-import Data.Bifunctor (first, second)
-import Data.Functor.Identity
-import Data.List (intercalate, intersperse)
-import qualified Data.Graph as G
-import Data.Map (Map)
-import Data.String (IsString (fromString))
-import qualified Data.Map as M
-import Data.Set (Set, (\\))
-import qualified Data.Set as S
+import Data.Functor.Identity (Identity (Identity))
+import Control.Monad (when)
+import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans (MonadTrans, lift)
 import qualified Control.Monad.Reader as R
+import Control.Monad.Reader (ReaderT, asks, ask, runReaderT)
 import qualified Control.Monad.State.Lazy as ST
-import qualified Control.Monad.Trans.Writer.CPS as W
-import Prettyprinter
-import Prettyprinter.Render.Text (renderStrict)
-import qualified Data.Text as T
-
-data TNumber = TI32 | TF32 | TI64 | TF64
-  deriving (Eq, Show)
-
-data Type = TNumber TNumber | TArr Type {- length -} Int | TAbs [Type] Type
-  deriving (Eq, Show)
-
-sizeOfType :: Type -> Int
-sizeOfType (TNumber TI32) = 4
-sizeOfType (TNumber TF32) = 4
-sizeOfType (TNumber TI64) = 8
-sizeOfType (TNumber TF64) = 8
-sizeOfType (TArr t dim) = sizeOfType t * dim
-sizeOfType (TAbs _ _) = sizeOfType (TNumber TI32) -- TODO PLATFORM: funcref is I32
-
-returnType :: Type -> Type
-returnType (TAbs _ t) = t
-returnType _ = error "returnType: not an abs"
-
-peelType :: Type -> Type
-peelType (TArr t _) = t
-peelType (TAbs _ _) = error "peelType: abstraction"
-peelType t = error $ "peelType: " <> show t
-
-paramTypes :: String -> Type -> [Type]
-paramTypes _ (TAbs params _) = params
-paramTypes e _ = error $ "paramTypes: not an abs: " <> e
-
-data Number = I32 Int | I64 Int | F32 Float | F64 Double
-  deriving Show
-
-numberType :: Number -> Type
-numberType (I32 _) = TNumber TI32
-numberType (F32 _) = TNumber TF32
-numberType (I64 _) = TNumber TI64
-numberType (F64 _) = TNumber TF64
-
-newtype Ident = Ident String
-  deriving (Eq, Ord, Show, IsString)
-
-data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Rotl | Rotr 
-        | Eq | Ne | Gt | Lt | GEt | LEt 
-        | Min | Max | CopySign | Rem
-  deriving (Eq, Show)
-
-data UOp = Sqrt | Abs' | Neg | Ceil | Floor | Trunc | Nearest 
-         | Clz | Ctz | Popcnt | Eqz
-         | Extend | Wrap | Convert | Demote | Promote | Reinterpret
-  deriving (Eq, Show)
-
-data Expr lam sel t
-  = EConst Number
-  | EOp t Op (Expr lam sel t) (Expr lam sel t) -- both args and the result are simple types
-  | EArr t [Expr lam sel t]
-
-  | EVar t Ident
-
-  -- NOTE: Bindings will be in topsort order after typechecking
-  | EAbs Type {- params -} [Ident] {- bindings -} [(Ident, Expr lam sel t)] {- body -} (Expr lam sel t)
-  | EAbs2 t lam
-
-  | EApp t (Expr lam sel t) [Expr lam sel t]
-
-  | ESelect t (Expr lam sel t) {- selector -} (Expr lam sel t)
-  | ESelect2 t sel
-
-  -- NOTE: The (return) type of a recursive expression can not contain functions
-  -- in order to simplify the logic and not require an initial value. It wouldn't make
-  -- much sense generally anyway.
-
-  -- NOTE: Bindings will be in topsort order after typechecking
-  | ERec Type {- delay -} Int {- must be of type abstraction -} Ident {- bindings -} [(Ident, AllocRegion, Expr lam sel t)] {- body -} (Expr lam sel t)
-  deriving (Functor, Show)
-
-exprType :: Expr lam sel Type -> Type
-exprType (EConst n) = numberType n
-exprType (EOp t _ _ _) = t
-exprType (EArr t _) = t
-exprType (EVar t _) = t
-exprType (EAbs t _ _ _) = t
-exprType (EAbs2 t _) = t
-exprType (EApp t _ _) = t
-exprType (ESelect t _ _) = t
-exprType (ESelect2 t _) = t
-exprType (ERec t _ _ _ _) = t
-
---- Expr traversals ------------------------------------------------------------
-
-descendExpr :: (Expr lam sel t -> Maybe b) -> Expr lam sel t -> [b]
-descendExpr f expr = case f expr of
-  Just b -> [b]
-  Nothing -> case expr of
-    EConst _ -> []
-    EOp _ _ a b -> descendExpr f a <> descendExpr f b
-    EArr _ exprs -> mconcat (fmap (descendExpr f) exprs)
-    EVar _ _ -> []
-    EAbs _ _ bindings body -> mconcat (fmap (descendExpr f . snd) bindings) <> descendExpr f body
-    EAbs2 _ _ -> []
-    EApp _ func args -> descendExpr f func <> mconcat (fmap (descendExpr f) args)
-    ESelect _ e idx -> descendExpr f e <> descendExpr f idx
-    ESelect2 _ _ -> []
-    ERec _ _ _ bindings body -> mconcat (fmap (descendExpr f . (\(_, _, c) -> c)) bindings) <> descendExpr f body
-
-universeExpr :: (lam -> [Expr lam sel t]) -> (sel -> [Expr lam sel t]) -> Expr lam sel t -> [Expr lam sel t]
-universeExpr flam fsel = tailrec (universeExpr flam fsel) . mconcat . descendExpr expr
-  where
-    expr (EAbs2 _ lam) = Just $ concatMap (universeExpr flam fsel) (flam lam)
-    expr (ESelect2 _ sel) = Just $ concatMap (universeExpr flam fsel) (fsel sel)
-    expr e = Just [e]
-
-transformExprGenM
-  :: forall lam sel lam' sel' t m. Monad m
-  => ((Expr lam sel t -> m (Expr lam' sel' t)) -> Expr lam sel t -> m (Expr lam' sel' t))
-  -> (Expr lam' sel' t -> m (Expr lam' sel' t))
-  -> Expr lam sel t
-  -> m (Expr lam' sel' t)
-transformExprGenM fdown fup = go
-  where
-    yfdown = fdown (transformExprGenM fdown fup)
-
-    go :: Expr lam sel t -> m (Expr lam' sel' t)
-    go expr = case expr of
-      EConst n -> fup =<< pure (EConst n)
-      EOp t op a b -> fup =<< (EOp t op <$> yfdown a <*> yfdown b)
-      EArr t exprs -> fup =<< (EArr t <$> traverse yfdown exprs)
-      EVar t ident -> fup =<< (pure $ EVar t ident)
-      EAbs t params bindings body -> fup =<< (EAbs t params <$> traverse (\(n, e) -> (n,) <$> yfdown e) bindings <*> yfdown body)
-      EAbs2 t lam -> fup =<< yfdown (EAbs2 t lam)
-      EApp t f args -> fup =<< (EApp t <$> yfdown f <*> traverse yfdown args)
-      ESelect t e idx -> fup =<< (ESelect t <$> yfdown e <*> yfdown idx)
-      ESelect2 t sel -> fup =<< yfdown (ESelect2 t sel)
-      ERec t delay param bindings body -> fup =<< (ERec t delay param <$> traverse (\(n, region, e) -> (n, region,) <$> yfdown e) bindings <*> yfdown body)
-
-transformExprM
-  :: forall lam sel lam' sel' t m. Monad m
-  => (t -> lam -> m lam')
-  -> (t -> sel -> m sel')
-  -> (Expr lam' sel' t -> m (Expr lam' sel' t))
-  -> Expr lam sel t
-  -> m (Expr lam' sel' t)
-transformExprM flam fsel = transformExprGenM go
-  where
-    go :: (Expr lam sel t -> m (Expr lam' sel' t)) -> Expr lam sel t -> m (Expr lam' sel' t)
-    go _ (ESelect2 t sel) = ESelect2 t <$> (fsel t sel)
-    go _ (EAbs2 t lam) = EAbs2 t <$> (flam t lam)
-    go k expr = k expr
-
-transformExpr
-  :: (t -> lam -> lam')
-  -> (t -> sel -> sel')
-  -> (Expr lam' sel' t -> Expr lam' sel' t)
-  -> Expr lam sel t
-  -> Expr lam' sel' t
-transformExpr flam fsel fexp = runIdentity . transformExprM (\t -> pure . flam t) (\t -> pure . fsel t) (pure . fexp)
-
---------------------------------------------------------------------------------
-
-{-
-showExpr :: Expr lam sel Type -> String
-showExpr = T.unpack . renderStrict . layoutPretty defaultLayoutOptions . ppExpr
-
-showExprL :: Expr lam sel Type -> String
-showExprL = T.unpack . renderStrict . layoutPretty defaultLayoutOptions . ppExprL
-
-ppExpr :: Expr lam sel Type -> Doc ann
-ppExpr (EConst (I32 n)) = pretty n
-ppExpr (EConst (I64 n)) = pretty n
-ppExpr (EConst (F32 n)) = pretty n
-ppExpr (EConst (F64 n)) = pretty n
-ppExpr (EOp _ op a b) = ppOp op a b
-ppExpr (EArr _ es) =
-  group $ align $ encloseSep lbracket rbracket comma (map ppExpr es)
-ppExpr (EVar _ (Ident n)) = pretty n
-ppExpr (EAbs t params bs body) =
-  vsep
-    [ "fn" <> parens (ppParams (paramTypes "ppExpr" t) params) <+> "->" <+> pretty (showType (returnType t))
-    , ppAbsBody bs body
-    ]
-  where
-    ppParams [] [] = mempty
-    ppParams pts ps = hsep (punctuate comma (zipWith ppParam ps pts))
-    ppParam (Ident n) pt = pretty n <> colon <+> pretty (showType pt)
-ppExpr (EApp _ f args) = ppApp f args
-ppExpr (ESelect _ e idx) = ppSelect e idx
-ppExpr (ERec t delay param bs body) =
-  vsep
-    [ "rec<delay =" <+> pretty delay <> ">" <> parens (ppParam param <> colon <+> pretty (showType t)) <+> "->" <+> pretty (showType t)
-    , ppAbsBody bs body
-    ]
-  where
-    ppParam (Ident n) = pretty n
-
-ppOp :: Op -> Expr lam sel Type -> Expr lam sel Type -> Doc ann
-ppOp op a b = parens (ppExprInline a <+> pretty (showOp op) <+> ppExprInline b)
-
-ppApp :: Expr lam sel Type -> [Expr lam sel Type] -> Doc ann
-ppApp f args = ppFunc f <> parens (hsep (punctuate comma (map ppExprInline args)))
-  where
-    ppFunc e@(EAbs _ _ _ _) = parens (ppExprInline e)
-    ppFunc e@(ERec _ _ _ _ _) = parens (ppExprInline e)
-    ppFunc e = ppExprInline e
-
-ppSelect :: Expr lam sel Type -> Expr lam sel Type -> Doc ann
-ppSelect e idx = ppExprInline e <> brackets (ppExprInline idx)
-
-ppAbsBody :: [(Ident, AllocRegion, Expr lam sel Type)] -> Expr lam sel Type -> Doc ann
-ppAbsBody [] body = indent 2 $ "return" <+> ppReturnExpr body
-ppAbsBody bindings body = indent 2 $ vsep
-  [ vsep [ ppBinding n expr | (n, _, expr) <- bindings ]
-  , mempty
-  , "return" <+> ppReturnExpr body
-  ]
-  where
-    ppBinding (Ident n) expr = pretty n <+> "=" <+> ppExprInline expr
-
-ppReturnExpr :: Expr lam sel Type -> Doc ann
-ppReturnExpr e@(EAbs _ _ _ _) = ppExprInline e
-ppReturnExpr e@(ERec _ _ _ _ _) = ppExprInline e
-ppReturnExpr (EOp _ op a b) = ppExprInline a <+> pretty (showOp op) <+> ppExprInline b
-ppReturnExpr e = ppExprInline e
-
-ppExprInline :: Expr lam sel Type -> Doc ann
-ppExprInline = ppExpr
-
---------------------------------------------------------------------------------
--- Lisp-like pretty printer
-
-ppExprL :: Expr lam sel Type -> Doc ann
-ppExprL (EConst (I32 n)) = pretty n
-ppExprL (EConst (I64 n)) = pretty n
-ppExprL (EConst (F32 n)) = pretty n
-ppExprL (EConst (F64 n)) = pretty n
-ppExprL (EOp _ op a b) = parens (ppExprL a <+> pretty (showOp op) <+> ppExprL b)
-ppExprL (EArr _ es) = brackets (hsep (punctuate comma (map ppExprL es)))
-ppExprL (EVar _ (Ident n)) = pretty n
-ppExprL (EAbs t params bs body) =
-  if shouldMultiline
-    then ppAbsMultiline
-    else ppAbsSingleline
-  where
-    singleLine = T.unpack $ renderStrict $ layoutCompact ppAbsSingleline
-    shouldMultiline = length singleLine > 50
-
-    ppAbsSingleline = parens $ "fn" <+> ppParams <> colon <+> ppRetType <+> ppBindingsInline bs <+> ppExprL body
-    ppAbsMultiline = parens $ vsep
-      [ "fn" <+> ppParams <> colon <+> ppRetType
-      , ppBindingsMultiline bs
-      , mempty
-      , indent 2 (ppExprL body)
-      ]
-
-    ppParams = brackets (hsep (punctuate comma (zipWith ppParam params (paramTypes "ppExprL" t))))
-    ppParam (Ident n) pt = pretty n <> colon <+> pretty (showType pt)
-    ppRetType = pretty (showType (returnType t))
-
-ppExprL (EApp _ f args) = parens (ppExprL f <+> hsep (map ppExprL args))
-ppExprL (ESelect _ e idx) = ppExprL e <> brackets (ppExprL idx)
-ppExprL (ERec t delay param bs body) =
-  if shouldMultiline
-    then ppRecMultiline
-    else ppRecSingleline
-  where
-    singleLine = T.unpack $ renderStrict $ layoutCompact ppRecSingleline
-    shouldMultiline = length singleLine > 50
-
-    ppRecSingleline = parens $ "rec" <+> ppDelay <+> ppParam <> colon <+> ppRetType <+> ppBindingsInline bs <+> ppExprL body
-    ppRecMultiline = parens $ vsep
-      [ "rec" <+> ppDelay <+> ppParam <> colon <+> ppRetType
-      , ppBindingsMultiline bs
-      , mempty
-      , indent 2 (ppExprL body)
-      ]
-
-    ppDelay = "<delay =" <+> pretty delay <> ">"
-    ppParam = brackets (ppParamName <> colon <+> pretty (showType t))
-    ppParamName = case param of Ident n -> pretty n
-    ppRetType = pretty (showType t)
-
-ppBindingsInline :: [(Ident, AllocRegion, Expr lam sel Type)] -> Doc ann
-ppBindingsInline [] = "{}"
-ppBindingsInline bs = braces (hsep (punctuate comma [ ppBinding n e | (n, _, e) <- bs ]))
-  where
-    ppBinding (Ident n) e = pretty n <+> ppExprL e
-
-ppBindingsMultiline :: [(Ident, Expr lam sel Type)] -> Doc ann
-ppBindingsMultiline [] = indent 2 "{}"
-ppBindingsMultiline bs = indent 2 $ vsep
-  [ "{"
-  , indent 2 $ vsep [ ppBinding n e | (n, e) <- bs ]
-  , "}"
-  ]
-  where
-    ppBinding (Ident n) e = pretty n <+> ppExprL e
--}
-
---------------------------------------------------------------------------------
-
-type Stack s a = ST.State [s] a
-
-push :: s -> Stack s ()
-push s = ST.modify (s:)
-
-pop :: Stack s (Maybe s)
-pop = do
-  as <- ST.get
-  case as of
-    (a:as) -> do
-      ST.put as
-      pure (Just a)
-    _ -> pure Nothing
-
-runStack :: Stack s a -> a
-runStack = flip ST.evalState []
-
---------------------------------------------------------------------------------
-
--- * TODO: in typechecking, check that static indices are within range
--- ** even better: attach range to index; then check if everything ok in range check
--- ***  otherwise expect a clamp() or wrap() range correcting fun
--- ** if not possible, then demand clamp/wrap in dynamic select index expressions
--- * TODO: in the CallM monad, arguments that get written to the output can pass their array ctx slice to the argument expression, so no need for copy
-
--- TODO: optimization is performed on the CExpr datatype
-
--- TODO: alignment in AllocM!
-
--- TODO: what happens if part of the return value is a capture?
--- this is basically return value ref propagation up the binding chain
--- the most recent returned binding (or argument) gets tagged with "write to return value ref"
-
-newtype FuncRef = FuncRef Int deriving (Eq, Ord, Show)
-
-data AllocRegion = ALocal | AGlobal
-  deriving Show
-
-data CIndexable abs
-  = CVar Type Ident
-  | CApp Type (CExpr abs) [CExpr abs]
-  | CRec Type {- delay -} Int {- must be of type abstraction -} {- params -} Ident {- bindings -} [(Ident, AllocRegion, CExpr abs)] (CExpr abs)
-
-data CExpr abs
-  = CSel Type [CExpr abs] {- selector -} (CExpr abs)
-  | CIndexed [(Type, CExpr abs)] (CIndexable abs) -- selection indices that flow into the inner expression
-  | CArr Type [CExpr abs]
-  | CConst Number
-  | COp Type Op (CExpr abs) (CExpr abs)
-  | CAbs Type abs
-
-cexprType :: CExpr abs -> Type
-cexprType (CSel t _ _) = t
-cexprType (CIndexed idxs expr) = peelOffIndices (length idxs) (indexableType expr)
-  where
-    peelOffIndices :: Int -> Type -> Type
-    peelOffIndices 0 t = t
-    peelOffIndices n (TArr t _) = peelOffIndices (n - 1) t
-    peelOffIndices _ t = error $ "cexprType: cannot peel " <> show (length idxs) <> " indices from type " <> show t <> " (this is a bug)"
-cexprType (CArr t _) = t
-cexprType (CConst n) = numberType n
-cexprType (COp t _ _ _) = t
-cexprType (CAbs t _) = t
-
-indexableType :: CIndexable abs -> Type
-indexableType (CVar t _) = t
-indexableType (CApp t _ _) = t
-indexableType (CRec t _ _ _ _) = t
-
-descendCExpr :: (CIndexable a -> Maybe b) -> (CExpr a -> Maybe b) -> CExpr a -> [b]
-descendCExpr fi fe expr = case fe expr of
-  Just b -> [b]
-  Nothing -> case expr of
-    CSel _ choices selector -> mconcat (fmap (descendCExpr fi fe) choices) <> descendCExpr fi fe selector
-    CIndexed idxs indexable -> mconcat [ descendCExpr fi fe e | (_, e) <- idxs ] <> descendCIndexable fi fe indexable
-    CArr _ exprs -> mconcat (fmap (descendCExpr fi fe) exprs)
-    CConst _ -> []
-    COp _ _ a b -> descendCExpr fi fe a <> descendCExpr fi fe b
-    CAbs _ _ -> []
-
-descendCIndexable :: (CIndexable a -> Maybe b) -> (CExpr a -> Maybe b) -> CIndexable a -> [b]
-descendCIndexable fi fe indexable = case fi indexable of
-  Just b -> [b]
-  Nothing -> case indexable of
-    CVar _ _ -> []
-    CApp _ f args -> descendCExpr fi fe f <> mconcat (fmap (descendCExpr fi fe) args)
-    CRec _ _ _ bindings body -> mconcat [ descendCExpr fi fe e | (_, _, e) <- bindings ] <> descendCExpr fi fe body
-
-tailrec :: (a -> [a]) -> [a] -> [a]
-tailrec _ [] = []
-tailrec f (h:t) = h:concatMap f t
-
-universeCExpr :: CExpr a -> [CExpr a]
-universeCExpr = tailrec universeCExpr . descendCExpr (const Nothing) Just
-
-universeCExprFromIndexable :: CIndexable a -> [CExpr a]
-universeCExprFromIndexable = tailrec universeCExpr . descendCIndexable (const Nothing) Just
-
-universeCIndexable :: CExpr a -> [CIndexable a]
-universeCIndexable = tailrec universeCIndexableFromIndexable . descendCExpr Just (const Nothing)
-
-universeCIndexableFromIndexable :: CIndexable a -> [CIndexable a]
-universeCIndexableFromIndexable = tailrec universeCIndexableFromIndexable . descendCIndexable Just (const Nothing)
-
-transformCExprM :: forall a b m. Monad m => (Type -> a -> m b) -> (CIndexable b -> m (CIndexable b)) -> (CExpr b -> m (CExpr b)) -> CExpr a -> m (CExpr b)
-transformCExprM transformAbs transformIndexable transformExpr = go
-  where
-    go :: CExpr a -> m (CExpr b)
-    go expr = case expr of
-      CSel t choices selector -> transformExpr =<< (CSel t <$> traverse go choices <*> go selector)
-      CIndexed idxs indexable -> transformExpr =<< (CIndexed <$> traverse (\(t, e) -> (t,) <$> go e) idxs <*> goIndexable indexable)
-      CArr t exprs -> transformExpr =<< (CArr t <$> traverse go exprs)
-      CConst n -> transformExpr (CConst n)
-      COp t op a b -> transformExpr =<< (COp t op <$> go a <*> go b)
-      CAbs t abs -> transformExpr =<< (CAbs t <$> transformAbs t abs)
-
-    goIndexable :: CIndexable a -> m (CIndexable b)
-    goIndexable indexable = case indexable of
-      CVar t ident -> transformIndexable (CVar t ident)
-      CApp t f args -> transformIndexable =<< (CApp t <$> go f <*> traverse go args)
-      CRec t delay param bindings body -> transformIndexable =<< (CRec t delay param <$> traverse (\(n, region, e) -> (n, region,) <$> go e) bindings <*> go body)
-
-transformCExpr :: forall a b. (Type -> a -> b) -> (CIndexable b -> CIndexable b) -> (CExpr b -> CExpr b) -> CExpr a -> CExpr b
-transformCExpr f g h expr = runIdentity $ transformCExprM (\t a -> pure (f t a)) (pure . g) (pure . h) expr
-
---------------------------------------------------------------------------------
-
-showAbs :: Show abs => [Ident] -> [(Ident, AllocRegion, CExpr abs)] -> CExpr abs -> String
-showAbs params bs body =
-  "λ" <> showParams params <> " " <> showBindings bs <> " = " <> show body
-  where
-    showParams [] = "()"
-    showParams ps = "(" <> intercalate ", " (map (\(Ident n) -> n) ps) <> ")"
-  
-    showBindings [] = ""
-    showBindings bindings = "{ " <> intercalate "; " (map showBinding bindings) <> " }"
-    showBinding (Ident n, region, expr) = 
-      n <> "@" <> showRegion region <> " = " <> show expr
-    showRegion ALocal = "local"
-    showRegion AGlobal = "global"
-
-instance Show Abs where
-  show (Abs params bs body) = showAbs params bs body
-
-instance Show abs => Show (CIndexable abs) where
-  show (CVar _ (Ident n)) = n
-  show (CApp _ f a) = show f <> "(" <> intercalate ", " (map show a) <> ")"
-  show (CRec t delay param bs body) = "rec[" <> showType t <> ", delay=" <> show delay <> "](" <> showAbs [param] bs body <> ")"
-
-instance Show abs => Show (CExpr abs) where
-  show (CSel t cs idx) = 
-    "choice[" <> showType t <> "](" <> intercalate " | " (map show cs) <> ")[" <> show idx <> "]"
-  show (CIndexed [] expr) = show expr
-  show (CIndexed idxs expr) = 
-    show expr <> " @ [" <> intercalate ", " (map showIdxPair idxs) <> "]"
-    where
-      showIdxPair (t, idx) = showType t <> "[" <> show idx <> "]"
-  show (CArr t cs) = "[" <> showType t <> ": " <> intercalate ", " (map show cs) <> "]"
-  show (CConst n) = show n
-  show (COp _ op a b) = "(" <> show a <> " " <> showOp op <> " " <> show b <> ")"
-  show (CAbs _ abs) = show abs
+import Control.Monad.State.Lazy (MonadState, StateT, State, state, runState, runStateT)
+import Control.Monad.Trans.Writer (WriterT, runWriterT, tell)
+import qualified Control.Monad.Trans.Writer as W
+import Data.Functor.Product (Product (Pair))
+import Data.Map (Map)
+import Data.List (intercalate)
+import qualified Data.Map as M
+import Control.Monad.Free (Free (Free, Pure), liftF)
+import qualified Control.Monad.Trans.Free as TF
+import Control.Monad.Trans.Free (FreeT (FreeT), FreeF)
+
+import OSC.Expr.Comp (Ident, Type (..), TNumber (..), Number (..), Op (..))
+import qualified OSC.Expr.Comp as C
+import OSC.Expr.Functors
+import OSC.Expr.Defunc
+
+import Debug.Trace
+
+data Idx = IdxLocal Int | IdxGlobal Int deriving (Eq, Ord)
+
+instance Show Idx where
+  show (IdxLocal i) = "l" <> show i
+  show (IdxGlobal i) = "g" <> show i
+
+data Ref 
+  = RArg Int
+  | RRet
+
+  | RConst Number
+
+  | RVar Idx
+
+  | RArr Type Idx
+  | RProj {- source/dest -} Ref {- index -} Ref -- projection from or into array
+
+  | RFuncRef FuncRef -- index into a global function table
+  | RFuncRefRef Idx -- local or global var index with index into global function table (e.g. pointer to a function pointer)
 
 showType :: Type -> String
 showType (TNumber TI32) = "i32"
@@ -498,485 +64,504 @@ showType (TNumber TF32) = "f32"
 showType (TNumber TI64) = "i64"
 showType (TNumber TF64) = "f64"
 showType (TArr t dim) = showType t <> "[" <> show dim <> "]"
-showType (TAbs [] retType) = "() -> " <> showType retType
-showType (TAbs params retType) = 
+showType (TLam [] retType) = "() -> " <> showType retType
+showType (TLam params retType) = 
   "(" <> intercalate ", " (map showType params) <> ") -> " <> showType retType
 
-showOp :: Op -> String
-showOp Add = "+"
-showOp Sub = "-"
-showOp Mul = "*"
-showOp Div = "/"
-showOp Mod = "%"
-showOp And = "&"
-showOp Or = "|"
-showOp Xor = "^"
-showOp Shl = "<<"
-showOp Shr = ">>"
-showOp Rotl = "rotl"
-showOp Rotr = "rotr"
-showOp Eq = "=="
-showOp Ne = "!="
-showOp Gt = ">"
-showOp Lt = "<"
-showOp GEt = ">="
-showOp LEt = "<="
-showOp Min = "min"
-showOp Max = "max"
-showOp CopySign = "copysign"
-showOp Rem = "rem"
+instance Show Ref where
+  show (RArg i) = "arg" <> show i
+  show RRet = "ret"
+  show (RConst n) = show n
+  show (RVar idx) = show idx
+  show (RArr t idx) = show idx <> ":" <> showType t
+  show (RProj ref idx) = show ref <> "[" <> show idx <> "]"
+  show (RFuncRef (FuncRef i)) = "f" <> show i
+  show (RFuncRefRef idx) = show idx <> ":funcref"
+
+data Instruction
+  = SCopy Type {- source -} Ref {- dest -} Ref
+  | SIf Ref [Instruction] [Instruction]
+  | SCall {- funcref -} Ref {- args -} [Ref] {- return ref -} Ref
+  | SBinOp Op {- a -} Ref {- b -} Ref {- result -} Ref
+  | SFor {- counter -} Ref {- initial -} Int {- steps -} Int {- step -} Int [Instruction]
+
+instance Show Instruction where
+  show (SCopy t src dst) = show dst <> " := " <> show src
+  show (SIf cond thn els) = mconcat
+    [ "if " <> show cond <> " {\n"
+    , showBlock thn
+    , "} else {\n"
+    , showBlock els
+    , "}"
+    ]
+  show (SCall funcRef args ret) = show ret <> " := " <> show funcRef <> "(" <> intercalate ", " (fmap show args) <> ")"
+  show (SBinOp op a b res) = show res <> " := " <> show a <> " " <> show op <> " " <> show b
+  show (SFor counter initial steps step body) = mconcat
+    [ "for " <> show counter <> " = " <> show initial <> " to " <> show steps <> " step " <> show step <> " {\n"
+    , showBlock body
+    , "}"
+    ]
+
+showBlock :: [Instruction] -> String
+showBlock stmts = mconcat [ "  " <> line <> "\n" | stmt <- stmts, line <- lines (show stmt) ]
 
 --------------------------------------------------------------------------------
-
-toC :: CIndexable Abs -> Stack (Type, Expr lam sel Type) (CExpr Abs)
-toC e = do
-  idxs <- ST.get
-  pure $ CIndexed (map (second toCExpr) idxs) e
-
--- Pair each index with the appropriate array, so an an expression like
--- `[[0, 1], [2, 3]][1][0]` turns into `[[0, 1][0], [2, 3][0]][1]`.
--- This allows for easy constant index elimination and the generation of more efficient code.
-choiceTree :: Expr abs sel Type -> Stack (Type, Expr abs sel Type) (CExpr Abs)
-choiceTree (EConst n) = do
-  idxs <- ST.get
-  pure $ case idxs of
-    [] -> CConst n
-    _ -> error "choiceTree: cannot index into a constant (this is a bug)"
-choiceTree (EOp t op a b) = do
-  idxs <- ST.get
-  case idxs of
-    [] -> pure $ COp t op (toCExpr a) (toCExpr b)
-    _ -> error "choiceTree: cannot index into an operation result (this is a bug)"
-choiceTree (EVar t n) = toC (CVar t n)
-choiceTree (EApp t f as) = toC (CApp t (toCExpr f) (fmap toCExpr as))
-choiceTree (EAbs t params bs body) = do
-  idxs <- ST.get
-  pure $ case idxs of
-    [] -> CAbs t (Abs params [ (n, ALocal, toCExpr b) | (n, b) <- bs ] (toCExpr body))
-    _ -> error "choiceTree: cannot index into an abstraction (this is a bug)"
-choiceTree (ERec t d param bs body) = toC (CRec t d param [ (n, ALocal, toCExpr b) | (n, _, b) <- bs ] (toCExpr body))
-choiceTree (EArr t es) = do
-  s <- pop
-  case s of
-    Just (t, idx) -> do
-      es' <- traverse choiceTree es
-      push (t, idx)
-      pure $ CSel t es' (toCExpr idx)
-    Nothing -> pure $ CArr t (map toCExpr es)
-choiceTree (ESelect t e idx) = do
-  push (t, idx)
-  c <- choiceTree e
-  _ <- pop
-  pure c
-
---------------------------------------------------------------------------------
-
-data Selection lam = Selection (Expr lam (Selection lam) Type) (Expr lam (Selection lam) Type)
-  deriving Show
-
-data FoldedSelection lam
-  = FoldedSelectionLHS [Expr lam (FoldedSelection lam) Type] (Expr lam (FoldedSelection lam) Type)
-  | FoldedSelectionRHS (Expr lam (FoldedSelection lam) Type) [Expr lam (FoldedSelection lam) Type]
-  deriving Show
-
-data Lambda sel = Lambda
-  { params :: [Ident]
-  , bindings :: [(Ident, AllocRegion, Expr (Lambda sel) (sel (Lambda sel)) Type)]
-  , body :: Expr (Lambda sel) (sel (Lambda sel)) Type
-  }
-
-type ExprSel sel = Expr (Lambda sel) (sel (Lambda sel)) Type
-
-type FoldSelectionsM = Stack (Type, ExprSel Selection) (ExprSel FoldedSelection)
 
 {-
-foldSelections :: ExprSel Selection -> ExprSel FoldedSelection
-foldSelections = runStack . expr
-  where
-    rhs :: ExprSel FoldedSelection -> FoldSelectionsM
-    rhs expr = do
-      idxs <- ST.get
-      case idxs of
-        [] -> pure $ ESelect2 (peelOffIndices (length idxs) (exprType expr)) $ FoldedSelectionRHS expr (fmap (foldSelections . snd) idxs)
-        _ -> pure expr
-        where
-          peelOffIndices :: Int -> Type -> Type
-          peelOffIndices 0 t = t
-          peelOffIndices n (TArr t _) = peelOffIndices (n - 1) t
-          peelOffIndices n t = error $ "cexprType: cannot peel " <> show n <> " indices from type " <> show t <> " (this is a bug)"
 
-    expr :: ExprSel Selection -> FoldSelectionsM
-    expr (EConst n) = rhs $ EConst n
-    expr (EOp t op a b) = rhs $ EOp t op (foldSelections a) (foldSelections b)
-    expr (EVar t n) = rhs $ EVar t n
-    expr (EApp t f as) = rhs $ EApp t (foldSelections f) (fmap foldSelections as)
-    expr (EAbs _ _ _ _) = undefined
-    expr (EAbs2 t (Lambda params bindings body)) = pure $ EAbs2 t $ Lambda params
-      [ (n, region, foldSelections bbody)
-      | (n, region, bbody) <- bindings
-      ]
-      (foldSelections body)
-    expr (EArr t elems) = do
-      s <- pop
-      case s of
-        Just (t, idx) -> do
-          elems <- traverse expr elems
-          push (t, idx)
-          pure $ ESelect2 t $ FoldedSelectionLHS elems (foldSelections idx)
-        _ -> pure $ EArr t (fmap foldSelections elems)
-    expr (ERec t d param bindings body) = rhs $ ERec t d param
-      [ (n, region, foldSelections bbody) | (n, region, bbody) <- bindings ]
-      (foldSelections body)
-    expr (ESelect _ _ _) = undefined
-    expr (ESelect2 t (Selection sel idx)) = do
-      push (t, idx)
-      sel' <- expr sel
-      _ <- pop
-      pure sel'
+In WebAssembly, a "statically known" array is implemented by reserving a specific offset in Linear Memory. You then use i32.load and i32.store to read and write to that address. 
+Here is a WAT (WebAssembly Text) example showing how to reserve an array of 10 integers starting at memory address 0, along with functions to get and set values.
+
+(module
+  ;; 1. Define memory. 1 page = 64KB.
+  (memory (export "memory") 1)
+
+  ;; 2. Optional: Pre-initialize the array with data at address 0
+  ;; This puts [10, 20, 30] at the start of memory.
+  (data (i32.const 0) "\0a\00\00\00\14\00\00\00\1e\00\00\00")
+
+  ;; Function to SET a value: array[index] = value
+  ;; The array starts at offset 0. Each i32 is 4 bytes.
+  (func (export "set_array_val") (param $index i32) (param $value i32)
+    ;; Calculate address: index * 4
+    local.get $index
+    i32.const 4
+    i32.mul
+    ;; Push value to store
+    local.get $value
+    ;; Store the value at (index * 4)
+    i32.store
+  )
+
+  ;; Function to GET a value: return array[index]
+  (func (export "get_array_val") (param $index i32) (result i32)
+    ;; Calculate address: index * 4
+    local.get $index
+    i32.const 4
+    i32.mul
+    ;; Load from memory at that address
+    i32.load
+  )
+)
+
+Key Technical Details
+
+    Addressing: Since memory is a byte array, you must multiply the index by the size of your type (4 bytes for i32, 8 for f64) to find the correct address. 
+    Static Reservation: In a real project, you manually track which addresses are "reserved" for your static arrays. For example, if Array A is at 0-40, you might start Array B at address 44.
+    Initialization: The (data ...) section allows you to bake initial values directly into the binary, which are loaded into memory when the module instantiates. 
+    Security: Wasm checks bounds automatically. If you try to access an address beyond your allocated memory pages, it will trap (crash).
+
+---
+
+Using the offset parameter is the standard way to handle multiple static arrays without an allocator. You effectively partition your linear memory into fixed blocks.
+Memory Layout Example
+Imagine you want two static arrays:
+
+    Array A: 10 integers (40 bytes), starting at address 0.
+    Array B: 5 integers (20 bytes), starting at address 100. 
+
+In WebAssembly, you don't "declare" these as separate objects; you simply use the immediate offset to target the correct starting point.
+
+(module
+  (memory (export "memory") 1)
+
+  ;; --- ARRAY A (Starts at address 0) ---
+  (func (export "set_A") (param $index i32) (param $val i32)
+    local.get $index
+    i32.const 4
+    i32.mul
+    local.get $val
+    ;; No offset needed (or offset=0)
+    i32.store 
+  )
+
+  ;; --- ARRAY B (Starts at address 100) ---
+  (func (export "set_B") (param $index i32) (param $val i32)
+    local.get $index
+    i32.const 4
+    i32.mul
+    local.get $val
+    ;; Static offset adds 100 to whatever index*4 is on the stack
+    i32.store offset=100
+  )
+
+  ;; --- ARRAY B CONSTANT ACCESS ---
+  ;; Accessing Array B's 3rd element (index 2) directly
+  (func (export "get_B_const") (result i32)
+    i32.const 0
+    ;; Effective address = 0 + 100 (base) + 8 (index 2 * 4 bytes)
+    i32.load offset=108 
+  )
+)
+
+Why this is powerful
+
+    Zero Runtime Cost: The engine adds the offset to the base address during the memory cycle. It's "free" math compared to doing an i32.add in code. 
+    Virtual Structs: This is how C/Rust compilers handle structs. A "pointer" to a struct is pushed to the stack, and every field access uses i32.load offset=N where N is the field's position inside that struct. 
+    Static Safety: By using a static offset for your "Base Address" and keeping your indices within bounds, you prevent your arrays from overlapping. 
+
+Best Practices for Multiple Arrays
+
+    Alignment: Try to align your starting offsets to 4 or 8 bytes. Wasm can handle unaligned loads, but they are often slower on some hardware. 
+    Data Sections: Use the (data ...) section to pre-fill these specific regions.
+
+(data (i32.const 0) "\01\02\03")   ;; Initial values for Array A
+(data (i32.const 100) "\09\08\07") ;; Initial values for Array B
+
+Shadow Stack: In complex modules, it is common to reserve the first few kilobytes for static data (like these arrays) and start your dynamic "heap" at a higher GLOBAL_BASE address (e.g., 1024). 
+
 -}
---------------------------------------------------------------------------------
 
-data Func' = Func'
-  { t :: Type
-  , params :: [Ident]
-  , bindings :: [(Ident, AllocRegion, ExprFuncRef)]
-  , body :: ExprFuncRef
+-- WASM NOTES
+-- we can return multiple values on the stack, but it's probably good to reserve this for small arrays only?
+-- for larger arrays we can manage a linear mem shadow stack
+-- globals scalars are WASM globals, global arrays go in linear mem
+-- alignment is important
+
+-- QUESTION: do we decide whether we return something on stack vs shadow stack etc here or do we leave it up to each backend?
+-- let's not do it here; instead each ProgramFunc will have a type and the backend will decide what the calling convention will be
+-- here we only track the focus lens, gather allocations and Return stuff
+
+data ProgramFunc = ProgramFunc
+  { params :: [(Ident, Type)]
+  , locals :: Map Ident Type
+  , instructions :: [Instruction]
   } deriving Show
 
-data AbsEnv' = AbsEnv'
-  { funcRefMap :: Map FuncRef Func'
-  , nextFuncRef :: Int
+data Program = Program
+  { globals :: Map Ident Type
+  , funcMap :: Map FuncRef ProgramFunc
+  , tickFunc :: ProgramFunc
   } deriving Show
 
-type ExprFuncRef = Expr FuncRef (FoldedSelection FuncRef) Type
+type ExpA = Ann Type Expr
 
-gatherAbstractions' :: ExprSel FoldedSelection -> ST.State AbsEnv' ExprFuncRef
-gatherAbstractions' = transformExprM flam fsel pure
+type CodegenM = ST.State ()
+
+-- innerJoin :: Applicative f => Ord k => Map k (f a) -> Map k (f b) -> Map k (f (a, b))
+-- innerJoin = M.intersectionWith (\fa fb -> (,) <$> fa <*> fb)
+
+codegen :: DefuncMap (Ann Type) -> ExpA -> CodegenM Program
+codegen dfm = undefined
   where
-    fsel :: Type -> FoldedSelection (Lambda FoldedSelection) -> ST.State AbsEnv' (FoldedSelection FuncRef)
-    fsel _ (FoldedSelectionLHS exprs idx) = FoldedSelectionLHS <$> traverse gatherAbstractions' exprs <*> gatherAbstractions' idx
-    fsel _ (FoldedSelectionRHS expr idxs) = FoldedSelectionRHS <$> gatherAbstractions' expr <*> traverse gatherAbstractions' idxs
-
-    flam :: Type -> Lambda FoldedSelection -> ST.State AbsEnv' FuncRef
-    flam t lam = do
-      fr <- FuncRef <$> ST.gets (.nextFuncRef)
-      ST.modify $ \(AbsEnv' {..}) -> AbsEnv' { nextFuncRef = nextFuncRef + 1, .. }
-
-      bindings' <- sequenceA [ (n, region,) <$> gatherAbstractions' bbody | (n, region, bbody) <- lam.bindings ]
-      body' <- gatherAbstractions' lam.body
-
-      ST.modify $ \(AbsEnv' {..}) -> AbsEnv' { funcRefMap = M.insert fr (Func' t lam.params bindings' body') funcRefMap, .. }
-      pure fr
-
---------------------------------------------------------------------------------
-
--- TODO: this must happen after inlining / CSE (otherwise things like let a = [1, 2, 3] in a[0] won't be optimized)
-elimConstIndices :: CExpr Abs -> CExpr Abs
-elimConstIndices = transformCExpr (\_ -> id) id go
-  where
-    go :: CExpr Abs -> CExpr Abs
-
-    -- Eliminate constant index selections by directly selecting the choice
-    -- It's ok to prune impure expressions here (since the index is constant those expressions will never be accessible)
-    go (CSel _ chs (CConst (I32 idx))) = chs !! idx
-    go (CSel _ chs (CConst (I64 idx))) = chs !! idx
-
-    -- Keep everything else as-is
-    go ch = ch
-
-optimize :: CExpr Abs -> CExpr Abs
-optimize = elimConstIndices
-
-toCExpr :: Expr abs sel Type -> CExpr Abs
-toCExpr = optimize . flip ST.evalState [] . choiceTree
-
---------------------------------------------------------------------------------
-
-newtype Unique a = Unique (ST.State Int a)
-  deriving (Functor, Applicative, Monad)
-
-runUnique :: Unique a -> a
-runUnique (Unique m) = ST.evalState m 0
-
-freshIdx :: Unique Int
-freshIdx = Unique $ do
-  n <- ST.get
-  ST.put (n + 1)
-  pure n
-
-fresh :: Unique Ident
-fresh = Unique $ do
-  n <- ST.get
-  ST.put (n + 1)
-  pure $ Ident ("_captured_" <> show n)
-
---------------------------------------------------------------------------------
-
-data Abs = Abs {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, CExpr Abs)] (CExpr Abs)
-
-data Func = Func Type {- params -} [Ident] {- bindings -} [(Ident, AllocRegion, CExpr FuncRef)] (CExpr FuncRef)
-  deriving Show
-
-data AbsEnv = AbsEnv
-  { funcRefMap :: Map FuncRef Func
-  , nextFuncRef :: Int
-  } deriving Show
-
-gatherAbstractions :: CExpr Abs -> ST.State AbsEnv (CExpr FuncRef)
-gatherAbstractions = transformCExprM transformAbs pure pure
-  where
-    transformAbs :: Type -> Abs -> ST.State AbsEnv FuncRef
-    transformAbs t (Abs params bindings body) = do
-      fr <- FuncRef <$> ST.gets (.nextFuncRef)
-      ST.modify $ \(AbsEnv {..}) -> AbsEnv { nextFuncRef = nextFuncRef + 1, .. }
-
-      bindings' <- sequenceA [ (n, region,) <$> gatherAbstractions bbody | (n, region, bbody) <- bindings ]
-      body' <- gatherAbstractions body
-
-      ST.modify $ \(AbsEnv {..}) -> AbsEnv { funcRefMap = M.insert fr (Func t params bindings' body') funcRefMap, .. }
-      pure fr
-
--- | Compute the free variables for each abstraction in the function map.
---
--- Free variables are variables that are referenced but not bound by parameters or bindings.
--- This includes both direct variable references (CVar) and transitive free variables from
--- nested closures (via SFuncRef).
---
--- The computation is recursive: when a function contains a closure (SFuncRef), that closure's
--- free variables are included in the parent function's free variables (unless they're bound
--- by the parent's parameters or bindings). This allows us to track which variables need to
--- be captured across multiple levels of nesting.
---
--- Example:
---   function outer(x) {
---     let y = 1;
---     return function middle(z) {
---       return function inner(w) {
---         return x + y + z + w;  // inner's free vars: {x, y, z}
---       }
---     }
---   }
---
--- Results:
---   - inner's free vars: {x, y, z}
---   - middle's free vars: {x, y} (includes inner's free vars minus middle's params/bindings)
---   - outer's free vars: {} (all variables are bound by outer)
-
-gatherFreeVars :: Map FuncRef Func -> Map FuncRef (Set Ident)
-gatherFreeVars funcRefMap = freeVarMap
-  where
-    freeVarMap :: Map FuncRef (Set Ident)
-    freeVarMap = fmap go funcRefMap
-
-    go :: Func -> Set Ident
-    go (Func _ params bindings body) = allVars bindings body \\ (S.fromList [ n | (n, _, _) <- bindings ] <> S.fromList params)
-
-    allVars :: [(Ident, AllocRegion, CExpr FuncRef)] -> CExpr FuncRef -> Set Ident
-    allVars bindings body = mconcat $ fmap mconcat
-      [ [ S.fromList [ n | CVar _ n <- universeCIndexable body ] ]
-      , [ S.fromList [ n | (_, _, b) <- bindings, CVar _ n <- universeCIndexable b ] ]
-
-      -- Gather transient free vars (by lazily referencing freeVarMap; this works because no mutual recursion between bindings is allowed)
-      , [ fvs | CAbs _ fr <- universeCExpr body, Just fvs <- [ M.lookup fr freeVarMap ] ]
-      , [ fvs | (_, _, b) <- bindings, CAbs _ fr <- universeCExpr b, Just fvs <- [ M.lookup fr freeVarMap ] ]
+    collectLamAllocations :: C.LamAnn ExpA -> ([Type], [Type])
+    collectLamAllocations (C.LamAnn typ _ bindings _) = mconcat
+      [ case region of
+          C.AllocLocal -> ([t], [])
+          C.AllocGlobal -> ([], [t])
+      | (_, region, Ann (t, _)) <- bindings
       ]
 
+{-
+
+data Env = Env
+  { bindings :: Map Ident Ref
+  , ret :: Ref
+  , to :: [Ref]
+
+  , emit :: [Instruction] -> CallM ()
+  , allocLocal :: Type -> CallM Ref
+  }
+
+focusTo :: Ref -> Env -> Env
+focusTo idx (Env {..}) = Env { to = idx:to, .. }
+
+data LocalState = LocalState
+  { nextVarIdx :: Int
+  , allocations :: [(Type, Idx)]
+  }
+
+data GlobalState = GlobalState
+  { nextFuncRefIdx :: Int
+
+  , nextGlobalVarIdx :: Int
+  , globalAllocations :: [(Type, Idx)]
+
+  , nextTickVarIdx :: Int
+  , tickAllocations :: [(Type, Idx)]
+  , tickInstructions :: [Instruction]
+  }
+
+type CallM = WriterT [Instruction] (ReaderT Env (StateT LocalState (State GlobalState)))
+
+cemitLocal :: [Instruction] -> CallM ()
+cemitLocal = tell
+
+cemitGlobal :: [Instruction] -> CallM ()
+cemitGlobal sts = lift $ lift $ lift $ state $ \GlobalState {..} -> ((), GlobalState { tickInstructions = tickInstructions <> sts, .. })
+
+emit :: [Instruction] -> CallM ()
+emit sts = do
+  env <- lift ask
+  env.emit sts
+
+local :: Monoid w => Monad m => (env -> env) -> WriterT w (ReaderT env m) a -> WriterT w (ReaderT env m) a
+local f m = do
+  (a, r) <- lift $ R.local f $ runWriterT m
+  tell r
+  pure a
+
+allocBase :: ((Idx -> Ref) -> m Ref) -> Type -> m Ref
+allocBase alloc t = case t of
+  TNumber _ -> alloc RVar
+  TArr _ _ -> alloc (RArr t)
+  TAbs _ _ -> alloc RFuncRefRef
+
+callocLocal :: Type -> CallM Ref
+callocLocal t = lift $ lift $ flip allocBase t $ \mkRef -> fmap mkRef $ state $ \LocalState {..} ->
+  (Local nextVarIdx, LocalState { nextVarIdx = nextVarIdx + 1, allocations = (t, Local nextVarIdx):allocations, .. })
+
+callocTick :: Type -> CallM Ref
+callocTick t = lift $ lift $ lift $ flip allocBase t $ \mkRef -> fmap mkRef $ state $ \GlobalState {..} ->
+  (Local nextTickVarIdx, GlobalState { nextTickVarIdx = nextTickVarIdx + 1, tickAllocations = (t, Local nextTickVarIdx):tickAllocations, .. })
+
+allocLocal :: Type -> CallM Ref
+allocLocal t = do
+  env <- lift ask
+  env.allocLocal t
+
+allocGlobal :: Type -> State GlobalState Ref
+allocGlobal t = flip allocBase t $ \mkRef -> fmap mkRef $ state $ \GlobalState {..} ->
+  (Global nextGlobalVarIdx, GlobalState { nextGlobalVarIdx = nextGlobalVarIdx + 1, globalAllocations = (t, Global nextGlobalVarIdx):globalAllocations, .. })
+
 --------------------------------------------------------------------------------
 
-data GlobalsEnv = GlobalsEnv
-  { substMap :: Map FuncRef (Map Ident Ident)
-  , globals :: Map Ident Type
-  } deriving Show
+cextract :: Monoid w => Monad m => WriterT w (ReaderT env m) () -> ReaderT env m w
+cextract = fmap snd . runWriterT
 
-instance Semigroup GlobalsEnv where GlobalsEnv a b <> GlobalsEnv a' b' = GlobalsEnv (a <> a') (b <> b')
-instance Monoid GlobalsEnv where mempty = GlobalsEnv mempty mempty
+ccopyRef :: Type -> Ref -> Ref -> CallM ()
+ccopyRef t src dst = emit [SCopy t src dst]
 
--- | Transform abstractions to handle captured parameters by creating global bindings.
---
--- This function implements closure conversion for captured parameters. When a nested closure
--- references a parameter from an outer function, we need to make that parameter accessible
--- to the closure. Since the target language (WASM) doesn't support closures natively, we:
---
--- 1. Create a global binding for each captured parameter (e.g., _captured_0 = x)
--- 2. Mark any captured local bindings as global (they keep their original names)
--- 3. Build a substitution map for each closure, mapping original param names to global names
--- 4. Apply substitutions to each closure so it references the global bindings
---
--- Example transformation:
---   function outer(x, y) {
---     let z = 1;
---     return function inner(a) {
---       return x + z + a;  // inner captures param x and binding z
---     }
---   }
---
--- Becomes:
---   function outer(x, y) {
---     global _captured_0 = x;  // New global binding for captured param
---     global z = 1;             // Existing binding marked as global
---     return function inner(a) {
---       return _captured_0 + z + a;  // References substituted
---     }
---   }
---
--- The substitution map tracks: inner -> {x -> _captured_0}
--- Note that z doesn't need substitution since bindings keep their original names.
---
--- Returns:
---   - Updated function map with global bindings and substitutions applied
---   - GlobalsEnv containing the substitution map and global variable types
-markCapturedBindings' :: Map FuncRef (Set Ident) -> Map FuncRef Func -> Unique (Map FuncRef Func, GlobalsEnv)
-markCapturedBindings' freeVarMap funcRefMap = do
-  (funcRefMapWithGlobalBindings, genv) <- W.runWriterT $ sequenceA (M.mapWithKey go funcRefMap)
-  pure (M.mapWithKey (substituteVars genv.substMap) funcRefMapWithGlobalBindings, genv)
+cbinOp :: Op -> Ref -> Ref -> Ref -> CallM ()
+cbinOp op r1 r2 r3 = emit [SBinOp op r1 r2 r3]
+
+ccall :: Ref -> [Ref] -> Ref -> CallM ()
+ccall funcRef args ret = emit [SCall funcRef args ret]
+
+cif :: Ref -> CallM () -> CallM () -> CallM ()
+cif r t e = do
+  t' <- lift $ cextract t
+  e' <- lift $ cextract e
+  emit [SIf r t' e']
+
+cfor :: Int -> Int -> Int -> (Ref -> CallM ()) -> CallM ()
+cfor initial steps step f = do
+  i <- allocLocal (TNumber TI32)
+  f' <- lift $ cextract (f i)
+  emit [SFor i initial steps step f']
+
+--------------------------------------------------------------------------------
+
+allocAndStore :: AllocRegion -> CExpr FuncRef -> CallM (Type, Ref)
+allocAndStore region e = do
+  ref <- case region of
+    ALocal -> allocLocal t
+    AGlobal -> lift $ lift $ lift $ allocGlobal t
+  local (\Env {..} -> Env { ret = ref, to = [], .. }) (retvalue e)
+  pure (t, ref)
   where
-    descendFunc :: (CIndexable FuncRef -> Maybe b) -> (CExpr FuncRef -> Maybe b) -> Func -> [b]
-    descendFunc fi fe (Func _ _ bindings body) = mconcat
-      [ mconcat
-          [ descendCExpr fi fe bbody
-          | (_, _, bbody) <- bindings
-          ]
-      , descendCExpr fi fe body
-      ]
+    t = cexprType e
+
+proj :: Ref -> [Ref] -> Ref
+proj ref [] = ref
+proj ref (pj:pjs) = RProj (proj ref pjs) pj
+
+ret :: Type -> Ref -> CallM ()
+ret t ref = do
+  env <- ask
+  ccopyRef t ref (proj env.ret (reverse env.to))
+
+--------------------------------------------------------------------------------
+
+rhsvalue :: AllocRegion -> CExpr FuncRef -> CallM (Type, Ref)
+
+rhsvalue _ (CConst n) = pure (numberType n, RConst n)
+rhsvalue _ (CAbs t fr) = pure (t, RFuncRef fr)
+rhsvalue region e@(CArr _ _) = allocAndStore region e
+rhsvalue region e@(COp _ _ _ _) = allocAndStore region e
+rhsvalue region e@(CSel _ _ _) = allocAndStore region e
+
+-- Indexed expressions
+rhsvalue _ (CIndexed [] (CVar t n)) = do
+  env <- ask
+  case M.lookup n env.bindings of
+    Just ref -> pure (t, ref)
+    _ -> error $ "rhsvalue: unknown global (this is a bug): " <> show n <> ", " <> show env.bindings
+rhsvalue region e@(CIndexed _ _) = allocAndStore region e
+
+--------------------------------------------------------------------------------
+
+retvalue :: CExpr FuncRef -> CallM ()
+
+retvalue (CConst c) = ret (numberType c) (RConst c)
+retvalue (CAbs t fr) = ret t (RFuncRef fr)
+retvalue (CArr _ elems) = sequence_
+  [ local (focusTo $ RConst $ I32 i) $ retvalue elem
+  | (i, elem) <- zip [0..] elems
+  ]
+retvalue (COp _ op a b) = do
+  (_, aref) <- rhsvalue ALocal a
+  (_, bref) <- rhsvalue ALocal b
+  
+  ask >>= \env -> cbinOp op aref bref env.ret
+
+retvalue e@(CIndexed [] (CVar _ _)) = rhsvalue ALocal e >>= uncurry ret
+
+retvalue (CIndexed [] (CApp _ f as)) = do
+  (_, fref) <- rhsvalue ALocal f
+  arefs <- traverse (rhsvalue ALocal) as
     
-    gatherRecFreeVars :: CExpr FuncRef -> ([(Ident, Type)], Set Ident)
-    gatherRecFreeVars expr = mconcat
-      [ ((param, t):heads, vars \\ S.singleton param)
-      | crec@(CRec t _ param _ _) <- descendCExpr (\e -> case e of crec@(CRec {}) -> Just crec; _ -> Nothing) (const Nothing) expr
-      , (heads, vars) <- descendCIndexable gatherVar gatherRec crec
-      ]
-      where
-        gatherVar (CVar _ n) = Just ([], S.singleton n)
-        gatherVar _ = Nothing
+  ask >>= \env -> ccall fref (map snd arefs) env.ret
 
-        gatherRec e@(CIndexed _ (CRec {})) = Just $ gatherRecFreeVars e
-        gatherRec _ = Nothing
+retvalue (CIndexed [] (CRec t delay param bindings body))
+  | typeContainsAbs t = error "retvalue: CRec: type contains abstraction"
+  | otherwise = do
+      -- Alloc delay index and delay number of samples of type t[]
+      delayRef <- lift $ lift $ lift $ allocGlobal (TArr t delay)
 
-    -- Process a single function to create global bindings for captured parameters
-    go :: FuncRef -> Func -> W.WriterT GlobalsEnv Unique Func
-    go funcRef abs@(Func t params bindings body) = do
-      -- Find all closures defined in this function and their free variables
-      let freeVarsForClosure =
-            [ (fr, fvs)
-            | fr <- descendFunc (const Nothing) (\e -> case e of CAbs _ fr -> Just fr; _ -> Nothing) abs
-            , Just fvs <- [ M.lookup fr freeVarMap ]
-            ]
+      writeIdx <- lift $ lift $ lift $ allocGlobal (TNumber TI32)
+      ccopyRef (TNumber TI32) (RConst (I32 (delay - 1))) writeIdx
 
-      -- Union of all free variables from nested closures
-      let freeVars = mconcat (fmap snd freeVarsForClosure)
+      readIdx <- lift $ lift $ lift $ allocGlobal (TNumber TI32)
+      ccopyRef (TNumber TI32) (RConst (I32 0)) readIdx
+
+      -- Emit global tick instructions and store result in delay line
+      local (\Env {..} -> Env { emit = cemitGlobal, allocLocal = callocTick, ret = proj delayRef [writeIdx], .. }) $ mdo
+        bindingRefs <- mconcat <$> sequenceA
+          [ pure $ M.singleton param (proj delayRef [readIdx])
+          , M.fromList <$> sequenceA [ (n,) . snd <$> local withBindingRefs (rhsvalue region bbody) | (n, region, bbody) <- bindings ]
+          ]
+
+        let withBindingRefs :: Env -> Env
+            withBindingRefs Env {..} = Env { bindings = bindingRefs <> bindings, .. }
+
+        local withBindingRefs $ retvalue body
+
+        -- Increment read & write index
+        cbinOp Add writeIdx (RConst $ I32 1) writeIdx
+        cbinOp Mod writeIdx (RConst $ I32 delay) writeIdx
       
-      -- Find all variables referenced from recursive blocks
-      let (recHeads, recFreeVars) = mconcat [ vars | vars <- descendFunc (const Nothing) (Just . gatherRecFreeVars) abs ]
+        -- TODO: variable delay
+        cbinOp Add readIdx (RConst $ I32 1) readIdx
+        cbinOp Mod readIdx (RConst $ I32 delay) readIdx
 
-      -- TODO: no need for this after uniquefying all identifiers (+ parameter names)
+      -- Copy result from delay line
+      ret t $ proj delayRef [writeIdx]
+  where
+    typeContainsAbs (TNumber _) = False
+    typeContainsAbs (TArr t _) = typeContainsAbs t
+    typeContainsAbs (TAbs _ _) = True
 
-      -- Create fresh global names for each captured parameter
-      capturedParams <- sequence
-        [ (ptype, n,) <$> lift fresh
-        | (ptype, n) <- zip (paramTypes ("markCapturedBindings: " <> show abs) t) params
-        , S.member n freeVars || S.member n recFreeVars
+-- General indexed expression
+retvalue (CIndexed idxs indexable) = do
+  idxRefs <- sequence [ rhsvalue ALocal idx | (_, idx) <- idxs ]
+  (t, ref) <- rhsvalue ALocal (CIndexed [] indexable)
+  ret t $ proj ref (fmap snd idxRefs)
+
+retvalue (CSel _ chs sel) = do
+  (_, sref) <- rhsvalue ALocal sel
+  cond <- allocLocal (TNumber TI32)
+  recif cond chs sref 0
+  where
+    -- TODO: binary tree if
+    recif _ [] _ _ = error "recif: no choice (this is a bug)"
+    recif _ [ch] _ _ = retvalue ch
+    recif cond (ch:chs) sref idx = do
+      cbinOp Eq sref (RConst (I32 idx)) cond
+      cif cond (retvalue ch) (recif cond chs sref (idx + 1))
+
+--------------------------------------------------------------------------------
+
+data IRFunc = IRFunc
+  { allocations :: [(Type, Idx)]
+  , instructions :: [Instruction]
+  } deriving Show
+
+data IR = IR
+  { globalAllocations :: [(Type, Idx)]
+  , funcMap :: Map FuncRef IRFunc
+  , tickFunc :: IRFunc
+  } deriving Show
+
+toplevel :: Map Ident Type -> Map FuncRef Func -> IR
+toplevel globals funcRefMap = IR
+  { globalAllocations = st.globalAllocations
+  , tickFunc = IRFunc
+      { allocations = st.tickAllocations
+      , instructions = st.tickInstructions
+      }
+  , .. }
+  where
+    (funcMap, st) = runState gen $ GlobalState
+      { nextFuncRefIdx = 0
+      , nextGlobalVarIdx = 0
+      , globalAllocations = []
+      , nextTickVarIdx = 0
+      , tickAllocations = []
+      , tickInstructions = []
+      }
+
+    gen :: State GlobalState (Map FuncRef IRFunc)
+    gen = do
+      globalRefs <- M.fromList <$> sequence [ (n,) <$> allocGlobal t | (n, t) <- M.toList globals ]
+
+      M.fromList <$> sequence
+        [ do
+           (((), instructions), lst) <-
+               flip runStateT (LocalState { nextVarIdx = 0, allocations = [] })
+             $ flip runReaderT (Env { bindings = globalRefs, ret = RRet, to = [], emit = cemitLocal, allocLocal = callocLocal })
+             $ runWriterT
+             $ func f
+           pure (fr, IRFunc { allocations = lst.allocations, .. })
+        | (fr, f) <- M.toList funcRefMap
         ]
 
-      -- Build substitution map: original param name -> fresh global name
-      let paramSubsts = M.fromList [ (n, subst) | (_, n, subst) <- capturedParams ]
-      
-      -- Update bindings: mark captured bindings as global, add new global bindings for captured params
-      let bindings' = mconcat
-            [ [ if S.member n freeVars || S.member n recFreeVars then (n, AGlobal, body) else (n, r, body)
-              | (n, r, body) <- bindings
-              ]
-            , [ (subst, AGlobal, CIndexed [] (CVar t n)) | (t, n, subst) <- capturedParams ]
-            ]
-      
-      -- Record substitutions and global types
-      W.tell $ GlobalsEnv
-        { substMap = M.fromListWith (<>)
-            -- For each closure and each of its free variables that's a captured param,
-            -- record the substitution that should be applied to that closure
-            [ (fr, M.singleton fv subst)
-            | (fr, fvs) <- (funcRef, recFreeVars):freeVarsForClosure
-            , fv <- S.toList fvs
-            , Just subst <- [ M.lookup fv paramSubsts ]
+      where
+        func (Func _ params bindings body) = mdo
+          bindingRefs <- mconcat <$> sequenceA
+            -- Arguments
+            [ pure $ M.fromList [ (p, RArg idx) | (idx, p) <- zip [0..] params ]
+
+            -- Bindings (must be in topsort order)
+            , M.fromList <$> sequenceA
+                [ case region of
+                    ALocal -> (n,) . snd <$> local withBindingRefs (rhsvalue region bbody)
+                    AGlobal -> do
+                      -- Set global ref as return value for binding rhs
+                      gref <- asks ((M.! n) . (.bindings))
+                      local ((\Env {..} -> Env { ret = gref, .. }) . withBindingRefs) (retvalue bbody)
+                      pure (n, gref)
+                | (n, region, bbody) <- bindings
+                ]
             ]
 
-        , globals = mconcat
-            [ M.fromList [ (n, ptype) | (ptype, _, n) <- capturedParams ]
-            , M.fromList [ (n, cexprType e) | (n, AGlobal, e) <- bindings' ]
-            ] 
-        }
+          let withBindingRefs :: Env -> Env
+              withBindingRefs Env {..} = Env { bindings = bindingRefs <> bindings, .. }
 
-      pure $ Func t params bindings' body
+          local withBindingRefs $ retvalue body
 
-    -- Apply substitutions to a specific function based on its FuncRef
-    substituteVars :: Map FuncRef (Map Ident Ident) -> FuncRef -> Func -> Func
-    substituteVars frSubstMap fr a@(Func t params bindings body) = case M.lookup fr frSubstMap of
-      Just substMap -> Func t params
-        (fmap substBinding bindings)
-        (transformCExpr (\_ -> id) substVar id body)
-        where
-          substBinding (n, region, body)
-            -- Don't substitute the RHS of captured param bindings (e.g., _captured_0 = x)
-            -- We want to keep the original reference to the parameter
-            | Just _ <- M.lookup n substMap = (n, region, body)
-            | otherwise = (n, region, transformCExpr (\_ -> id) substVar id body)
+-}
 
-          substVar :: CIndexable FuncRef -> CIndexable FuncRef
-          substVar (CVar t n) = CVar t (M.findWithDefault n n substMap)
-          substVar e = e
-      _ -> a
+-- TODO: dead code elimination
+-- TODO: array interval OOB detection
 
---------------------------------------------------------------------------------
+-- RJCT: topsort global instructions
 
--- NOTE: if bindings between two SAbs float collapse them into one
-floatExpressions :: Map FuncRef Func -> Map FuncRef Func
-floatExpressions = fmap go
-  where
-    go :: Func -> Func
-    go (Func t params bindings body) = undefined
+-- DONE: no toplevel definitions, everything is a function
+-- DONE: topsort bindings when generating a function
 
-    isPure :: CExpr abs -> CExpr abs
-    isPure = undefined
+-- TODO: HM type inference -> lambda specialization -> inline -> CSE -> float pure expressions out of CSel/etc
 
-markPureExpressions :: Map FuncRef Func -> Map FuncRef Func
-markPureExpressions = fmap go
-  where
-    go :: Func -> Func
-    go (Func t params bindings body) = undefined
+-- TODO: use mtl constraints for allocLocal/Global?
+-- TODO: use lhs/rhs for clarity
 
-    isPure :: CExpr abs -> CExpr abs
-    isPure = undefined
+-- TODO: oversampling just means that we insert some stateful code around the oversampled function (which we should always inline when generating code; this can happen directly in the codegen)
+-- TODO: zig std math: https://github.com/ziglang/zig/tree/master/lib/std/math
 
--- NEXT
--- * DONE mark captured bindings for storing in global
--- * DONE introduce global bindings for captured arguments, assign argument to them, replace reference to argument with ref to binding in closure
--- * codegen while maintaining focus/select lens
--- * alloc when calling
--- * delay lines (they must have configurable delay); must also be initialized with the initial value
--- * when choice do binary if/elses
--- ** fold the pure part of a computation into the if/else leaves, leaving the impure computations of all parts outside the if/else tree
-
---------------------------------------------------------------------------------
-
-compileExprs :: Map Ident (CExpr Abs) -> (Map FuncRef (Set Ident), Map Ident (CExpr FuncRef), Map FuncRef Func, GlobalsEnv)
-compileExprs toplevelMap = runUnique $ do
-  let (toplevelMap', env) = flip ST.runState (AbsEnv mempty 0) $ traverse gatherAbstractions toplevelMap
-  let freeVarMap = gatherFreeVars env.funcRefMap
-
-  (funcRefMap, genv) <- markCapturedBindings' freeVarMap env.funcRefMap
-  
-  -- TODO
-  let optimize = id
-
-  pure (freeVarMap, toplevelMap', optimize funcRefMap, genv)
-
-compileExpr :: CExpr Abs -> (CExpr FuncRef, Map FuncRef Func, GlobalsEnv)
-compileExpr expr = runUnique $ do
-  let (expr', env) = flip ST.runState (AbsEnv mempty 0) $ gatherAbstractions expr
-  let freeVarMap = gatherFreeVars env.funcRefMap
-
-  (funcRefMap, genv) <- markCapturedBindings' freeVarMap env.funcRefMap
-  
-  -- TODO
-  let optimize = id
-
-  pure (expr', optimize funcRefMap, genv)
+-- NOTE: selection only happens after "opaque" transitions, e.g. function call or global ref; an array paired with a selection is a choice
+-- DONE: local var indices should be function local?
+--- https://github.com/juce-framework/JUCE/blob/master/modules/juce_dsp/processors/juce_Oversampling.cpp
+-- DONE: can't return Abs from Rec
+-- DONE: generate SAbs code; pretty straightforward
+-- DONE: replace refs to params with RArg 0, 1, 2 etc
+-- RJCT: rec and oversample take a lambda abstraction (or a Var pointing to a lambda abstraction)

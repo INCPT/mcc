@@ -16,6 +16,27 @@ instance Pretty TNumber where
 data Type = TNumber TNumber | TArr Type {- length -} Int | TLam [Type] Type
   deriving (Eq, Show)
 
+ti32 :: Type
+ti32 = TNumber TI32
+
+tf32 :: Type
+tf32 = TNumber TF32
+
+ti64 :: Type
+ti64 = TNumber TI64
+
+tf64 :: Type
+tf64 = TNumber TF64
+
+tarr :: Type -> Int -> Type
+tarr = TArr
+
+(-->) :: [Type] -> Type -> Type
+(-->) = TLam
+
+(|:) :: Ident -> Type -> (Ident, Type)
+(|:) = (,)
+
 instance Pretty Type where
   pretty = \case
     TNumber tn -> pretty tn
