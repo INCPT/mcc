@@ -124,15 +124,15 @@ instance Semigroup Pure where
   _ <> _ = Impure
 
 annPure :: Ann a Expr -> Ann (a, Pure) Expr
-annPure = flip pile purity
+annPure expr = pile expr purity
   where
-    purity :: Expr (Ann (a, Pure) Expr) -> Pure
+    purity :: Expr (Ann a Expr) -> Pure
     purity (PConst _) = Pure
-    purity (PArr elems) = mconcat [ p | Ann ((_, p), _) <- elems ]
-    purity (PFoldedSelectL elems idx) = mconcat ([ p | Ann ((_, p), _) <- elems ] <> [ p | Ann ((_, p), _) <- [idx] ])
-    purity (PFoldedSelectR expr elems) = mconcat [ p | Ann ((_, p), _) <- expr : elems ]
-    purity (PLamAnn _ _ bindings body) = mconcat ([ p | (_, _, Ann ((_, p), _)) <- bindings ] <> [ p | Ann ((_, p), _) <- [body] ])
+    purity (PArr elems) = mconcat [ snd (fst (unAnn (annPure e))) | e <- elems ]
+    purity (PFoldedSelectL elems idx) = mconcat ([ snd (fst (unAnn (annPure e))) | e <- elems ] <> [ snd (fst (unAnn (annPure idx))) ])
+    purity (PFoldedSelectR expr elems) = mconcat [ snd (fst (unAnn (annPure e))) | e <- expr : elems ]
+    purity (PLamAnn _ _ bindings body) = mconcat ([ snd (fst (unAnn (annPure e))) | (_, _, e) <- bindings ] <> [ snd (fst (unAnn (annPure body))) ])
     purity (PRecAnn _ _ _ _ _) = Impure
-    purity (POp _ lhs rhs) = mconcat [ p | Ann ((_, p), _) <- [lhs, rhs] ]
+    purity (POp _ lhs rhs) = mconcat [ snd (fst (unAnn (annPure e))) | e <- [lhs, rhs] ]
     purity (PVar _) = Pure
-    purity (PApp func args) = mconcat [ p | Ann ((_, p), _) <- func : args ]
+    purity (PApp func args) = mconcat [ snd (fst (unAnn (annPure e))) | e <- func : args ]
