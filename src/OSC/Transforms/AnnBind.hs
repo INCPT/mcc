@@ -86,35 +86,23 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
       pure $ PLamAnn typ params bindings'' body'
    
     diff (PRec typ delay param bindings body) = do
-      (prev, env) <- R.ask
-   
-      paramSubstName <- nextName
-      let paramSubst = M.singleton param paramSubstName
+      ((bindings', body'), lkupSubst) <- withSubsts (param : fmap fst bindings) $ do
+        bindings' <- sequenceA [ (n,) <$> annCapturedBindings_ bbody | (n, bbody) <- bindings ]
+        body' <- annCapturedBindings_ body
+        pure (bindings', body')
 
-      bindingsSubsts <- fmap M.fromList $ sequence [ (n,) <$> nextName | (n, _) <- bindings ]
-   
-      -- Process bindings recursively
-      (bindings', capturedByBindings) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubst <> bindingsSubsts, prev <> env) $ sequence
-        [ (n,) <$> annCapturedBindings_ e
-        | (n, e) <- bindings
-        ]
-   
-      -- Process body recursively and capture free vars
-      (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubst <> bindingsSubsts, prev <> env) (annCapturedBindings_ body)
-   
-      -- Propagate captures excluding params and bindings
-      W.tell ((capturedByBindings <> capturedByBody) S.\\ (S.fromList $ M.keys (paramSubst <> bindingsSubsts)))
-      
-      let allCaptured = capturedByBindings <> capturedByBody
+      let paramSubst = case lkupSubst param of
+            Just subst -> subst
+            Nothing -> param
 
       let bindings'' =
-            [ if S.member n allCaptured
-                then (bindingsSubsts M.! n, C.AllocGlobal, Ann (t, e))
-                else (n, C.AllocLocal, Ann (t, e))
+            [ case lkupSubst n of
+                Just n' -> (n', C.AllocGlobal, Ann (t, e))
+                Nothing -> (n, C.AllocLocal, Ann (t, e))
             | (n, Ann (t, e)) <- bindings'
             ]
    
-      pure $ PRecAnn typ delay paramSubstName bindings'' body'
+      pure $ PRecAnn typ delay paramSubst bindings'' body'
 
 annCapturedBindings :: Ann Type SRC.Expr -> Ann Type Expr
 annCapturedBindings = fst . flip ST.evalState 0 . W.runWriterT . flip R.runReaderT mempty . annCapturedBindings_
