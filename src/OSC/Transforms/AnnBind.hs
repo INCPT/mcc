@@ -24,6 +24,34 @@ import OSC.Expr.AnnBind hiding (const)
 
 type CaptureM = R.ReaderT (Map Ident Ident, Map Ident Ident) (W.WriterT (Set Ident) (ST.State Int))
 
+capture :: Ident -> (Maybe Ident -> a) -> CaptureM a
+capture n f = do
+  (_, env) <- R.ask
+  
+  case M.lookup n env of
+    Just subst -> do
+      W.tell (S.singleton n)
+      pure $ f (Just subst)
+    Nothing -> pure $ f Nothing
+
+withSubsts :: [Ident] -> CaptureM a -> CaptureM (a, Ident -> Maybe Ident)
+withSubsts names f = do
+  (prev, env) <- R.ask
+
+  substs <- fmap M.fromList $ sequence [ (n,) <$> nextName | n <- names ]
+
+  -- Process f and capture free vars
+  (a, captured) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (substs, prev <> env) f
+
+  -- Propagate captures excluding params and bindings
+  W.tell (captured S.\\ S.fromList names)
+
+  pure (a, \n -> if S.member n captured then M.lookup n substs else Nothing)
+  where
+    nextName = do
+      n <- ST.state $ \n -> (n, n + 1)
+      pure $ Captured n
+
 annCapturedBindings_ :: Ann Type SRC.Expr -> CaptureM (Ann Type Expr)
 annCapturedBindings_ = bitraverse (rtraverse . trav) diff
   where
@@ -31,51 +59,30 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
       n <- ST.state $ \n -> (n, n + 1)
       pure $ Captured n
     
-    trav _ (SRC.PVar n) = do
-      (_, env) <- R.ask
-    
-      case M.lookup n env of
-        Just subst -> do
-          W.tell (S.singleton n)
-          pure $ PVar subst
-        Nothing -> pure $ PVar n
+    trav _ (SRC.PVar n) = capture n $ \subst -> case subst of
+      Just subst -> PVar subst
+      Nothing -> PVar n
     trav rmap e = rmap e
 
     diff :: Diff (Ann Type SRC.Expr) -> CaptureM (Expr (Ann Type Expr))
     diff (PLam typ params bindings body) = do
-      (prev, env) <- R.ask
-   
-      paramSubsts <- fmap M.fromList $ sequence [ (p,) <$> nextName | p <- params ]
-      bindingsSubsts <- fmap M.fromList $ sequence [ (n,) <$> nextName | (n, _) <- bindings ]
-   
-      -- Process bindings recursively
-      (bindings', capturedByBindings) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubsts <> bindingsSubsts, prev <> env) $ sequence
-        [ (n,) <$> annCapturedBindings_ e
-        | (n, e) <- bindings
-        ]
-   
-      -- Process body recursively and capture free vars
-      (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubsts <> bindingsSubsts, prev <> env) (annCapturedBindings_ body)
-   
-      -- Propagate captures excluding params and bindings
-      W.tell ((capturedByBindings <> capturedByBody) S.\\ (S.fromList $ M.keys (paramSubsts <> bindingsSubsts)))
-   
-      let allCaptured = capturedByBindings <> capturedByBody
-   
+      ((bindings', body'), lkupSubst) <- withSubsts (params <> fmap fst bindings) $ do
+        bindings' <- sequenceA [ (n,) <$> annCapturedBindings_ bbody | (n, bbody) <- bindings ]
+        body' <- annCapturedBindings_ body
+        pure (bindings', body')
+
       let bindings'' = mconcat
-            [ [ if S.member n allCaptured
-                  then (bindingsSubsts M.! n, C.AllocGlobal, Ann (t, e))
-                  else (n, C.AllocLocal, Ann (t, e))
+            [ [ case lkupSubst n of
+                  Just n' -> (n', C.AllocGlobal, Ann (t, e))
+                  Nothing -> (n, C.AllocLocal, Ann (t, e))
               | (n, Ann (t, e)) <- bindings'
               ]
             , [ (paramSubst, C.AllocGlobal, Ann (t, Expr $ C.Var p))
               | (p, t) <- zip params (paramTypes ("markCapturedBindings: " <> show typ) typ)
-              , S.member p allCaptured
-              , Just paramSubst <- [ M.lookup p paramSubsts ]
+              , Just paramSubst <- [ lkupSubst p ]
               ]
             ]
-   
-      -- Accumulate captured bindings
+
       pure $ PLamAnn typ params bindings'' body'
    
     diff (PRec typ delay param bindings body) = do
@@ -113,16 +120,6 @@ annCapturedBindings :: Ann Type SRC.Expr -> Ann Type Expr
 annCapturedBindings = fst . flip ST.evalState 0 . W.runWriterT . flip R.runReaderT mempty . annCapturedBindings_
 
 --------------------------------------------------------------------------------
-
-data Pure = Pure | Impure
-  deriving (Eq, Ord)
-
-instance Monoid Pure where
-  mempty = Pure
-
-instance Semigroup Pure where
-  Pure <> Pure = Pure
-  _ <> _ = Impure
 
 type PureM = R.Reader (Map Ident Pure)
 
