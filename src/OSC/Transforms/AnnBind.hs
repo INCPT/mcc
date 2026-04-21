@@ -123,18 +123,87 @@ instance Semigroup Pure where
   Pure <> Pure = Pure
   _ <> _ = Impure
 
-annPure :: Ann a Expr -> Ann (a, Pure) Expr
-annPure expr = pile expr purity
-  where
-    extract = foldMap (snd . fst . unAnn . annPure)
+type PureM = R.Reader (Map Ident Pure)
 
-    purity :: Expr (Ann a Expr) -> Pure
-    purity (PConst _) = Pure
-    purity (PArr elems) = extract elems
-    purity (PFoldedSelectL elems idx) = extract (idx:elems)
-    purity (PFoldedSelectR expr elems) = extract (expr:elems)
-    purity (PLamAnn _ _ bindings body) = extract [ e | (_, _, e) <- bindings ] <> extract [body]
-    purity (PRecAnn _ _ _ _ _) = Impure
-    purity (POp _ lhs rhs) = extract [lhs, rhs]
-    purity (PVar _) = Pure
-    purity (PApp func args) = extract (func:args)
+annPure :: Ann a Expr -> Ann (a, Pure) Expr
+annPure expr = flip R.runReader mempty $ annPure_ expr
+
+annPure_ :: Ann a Expr -> PureM (Ann (a, Pure) Expr)
+annPure_ = pileM' purity
+  where
+    pileM' :: (Traversable f, Monad m) => (f (Ann a f) -> m (b, f (Ann (a, b) f))) -> Ann a f -> m (Ann (a, b) f)
+    pileM' f (Ann (a, e)) = do
+      (b, e') <- f e
+      pure $ Ann ((a, b), e')
+
+    extract :: [Ann (a, Pure) Expr] -> Pure
+    extract = foldMap (snd . fst . unAnn)
+
+    purity :: Expr (Ann a Expr) -> PureM (Pure, Expr (Ann (a, Pure) Expr))
+    purity (PConst n) = pure (Pure, PConst n)
+    
+    purity (PArr elems) = do
+      elems' <- traverse annPure_ elems
+      pure (extract elems', PArr elems')
+    
+    purity (PFoldedSelectL elems idx) = do
+      elems' <- traverse annPure_ elems
+      idx' <- annPure_ idx
+      pure (extract (idx':elems'), PFoldedSelectL elems' idx')
+    
+    purity (PFoldedSelectR expr elems) = do
+      expr' <- annPure_ expr
+      elems' <- traverse annPure_ elems
+      pure (extract (expr':elems'), PFoldedSelectR expr' elems')
+    
+    purity (PLamAnn typ params bindings body) = do
+      -- Process bindings with mdo to allow forward references
+      env <- R.ask
+      let processBindings = do
+            bindings' <- sequence
+              [ do
+                  e' <- R.local (const bindingEnv) (annPure_ e)
+                  pure (n, region, e')
+              | (n, region, e) <- bindings
+              ]
+            let bindingEnv = env <> M.fromList [ (n, snd $ fst $ unAnn e') | (n, _, e') <- bindings' ]
+            pure (bindings', bindingEnv)
+      
+      (bindings', bindingEnv) <- processBindings
+      body' <- R.local (const bindingEnv) (annPure_ body)
+      
+      let p = extract [ e' | (_, _, e') <- bindings' ] <> extract [body']
+      pure (p, PLamAnn typ params bindings' body')
+    
+    purity (PRecAnn typ delay param bindings body) = do
+      -- RecAnn is always impure, but we still need to process subexpressions
+      env <- R.ask
+      let processBindings = do
+            bindings' <- sequence
+              [ do
+                  e' <- R.local (const bindingEnv) (annPure_ e)
+                  pure (n, region, e')
+              | (n, region, e) <- bindings
+              ]
+            let bindingEnv = env <> M.fromList [ (n, snd $ fst $ unAnn e') | (n, _, e') <- bindings' ]
+            pure (bindings', bindingEnv)
+      
+      (bindings', bindingEnv) <- processBindings
+      body' <- R.local (const bindingEnv) (annPure_ body)
+      
+      pure (Impure, PRecAnn typ delay param bindings' body')
+    
+    purity (POp op lhs rhs) = do
+      lhs' <- annPure_ lhs
+      rhs' <- annPure_ rhs
+      pure (extract [lhs', rhs'], POp op lhs' rhs')
+    
+    purity (PVar ident) = do
+      env <- R.ask
+      let p = M.findWithDefault Pure ident env
+      pure (p, PVar ident)
+    
+    purity (PApp func args) = do
+      func' <- annPure_ func
+      args' <- traverse annPure_ args
+      pure (extract (func':args'), PApp func' args')
