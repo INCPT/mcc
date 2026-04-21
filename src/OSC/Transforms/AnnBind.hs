@@ -82,7 +82,7 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
       pure $ PLamAnn typ params bindings'' body'
    
     diff (PRec typ delay param bindings body) = do
-      ((bindings', body'), lkupSubst) <- withSubsts (param : fmap fst bindings) $ do
+      ((bindings', body'), lkupSubst) <- withSubsts (param:fmap fst bindings) $ do
         bindings' <- sequenceA [ (n,) <$> annCapturedBindings_ bbody | (n, bbody) <- bindings ]
         body' <- annCapturedBindings_ body
         pure (bindings', body')
