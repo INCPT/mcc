@@ -57,14 +57,19 @@ mapAnnM h (Ann (ann, f)) = Ann <$> ((,) <$> h ann <*> traverse (mapAnnM h) f)
 mapAnn :: Traversable f => Functor f => (ann -> ann') -> Ann ann f -> Ann ann' f
 mapAnn h = runIdentity . mapAnnM (fmap pure h)
 
-pile :: Functor f => Ann a f -> (f (Ann a f) -> b) -> Ann (a, b) f
-pile (Ann (a, e)) f = Ann ((a, f e), fmap (flip pile f) e)
+tupAnnM :: Monoid b => Traversable f => Monad m => (Ann a f -> m (Ann (a, b) f)) -> Ann a f -> m (Ann (a, b) f)
+tupAnnM f (Ann (a, expr)) = do
+  expr' <- traverse (tupAnnM f) expr
+  pure (Ann ((a, foldMap (snd . fst . unAnn) expr'), expr'))
 
-pileM :: (Traversable f, Monad m) => Ann a f -> (f (Ann a f) -> m b) -> m (Ann (a, b) f)
+pileM :: Traversable f => Monad m => Ann a f -> (f (Ann a f) -> m b) -> m (Ann (a, b) f)
 pileM (Ann (a, e)) f = do
   b <- f e
-  e' <- traverse (\x -> pileM x f) e
+  e' <- traverse (flip pileM f) e
   pure $ Ann ((a, b), e')
+
+pile :: Functor f => Ann a f -> (f (Ann a f) -> b) -> Ann (a, b) f
+pile (Ann (a, e)) f = Ann ((a, f e), fmap (flip pile f) e)
 
 -- Ann -------------------------------------------------------------------------
 
