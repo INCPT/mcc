@@ -116,6 +116,16 @@ annCapturedBindings = fst . flip ST.evalState 0 . W.runWriterT . flip R.runReade
 data Pure = Pure | Impure
   deriving Eq
 
+instance Monoid Pure where
+  mempty = Pure
+
+instance Semigroup Pure where
+  Pure <> Pure = Pure
+  _ <> _ = Impure
+
 annPure :: Ann a Expr -> Ann (a, Pure) Expr
 annPure (Ann (a, PConst n)) = Ann ((a, Pure), PConst n)
+annPure (Ann (a, PArr elems)) = Ann ((a, mconcat [ p | Ann ((_, p), _) <- elems' ]), PArr elems')
+  where
+    elems' = fmap annPure elems
 annPure _ = undefined
