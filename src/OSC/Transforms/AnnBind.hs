@@ -123,6 +123,9 @@ instance Semigroup Pure where
   Pure <> Pure = Pure
   _ <> _ = Impure
 
+hm :: Ann a Expr -> (Expr (Ann a Expr) -> b) -> Ann (a, b) Expr
+hm = undefined
+
 annPure :: Ann a Expr -> Ann (a, Pure) Expr
 annPure (Ann (a, PConst n)) = Ann ((a, Pure), PConst n)
 annPure (Ann (a, PArr elems)) = Ann ((a, mconcat [ p | Ann ((_, p), _) <- elems' ]), PArr elems')
@@ -132,7 +135,7 @@ annPure (Ann (a, PFoldedSelectL elems idx)) = Ann ((a, purity), PFoldedSelectL e
   where
     elems' = fmap annPure elems
     idx' = annPure idx
-    purity = mconcat ([ p | Ann ((_, p), _) <- elems' ] ++ [p' | Ann ((_, p'), _) <- [idx']])
+    purity = mconcat ([ p | Ann ((_, p), _) <- elems' ] <> [p' | Ann ((_, p'), _) <- [idx']])
 annPure (Ann (a, PFoldedSelectR expr elems)) = Ann ((a, purity), PFoldedSelectR expr' elems')
   where
     expr' = annPure expr
@@ -142,7 +145,7 @@ annPure (Ann (a, PLamAnn typ params bindings body)) = Ann ((a, purity), PLamAnn 
   where
     bindings' = [ (n, region, annPure e) | (n, region, e) <- bindings ]
     body' = annPure body
-    purity = mconcat ([ p | (_, _, Ann ((_, p), _)) <- bindings' ] ++ [p' | Ann ((_, p'), _) <- [body']])
+    purity = mconcat ([ p | (_, _, Ann ((_, p), _)) <- bindings' ] <> [p' | Ann ((_, p'), _) <- [body']])
 annPure (Ann (a, PRecAnn typ delay param bindings body)) = Ann ((a, Impure), PRecAnn typ delay param bindings' body')
   where
     bindings' = [ (n, region, annPure e) | (n, region, e) <- bindings ]
