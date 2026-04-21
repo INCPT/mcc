@@ -5,9 +5,6 @@
 
 module OSC.Expr.Functors where
 
-import qualified Control.Category as C
-import qualified Control.Arrow as A
-
 import Data.Functor.Identity (runIdentity)
 
 import qualified Control.Monad.Reader as R
@@ -59,25 +56,6 @@ mapAnnM h (Ann (ann, f)) = Ann <$> ((,) <$> h ann <*> traverse (mapAnnM h) f)
 
 mapAnn :: Traversable f => Functor f => (ann -> ann') -> Ann ann f -> Ann ann' f
 mapAnn h = runIdentity . mapAnnM (fmap pure h)
-
-newtype AnnA m f a b = AnnA (Ann a f -> m (Ann b f))
-
-instance Monad m => C.Category (AnnA m f) where
-  id = AnnA pure
-  AnnA bc . AnnA ab = AnnA $ \a -> ab a >>= bc
-
-instance (Monad m, Traversable f) => A.Arrow (AnnA m f) where
-  arr f = AnnA (pure . mapAnn f)
-  first e@(AnnA g) = AnnA $ \(Ann ((a, b), f)) -> do
-    undefined
-    where
-      hm :: Monad m => (Ann a f -> m (Ann b f)) -> Ann (a, c) f -> m (Ann (b, c) f)
-      hm m (Ann ((a, c), f)) = do
-        Ann (b, f') <- m (Ann (a, fmap _ f))
-        undefined
-    -- Ann (c, f') <- g $ Ann (a, fmap (mapAnn fst) f)
-    -- f'' <- traverse _ f'
-    -- pure $ Ann ((c, b), f'')
 
 -- Ann -------------------------------------------------------------------------
 
