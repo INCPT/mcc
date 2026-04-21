@@ -24,6 +24,10 @@ pop = do
       pure (Just a)
     _ -> pure Nothing
 
+-- | Pair each index with the appropriate array, so an an expression like
+-- `[[0, 1], [2, 3]][1][0]` turns into `[[0, 1][0], [2, 3][0]][1]`.
+-- This allows for easy constant index elimination and the generation of more
+-- efficient code.
 foldSelections :: Ann Type SRC.Expr -> Ann Type Expr
 foldSelections = flip ST.evalState [] . foldSelections_
 
