@@ -32,6 +32,7 @@ import qualified Control.Monad.Trans.Free as TF
 import Control.Monad.Trans.Free (FreeT (FreeT), FreeF)
 
 import OSC.Expr.Comp (Ident, Type (..), TNumber (..), Number (..), Op (..))
+import qualified OSC.Expr.AnnBind as AB
 import qualified OSC.Expr.Comp as C
 import OSC.Expr.Functors
 import OSC.Expr.Defunc
@@ -107,35 +108,35 @@ showBlock stmts = mconcat [ "  " <> line <> "\n" | stmt <- stmts, line <- lines 
 
 -- PIPELINE --------------------------------------------------------------------
 
----- typecheck/range propagation
----- float const computations out of rec blocks
----- until fixpoint
------- fusion/simplifications
--------- eval small SOACs
--------- calculate const expressions
--------- [a, b, c][1] == b
--------- rec |...| 5.0 == 5.0
--------- (|a, b| a + b)(x, y) == x + y
--------- fuse SOACs
--------- ...
------- dead code elim
------- CSE (expression should hash to the same hash if e.g. bindings are reordered)
------- inline (awlays inline if something used only once, otherwise heuristic)
----- fold selections
----- ann binds
----- KR/AR propagation/float to the most top
----- pureness propagation (this is so that when simplifications are turned off in some cases (like a big function that might be quicker to compute at runtime than simplified by the compiler) then everything still works)
----- backend
------- precompute pure arrays once at init time
------- WASM
--------- simple return values on stack, arrays in linear mem
--------- assign array allocations
----------- (depends on the complexity of element computations; if sum cost of instructions/elements < log 2 * legnth elements * cost of branch; then compute all + dynamic offset is better, else binary if)
----------- if array captured, then alloc upfront
----------- otherwise - use nested ifs if elems < N (8-16?)
----------- otherwise - br_table jumps
--------- allocate globals or locals per function (align at 4/8 bytes)
--------- propagate shadow stack pointers to functions that need it (e.g. if they return an array or a binding is an array or a subfunction returns an array (also transitively))
+---- [-] typecheck [-range propagation]
+---- [] float independent computations out of rec blocks
+---- [] until fixpoint
+------ [] fusion/simplifications
+-------- [] eval small SOACs
+-------- [] calculate const expressions
+-------- [] [a, b, c][1] == b
+-------- [] rec |...| 5.0 == 5.0
+-------- [] (|a, b| a + b)(x, y) == x + y
+-------- [] fuse SOACs
+-------- [] ...
+------ [] dead code elim
+------ [] CSE (expression should hash to the same hash if e.g. bindings are reordered)
+------ [] inline (awlays inline if something used only once, otherwise heuristic)
+---- [+] fold selections
+---- [+] ann binds
+---- [] KR/AR propagation/float to the most top
+---- [+] pureness propagation (this is so that when simplifications are turned off in some cases (like a big function that might be quicker to compute at runtime than simplified by the compiler) then everything still works)
+---- [] backend
+------ [] precompute pure arrays once at init time
+------ [] WASM
+-------- [] simple return values on stack, arrays in linear mem
+-------- [] assign array allocations
+---------- [] (depends on the complexity of element computations; if sum cost of instructions/elements < log 2 * legnth elements * cost of branch; then compute all + dynamic offset is better, else binary if)
+---------- [] if array captured, then alloc upfront
+---------- [] otherwise - use nested ifs if elems < N (8-16?)
+---------- [] otherwise - br_table jumps
+-------- [] allocate globals or locals per function (align at 4/8 bytes)
+-------- [] propagate shadow stack pointers to functions that need it (e.g. if they return an array or a binding is an array or a subfunction returns an array (also transitively))
 
 --------------------------------------------------------------------------------
 
@@ -149,22 +150,22 @@ data Value = VNumber Number | VArr [Value]
   deriving Show
 
 data Program = Program
-  { globals :: Map Ident (Type, Maybe Value)
+  { globals :: Map Ident (Type, [Instruction])
   , funcMap :: Map FuncRef ProgramFunc
   , tickFunc :: ProgramFunc
   } deriving Show
 
-type ExpA = Ann Type Expr
+type Ann' = Ann (Type, AB.Pure)
 
 type CodegenM = ST.State ()
 
 -- innerJoin :: Applicative f => Ord k => Map k (f a) -> Map k (f b) -> Map k (f (a, b))
 -- innerJoin = M.intersectionWith (\fa fb -> (,) <$> fa <*> fb)
 
-codegen :: DefuncMap (Ann Type) -> ExpA -> CodegenM Program
+codegen :: DefuncMap Ann' -> Ann' Expr -> CodegenM Program
 codegen dfm = undefined
   where
-    collectLamAllocations :: C.LamAnn ExpA -> ([Type], [Type])
+    collectLamAllocations :: C.LamAnn (Ann' Expr) -> ([Type], [Type])
     collectLamAllocations (C.LamAnn typ _ bindings _) = mconcat
       [ case region of
           C.AllocLocal -> ([t], [])

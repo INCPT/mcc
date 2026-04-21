@@ -55,10 +55,6 @@ withSubsts names f = do
 annCapturedBindings_ :: Ann Type SRC.Expr -> CaptureM (Ann Type Expr)
 annCapturedBindings_ = bitraverse (rtraverse . trav) diff
   where
-    nextName = do
-      n <- ST.state $ \n -> (n, n + 1)
-      pure $ Captured n
-    
     trav _ (SRC.PVar n) = capture n $ \subst -> case subst of
       Just subst -> PVar subst
       Nothing -> PVar n

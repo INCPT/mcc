@@ -13,6 +13,16 @@ import OSC.Pretty
 
 import GHC.Generics
 
+data Pure = Pure | Impure
+  deriving (Eq, Ord)
+
+instance Monoid Pure where
+  mempty = Pure
+
+instance Semigroup Pure where
+  Pure <> Pure = Pure
+  _ <> _ = Impure
+
 data Expr exp
   = Expr (C.Expr exp)
   | FoldedSelect (C.FoldedSelect exp)

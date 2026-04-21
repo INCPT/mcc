@@ -60,9 +60,9 @@ topsort nodeEdges nodes
         isCycle (G.Node _ []) = False  -- single node SCC = no cycle
         isCycle (G.Node _ _) = True    -- multi-node SCC = cycle
 
-checkDuplicates :: pos -> [(Ident, a)] -> TypecheckM pos ()
+checkDuplicates :: pos -> [Ident] -> TypecheckM pos ()
 checkDuplicates pos bindings = do
-  let counts = M.fromListWith (+) ((, 1 :: Int) <$> fmap fst bindings)
+  let counts = M.fromListWith (+) ((, 1 :: Int) <$> bindings)
   let dups = [ n | (n, x) <- M.toList counts, x > 1 ]
   case dups of
     [] -> pure ()
@@ -84,7 +84,7 @@ typeContainsLam (TLam _ _) = True
 typecheckBindings :: Show pos => pos -> [(Ident, ExpA pos)] -> TypecheckM pos [(Ident, ExpA (pos, Type))]
 typecheckBindings pos bindings = do
   -- Check for duplicates
-  checkDuplicates pos bindings
+  checkDuplicates pos (fmap fst bindings)
   
   -- Check for cycles
   bindings' <- {- fmap (\x -> trace ("SORTED BINDINGS: " <> show x) x) $ -} checkCycles pos bindings
@@ -162,8 +162,7 @@ typecheck expr = case unAnn expr of
   
   (pos, PLam typ params bindings body) -> do
     -- Check for duplicate parameters  
-    checkDuplicates pos [(p, ()) | p <- params]
-    checkDuplicates pos bindings
+    checkDuplicates pos (params <> fmap fst bindings)
     
     -- Extract parameter types and return type from the function type
     case typ of
@@ -232,7 +231,7 @@ typecheck expr = case unAnn expr of
   
   (pos, PRec typ delay param bindings body) -> do
     -- Check for duplicates
-    checkDuplicates pos bindings
+    checkDuplicates pos (param:fmap fst bindings)
     
     -- Check that the type doesn't contain functions
     when (typeContainsLam typ) $
