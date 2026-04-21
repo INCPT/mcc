@@ -1,6 +1,7 @@
 * TODO SOACs: actually probably better to have the "comptime" constructs like map and range translate to loops
 ** otherwise we must interpret the code during compilation, which in an online setting where the compiler is JS or WASM will be slower than executing WASM loops directly
 ** but maybe good to unroll for small arrays, but we'll still need to support SOACs in Expr
+** differentiate between init time constructs (fine to not optimize that much) and sample time constructs (better to unroll?)
 * TODO test things like typechecking illegal selections
 * TODO !!! unique identifiers, shadowing etc
 * TODO propagate KR computations and compute them once per 128-sample frame
