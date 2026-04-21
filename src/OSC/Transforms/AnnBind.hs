@@ -123,9 +123,6 @@ instance Semigroup Pure where
   Pure <> Pure = Pure
   _ <> _ = Impure
 
-hm :: Ann a Expr -> (Expr (Ann a Expr) -> b) -> Ann (a, b) Expr
-hm (Ann (a, e)) f = Ann ((a, f e), fmap (flip hm f) e)
-
 annPure :: Ann a Expr -> Ann (a, Pure) Expr
 annPure (Ann (a, PConst n)) = Ann ((a, Pure), PConst n)
 annPure (Ann (a, PArr elems)) = Ann ((a, mconcat [ p | Ann ((_, p), _) <- elems' ]), PArr elems')
