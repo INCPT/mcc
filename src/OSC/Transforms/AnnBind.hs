@@ -19,7 +19,7 @@ import OSC.Expr.AnnBind
 
 --------------------------------------------------------------------------------
 
-type CaptureM = R.ReaderT (Map Ident (Maybe Ident), Map Ident (Maybe Ident)) (W.WriterT (Set Ident) (ST.State Int))
+type CaptureM = R.ReaderT (Map Ident Ident, Map Ident Ident) (W.WriterT (Set Ident) (ST.State Int))
 
 annCapturedBindings_ :: Ann Type SRC.Expr -> CaptureM (Ann Type Expr)
 annCapturedBindings_ = bitraverse (rtraverse . trav) diff
@@ -32,12 +32,9 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
       (_, env) <- R.ask
     
       case M.lookup n env of
-        Just (Just subst) -> do
+        Just subst -> do
           W.tell (S.singleton n)
           pure $ PVar subst
-        Just Nothing -> do
-          W.tell (S.singleton n)
-          pure $ PVar n
         Nothing -> pure $ PVar n
     trav rmap e = rmap e
 
@@ -45,32 +42,33 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
     diff (PLam typ params bindings body) = do
       (prev, env) <- R.ask
    
-      let bindingNames = M.fromList (fmap ((,Nothing) . fst) bindings)
-      
-      paramSubsts <- fmap M.fromList $ sequence [ (p,) <$> Just <$> nextName | p <- params ]
+      paramSubsts <- fmap M.fromList $ sequence [ (p,) <$> nextName | p <- params ]
+      bindingsSubsts <- fmap M.fromList $ sequence [ (n,) <$> nextName | (n, _) <- bindings ]
    
       -- Process bindings recursively
-      (bindings', capturedByBindings) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubsts <> bindingNames, prev <> env) $ sequence
+      (bindings', capturedByBindings) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubsts <> bindingsSubsts, prev <> env) $ sequence
         [ (n,) <$> annCapturedBindings_ e
         | (n, e) <- bindings
         ]
    
       -- Process body recursively and capture free vars
-      (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubsts <> bindingNames, prev <> env) (annCapturedBindings_ body)
+      (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubsts <> bindingsSubsts, prev <> env) (annCapturedBindings_ body)
    
       -- Propagate captures excluding params and bindings
-      W.tell ((capturedByBindings <> capturedByBody) S.\\ (S.fromList $ M.keys (paramSubsts <> bindingNames)))
+      W.tell ((capturedByBindings <> capturedByBody) S.\\ (S.fromList $ M.keys (paramSubsts <> bindingsSubsts)))
    
       let allCaptured = capturedByBindings <> capturedByBody
    
       let bindings'' = mconcat
-            [ [ (n, if S.member n allCaptured then C.AllocGlobal else C.AllocLocal, Ann (t, e))
+            [ [ if S.member n allCaptured
+                  then (bindingsSubsts M.! n, C.AllocGlobal, Ann (t, e))
+                  else (n, C.AllocLocal, Ann (t, e))
               | (n, Ann (t, e)) <- bindings'
               ]
             , [ (paramSubst, C.AllocGlobal, Ann (t, Expr $ C.Var p))
               | (p, t) <- zip params (paramTypes ("markCapturedBindings: " <> show typ) typ)
               , S.member p allCaptured
-              , Just (Just paramSubst) <- [ M.lookup p paramSubsts ]
+              , Just paramSubst <- [ M.lookup p paramSubsts ]
               ]
             ]
    
@@ -81,25 +79,28 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
       (prev, env) <- R.ask
    
       paramSubstName <- nextName
-      let paramSubst = M.singleton param (Just paramSubstName)
-      let bindingNames = M.fromList (fmap ((, Nothing) . fst) bindings)
+      let paramSubst = M.singleton param paramSubstName
+
+      bindingsSubsts <- fmap M.fromList $ sequence [ (n,) <$> nextName | (n, _) <- bindings ]
    
       -- Process bindings recursively
-      (bindings', capturedByBindings) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubst <> bindingNames, prev <> env) $ sequence
+      (bindings', capturedByBindings) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubst <> bindingsSubsts, prev <> env) $ sequence
         [ (n,) <$> annCapturedBindings_ e
         | (n, e) <- bindings
         ]
    
       -- Process body recursively and capture free vars
-      (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubst <> bindingNames, prev <> env) (annCapturedBindings_ body)
+      (body', capturedByBody) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (paramSubst <> bindingsSubsts, prev <> env) (annCapturedBindings_ body)
    
       -- Propagate captures excluding params and bindings
-      W.tell ((capturedByBindings <> capturedByBody) S.\\ (S.fromList $ M.keys (paramSubst <> bindingNames)))
+      W.tell ((capturedByBindings <> capturedByBody) S.\\ (S.fromList $ M.keys (paramSubst <> bindingsSubsts)))
       
       let allCaptured = capturedByBindings <> capturedByBody
 
       let bindings'' =
-            [ (n, if S.member n allCaptured then C.AllocGlobal else C.AllocLocal, Ann (t, e))
+            [ if S.member n allCaptured
+                then (bindingsSubsts M.! n, C.AllocGlobal, Ann (t, e))
+                else (n, C.AllocLocal, Ann (t, e))
             | (n, Ann (t, e)) <- bindings'
             ]
    

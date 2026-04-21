@@ -218,28 +218,44 @@ Shadow Stack: In complex modules, it is common to reserve the first few kilobyte
 -- globals scalars are WASM globals, global arrays go in linear mem
 -- alignment is important
 
+-- QUESTION: do we decide whether we return something on stack vs shadow stack etc here or do we leave it up to each backend?
+
 data Config = Config
   { smallArrayMaxLength :: Int -- | Small arrays are returned on the stack
   }
 
-data Func = Func
-  { allocations :: [(Type, Idx)]
+data ProgramFunc = ProgramFunc
+  { allocations :: Map Ident Type
   , instructions :: [Instruction]
   , needsShadowStack :: Bool
   } deriving Show
 
 data Program = Program
-  { globalAllocations :: [(Type, Idx)]
-  , funcMap :: Map FuncRef Func
-  , tickFunc :: Func
+  { globalAllocations :: Map Ident Type
+  , funcMap :: Map FuncRef ProgramFunc
+  , tickFunc :: ProgramFunc
   } deriving Show
+
+type ExpA = Ann Type Expr
 
 type CodegenM = ST.State ()
 
-codegen :: DefuncMap (Ann Type) -> Ann Type Expr -> CodegenM Program
-codegen = undefined
+-- innerJoin :: Applicative f => Ord k => Map k (f a) -> Map k (f b) -> Map k (f (a, b))
+-- innerJoin = M.intersectionWith (\fa fb -> (,) <$> fa <*> fb)
+
+codegen :: Config -> DefuncMap (Ann Type) -> ExpA -> CodegenM Program
+codegen cfg dfm = undefined
   where
-    collectLamAllocations :: C.LamAnn (Ann Type Expr) -> ([Type], [Type])
+    needsStackMap :: Map FuncRef Bool
+    needsStackMap = fmap funcNeedsStack dfm.funcMap
+      where
+        funcNeedsStack (C.LamAnn typ _ bindings body) = or
+          [ C.sizeOfType typ > cfg.smallArrayMaxLength
+          , or [ M.findWithDefault False fr needsStackMap | Func fr <- universe body ]
+          , or [ M.findWithDefault False fr needsStackMap | (_, _, bbody) <- bindings, Func fr <- universe bbody ]
+          ]
+
+    collectLamAllocations :: C.LamAnn ExpA -> ([Type], [Type])
     collectLamAllocations (C.LamAnn typ _ bindings _) = mconcat
       [ case region of
           C.AllocLocal -> ([t], [])
