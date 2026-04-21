@@ -60,6 +60,12 @@ mapAnn h = runIdentity . mapAnnM (fmap pure h)
 pile :: Functor f => Ann a f -> (f (Ann a f) -> b) -> Ann (a, b) f
 pile (Ann (a, e)) f = Ann ((a, f e), fmap (flip pile f) e)
 
+pileM :: (Traversable f, Monad m) => Ann a f -> (f (Ann a f) -> m b) -> m (Ann (a, b) f)
+pileM (Ann (a, e)) f = do
+  b <- f e
+  e' <- traverse (\x -> pileM x f) e
+  pure $ Ann ((a, b), e')
+
 -- Ann -------------------------------------------------------------------------
 
 data Dag k f = Node (f (Dag k f)) | Key k
