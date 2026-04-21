@@ -1,4 +1,5 @@
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE RecursiveDo #-}
 
 module OSC.Transforms.AnnBind where
 
@@ -17,7 +18,7 @@ import OSC.Expr.Functors
 import OSC.Expr.Comp (Ident (..), Type, paramTypes)
 import qualified OSC.Expr.FoldSel as SRC
 import qualified OSC.Expr.Comp as C
-import OSC.Expr.AnnBind
+import OSC.Expr.AnnBind hiding (const)
 
 --------------------------------------------------------------------------------
 
@@ -159,7 +160,7 @@ annPure_ = pileM' purity
     purity (PLamAnn typ params bindings body) = do
       -- Process bindings with mdo to allow forward references
       env <- R.ask
-      let processBindings = do
+      let processBindings = mdo
             bindings' <- sequence
               [ do
                   e' <- R.local (const bindingEnv) (annPure_ e)
@@ -178,7 +179,7 @@ annPure_ = pileM' purity
     purity (PRecAnn typ delay param bindings body) = do
       -- RecAnn is always impure, but we still need to process subexpressions
       env <- R.ask
-      let processBindings = do
+      let processBindings = mdo
             bindings' <- sequence
               [ do
                   e' <- R.local (const bindingEnv) (annPure_ e)
