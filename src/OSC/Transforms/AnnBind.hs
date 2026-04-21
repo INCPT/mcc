@@ -130,81 +130,41 @@ annPure :: Ann a Expr -> Ann (a, Pure) Expr
 annPure expr = flip R.runReader mempty $ annPure_ expr
 
 annPure_ :: Ann a Expr -> PureM (Ann (a, Pure) Expr)
-annPure_ = pileM' purity
+annPure_ ann = flip pileM ann $ \expr -> case expr of
+    PConst _ -> pure Pure
+    
+    PArr elems -> pure $ extract elems
+    
+    PFoldedSelectL elems idx -> pure $ extract (idx:elems)
+    
+    PFoldedSelectR expr elems -> pure $ extract (expr:elems)
+    
+    PLamAnn typ params bindings body -> do
+      env <- R.ask
+      mdo
+        let bindingEnv = env <> M.fromList [ (n, snd $ fst $ unAnn e') | (n, _, e') <- bindings' ]
+        bindings' <- sequence
+          [ do
+              e' <- R.local (const bindingEnv) (annPure_ e)
+              pure (n, region, e')
+          | (n, region, e) <- bindings
+          ]
+        body' <- R.local (const bindingEnv) (annPure_ body)
+        
+        let p = extract [ e' | (_, _, e') <- bindings' ] <> extract [body']
+        pure p
+    
+    PRecAnn typ delay param bindings body -> do
+      -- RecAnn is always impure
+      pure Impure
+    
+    POp _ lhs rhs -> pure $ extract [lhs, rhs]
+    
+    PVar ident -> do
+      env <- R.ask
+      pure $ M.findWithDefault Pure ident env
+    
+    PApp func args -> pure $ extract (func:args)
   where
-    pileM' :: (Traversable f, Monad m) => (f (Ann a f) -> m (b, f (Ann (a, b) f))) -> Ann a f -> m (Ann (a, b) f)
-    pileM' f (Ann (a, e)) = do
-      (b, e') <- f e
-      pure $ Ann ((a, b), e')
-
     extract :: [Ann (a, Pure) Expr] -> Pure
     extract = foldMap (snd . fst . unAnn)
-
-    purity :: Expr (Ann a Expr) -> PureM (Pure, Expr (Ann (a, Pure) Expr))
-    purity (PConst n) = pure (Pure, PConst n)
-    
-    purity (PArr elems) = do
-      elems' <- traverse annPure_ elems
-      pure (extract elems', PArr elems')
-    
-    purity (PFoldedSelectL elems idx) = do
-      elems' <- traverse annPure_ elems
-      idx' <- annPure_ idx
-      pure (extract (idx':elems'), PFoldedSelectL elems' idx')
-    
-    purity (PFoldedSelectR expr elems) = do
-      expr' <- annPure_ expr
-      elems' <- traverse annPure_ elems
-      pure (extract (expr':elems'), PFoldedSelectR expr' elems')
-    
-    purity (PLamAnn typ params bindings body) = do
-      -- Process bindings with mdo to allow forward references
-      env <- R.ask
-      let processBindings = mdo
-            bindings' <- sequence
-              [ do
-                  e' <- R.local (const bindingEnv) (annPure_ e)
-                  pure (n, region, e')
-              | (n, region, e) <- bindings
-              ]
-            let bindingEnv = env <> M.fromList [ (n, snd $ fst $ unAnn e') | (n, _, e') <- bindings' ]
-            pure (bindings', bindingEnv)
-      
-      (bindings', bindingEnv) <- processBindings
-      body' <- R.local (const bindingEnv) (annPure_ body)
-      
-      let p = extract [ e' | (_, _, e') <- bindings' ] <> extract [body']
-      pure (p, PLamAnn typ params bindings' body')
-    
-    purity (PRecAnn typ delay param bindings body) = do
-      -- RecAnn is always impure, but we still need to process subexpressions
-      env <- R.ask
-      let processBindings = mdo
-            bindings' <- sequence
-              [ do
-                  e' <- R.local (const bindingEnv) (annPure_ e)
-                  pure (n, region, e')
-              | (n, region, e) <- bindings
-              ]
-            let bindingEnv = env <> M.fromList [ (n, snd $ fst $ unAnn e') | (n, _, e') <- bindings' ]
-            pure (bindings', bindingEnv)
-      
-      (bindings', bindingEnv) <- processBindings
-      body' <- R.local (const bindingEnv) (annPure_ body)
-      
-      pure (Impure, PRecAnn typ delay param bindings' body')
-    
-    purity (POp op lhs rhs) = do
-      lhs' <- annPure_ lhs
-      rhs' <- annPure_ rhs
-      pure (extract [lhs', rhs'], POp op lhs' rhs')
-    
-    purity (PVar ident) = do
-      env <- R.ask
-      let p = M.findWithDefault Pure ident env
-      pure (p, PVar ident)
-    
-    purity (PApp func args) = do
-      func' <- annPure_ func
-      args' <- traverse annPure_ args
-      pure (extract (func':args'), PApp func' args')
