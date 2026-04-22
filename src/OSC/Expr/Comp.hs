@@ -47,13 +47,26 @@ instance Pretty Type where
       , pretty ret
       ]
 
+baseType :: Type -> TNumber
+baseType (TNumber t) = t
+baseType (TArr t _) = baseType t
+baseType (TLam _ _) = TI32
+
 sizeOfType :: Type -> Int
 sizeOfType (TNumber TI32) = 4
 sizeOfType (TNumber TF32) = 4
 sizeOfType (TNumber TI64) = 8
 sizeOfType (TNumber TF64) = 8
 sizeOfType (TArr t dim) = sizeOfType t * dim
-sizeOfType (TLam _ _) = sizeOfType (TNumber TI32) -- TODO PLATFORM: funcref is I32
+sizeOfType (TLam _ _) = sizeOfType (TNumber TI32)
+
+elemCountOfType :: Type -> Int
+elemCountOfType (TNumber TI32) = 1
+elemCountOfType (TNumber TF32) = 1
+elemCountOfType (TNumber TI64) = 1
+elemCountOfType (TNumber TF64) = 1
+elemCountOfType (TArr t dim) = sizeOfType t * dim
+elemCountOfType (TLam _ _) = 1
 
 returnType :: Type -> Type
 returnType (TLam _ t) = t
