@@ -1,3 +1,4 @@
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedLabels #-}
@@ -33,6 +34,8 @@ instance (l ~ x) => IsLabel l (Label x) where
   fromLabel = Label
 
 data Record (fields :: [(Symbol, Type)]) = Record (M.Map String Dynamic)
+
+type Extend (k :: Symbol) v r r' = (r' ~ '(k, v):r, HasNot k r)
 
 empty :: Record '[]
 empty = Record mempty

@@ -41,7 +41,6 @@ dependencies:
     - parser-combinators
     - transformers
     - template-haskell
-    - yarl
 
 default-extensions:
   - DeriveTraversable

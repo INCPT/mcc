@@ -1,6 +1,7 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE TypeOperators #-}
@@ -16,6 +17,7 @@ import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Set (Set)
 import qualified Data.Set as S
+import Data.Typeable (Typeable)
 
 import OSC.Expr.Bitraversable
 import OSC.Expr.Functors
@@ -24,7 +26,7 @@ import qualified OSC.Expr.FoldSel as SRC
 import qualified OSC.Expr.Comp as C
 import OSC.Expr.AnnBind hiding (const)
 
-import Data.Records.Yarl.LinkedList
+import OSC.Records
 import GHC.Records (HasField)
 
 --------------------------------------------------------------------------------
@@ -59,7 +61,7 @@ withSubsts names f = do
       n <- ST.state $ \n -> (n, n + 1)
       pure $ Captured n
 
-annCapturedBindings_ :: forall r. HasField "type" r Type => Ann r SRC.Expr -> CaptureM (Ann r Expr)
+annCapturedBindings_ :: Ann Type SRC.Expr -> CaptureM (Ann Type Expr)
 annCapturedBindings_ = bitraverse (rtraverse . trav) diff
   where
     trav _ (SRC.PVar n) = capture n $ \subst -> case subst of
@@ -67,7 +69,7 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
       Nothing -> PVar n
     trav rmap e = rmap e
 
-    diff :: Diff (Ann r SRC.Expr) -> CaptureM (Expr (Ann r Expr))
+    diff :: Diff (Ann Type SRC.Expr) -> CaptureM (Expr (Ann Type Expr))
     diff (PLam typ params bindings body) = do
       ((bindings', body'), lkupSubst) <- withSubsts (params <> fmap fst bindings) $ do
         bindings' <- sequenceA [ (n,) <$> annCapturedBindings_ bbody | (n, bbody) <- bindings ]
@@ -107,26 +109,24 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
    
       pure $ PRecAnn typ delay paramSubst bindings'' body'
 
-annCapturedBindings :: Ann Type SRC.Expr -> Ann Type Expr
-annCapturedBindings = fst . flip ST.evalState 0 . W.runWriterT . flip R.runReaderT mempty . annCapturedBindings_
+-- annCapturedBindings :: Ann Type SRC.Expr -> Ann Type Expr
+-- annCapturedBindings = fst . flip ST.evalState 0 . W.runWriterT . flip R.runReaderT mempty . annCapturedBindings_
 
 --------------------------------------------------------------------------------
-
-type Ext l a r r' = (HasNotField l r, r' ~ (Field l a):r)
 
 type AnnR r f = Ann (Record r) f
 
 type PureM = R.Reader (Map Ident Pure)
 
-(~>) :: Ext "pure" Pure r r' => Pure -> Record r -> Record r'
-p ~> r = Field p :> r
+(~>) :: Extend "pure" Pure r r' => Pure -> Record r -> Record r'
+p ~> r = extend #pure p r
 
-recAnnM :: Ext "pure" b r r' => Monoid b => Traversable f => Monad m => (Ann (Record r) f -> m (Ann (Record r') f)) -> Ann (Record r) f -> m (Ann (Record r') f)
+recAnnM :: Extend "pure" b r r' => Monoid b => Typeable b => Traversable f => Monad m => (Ann (Record r) f -> m (Ann (Record r') f)) -> Ann (Record r) f -> m (Ann (Record r') f)
 recAnnM f (Ann (r, expr)) = do
   expr' <- traverse (recAnnM f) expr
-  pure $ Ann (Field (foldMap ((.pure) . fst . unAnn) expr') :> r, expr')
+  pure $ Ann (extend #pure (foldMap ((.pure) . fst . unAnn) expr') r, expr')
 
-annPure_ :: Ext "pure" Pure r r' => AnnR r Expr -> PureM (AnnR r' Expr)
+annPure_ :: Extend "pure" Pure r r' => AnnR r Expr -> PureM (AnnR r' Expr)
 annPure_ ann@(Ann (r, expr)) = case expr of
     PConst n -> pure $ Ann (Pure ~> r, PConst n)
 
