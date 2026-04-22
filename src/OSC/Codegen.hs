@@ -39,22 +39,20 @@ import OSC.Expr.Defunc
 
 import Debug.Trace
 
-data Idx = IdxLocal Int | IdxGlobal Int deriving (Eq, Ord)
-
-instance Show Idx where
-  show (IdxLocal i) = "l" <> show i
-  show (IdxGlobal i) = "g" <> show i
+data Location = Global Int | Local Int deriving (Eq, Ord, Show)
 
 data LRef
   = LRet
-  | LVar Ident
-  | LProj RRef RRef 
+  | LPushStack
+  | LVar Location
+  | LProj LRef {- index -} RRef 
   deriving Show
 
 data RRef
   = RConst Number
-  | RVar Ident
-  | RProj RRef RRef
+  | RVar Location
+  | RPopStack
+  | RProj RRef {- index -} RRef
   | RFuncRef FuncRef
   deriving Show
 
@@ -77,11 +75,11 @@ showType (TLam params retType) =
 --   show (RFuncRefRef idx) = show idx <> ":funcref"
 
 data Instruction
-  = SCopy Type {- dest -} LRef {- source -} RRef
-  | SIf RRef [Instruction] [Instruction]
-  | SCall {- return ref -} LRef {- funcref -} RRef {- args -} [RRef]
-  | SBinOp Op {- result -} LRef {- a -} RRef {- b -} RRef
-  | SFor {- counter -} RRef {- initial -} Int {- steps -} Int {- step -} Int [Instruction]
+  = ICopy Type {- dest -} LRef {- source -} RRef
+  | IIf RRef [Instruction] [Instruction]
+  | ICall {- return ref -} LRef {- funcref -} RRef {- args -} [RRef]
+  | IBinOp Op {- result -} LRef {- a -} RRef {- b -} RRef
+  | IFor {- counter -} RRef {- initial -} Int {- steps -} Int {- step -} Int [Instruction]
   deriving Show
 
 -- instance Show Instruction where
@@ -152,10 +150,22 @@ data Program = Program
   , tickFunc :: ProgramFunc
   } deriving Show
 
-type CodegenM = ST.State ()
+type CodegenM = R.ReaderT (Map Ident Location) (ST.StateT (Int, Map Location Type) (W.Writer [Instruction]))
 
 -- innerJoin :: Applicative f => Ord k => Map k (f a) -> Map k (f b) -> Map k (f (a, b))
 -- innerJoin = M.intersectionWith (\fa fb -> (,) <$> fa <*> fb)
+
+copyRef :: Type -> LRef -> RRef -> CodegenM ()
+copyRef t dst src = lift $ lift $ W.tell [ICopy t dst src]
+
+binOp :: Op -> LRef -> RRef -> RRef -> CodegenM ()
+binOp op dest a b = lift $ lift $ W.tell [IBinOp op dest a b]
+
+call :: LRef -> RRef -> [RRef] -> CodegenM ()
+call dest funcRef args = lift $ lift $ W.tell [ICall dest funcRef args]
+
+alloc :: Type -> CodegenM Location
+alloc typ = lift $ ST.state $ \(idx, m) -> (Local idx, (idx + 1, M.insert (Local idx) typ m))
 
 codegen :: DefuncMap (Ann Type) -> Ann Type Expr -> CodegenM Program
 codegen dfm = undefined
@@ -168,9 +178,41 @@ codegen dfm = undefined
       | (n, region, Ann (t, _)) <- bindings
       ]
     
-    gen :: C.LamAnn (Ann Type Expr) -> W.Writer [Instruction] ()
-    gen (C.LamAnn typ _ bindings body) = undefined
+    gen :: LRef -> Ann Type Expr -> CodegenM ()
+    gen ret (Ann (typ, PConst n)) = copyRef typ ret (RConst n)
+    gen ret (Ann (typ, PVar n)) = do
+      env <- R.ask
+      copyRef typ ret (RVar (env M.! n))
+    gen ret (Ann (_, PArr elems)) = sequence_
+      [ gen (LProj ret (RConst (C.I32 i))) elem
+      | (i, elem) <- zip [0..] elems
+      ]
+    gen ret (Ann (_, POp op a b)) = do
+      -- Values must be simple so we just push on stack (in reverse order)
+      gen LPushStack b
+      gen LPushStack a
+      binOp op ret RPopStack RPopStack
+    gen ret (Ann (typ, (PApp (Ann (_, PFunc fr)) args))) = do
+      -- Push arguments onto stack in reverse order
+      rargs <- sequence
+        [ do
+            (larg, rarg) <- case atyp of
+              TNumber _ -> pure (LPushStack, RPopStack)
+              TArr _ _ -> do
+                loc <- alloc atyp
+                pure (LVar loc, RVar loc)
+              TLam _ _ -> do
+                loc <- alloc atyp
+                pure (LVar loc, RVar loc)
+            gen larg arg
+            pure rarg
+        | arg@(Ann (atyp, _)) <- reverse args
+        ]
 
+      call ret (RFuncRef fr) rargs
+    gen ret (Ann (typ, PFunc fr)) = copyRef typ ret (RFuncRef fr)
+    gen _ _ = undefined
+    
 {-
 
 data Env = Env
