@@ -59,7 +59,7 @@ withSubsts names f = do
       n <- ST.state $ \n -> (n, n + 1)
       pure $ Captured n
 
-annCapturedBindings_ :: Ann Type SRC.Expr -> CaptureM (Ann Type Expr)
+annCapturedBindings_ :: forall r. HasField "type" r Type => Ann r SRC.Expr -> CaptureM (Ann r Expr)
 annCapturedBindings_ = bitraverse (rtraverse . trav) diff
   where
     trav _ (SRC.PVar n) = capture n $ \subst -> case subst of
@@ -67,7 +67,7 @@ annCapturedBindings_ = bitraverse (rtraverse . trav) diff
       Nothing -> PVar n
     trav rmap e = rmap e
 
-    diff :: Diff (Ann Type SRC.Expr) -> CaptureM (Expr (Ann Type Expr))
+    diff :: Diff (Ann r SRC.Expr) -> CaptureM (Expr (Ann r Expr))
     diff (PLam typ params bindings body) = do
       ((bindings', body'), lkupSubst) <- withSubsts (params <> fmap fst bindings) $ do
         bindings' <- sequenceA [ (n,) <$> annCapturedBindings_ bbody | (n, bbody) <- bindings ]

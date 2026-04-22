@@ -55,6 +55,7 @@ library
       OSC.Expr.Interpret
       OSC.Expr.TH
       OSC.Pretty
+      OSC.Records
       OSC.Transforms.AnnBind
       OSC.Transforms.Defunc
       OSC.Transforms.FoldSel
