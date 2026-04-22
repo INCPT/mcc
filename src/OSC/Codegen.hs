@@ -45,19 +45,18 @@ instance Show Idx where
   show (IdxLocal i) = "l" <> show i
   show (IdxGlobal i) = "g" <> show i
 
-data Ref 
-  = RArg Int
-  | RRet
+data LRef
+  = LRet
+  | LVar Ident
+  | LProj RRef RRef 
+  deriving Show
 
-  | RConst Number
-
-  | RVar Idx
-
-  | RArr Type Idx
-  | RProj {- source/dest -} Ref {- index -} Ref -- projection from or into array
-
-  | RFuncRef FuncRef -- index into a global function table
-  | RFuncRefRef Idx -- local or global var index with index into global function table (e.g. pointer to a function pointer)
+data RRef
+  = RConst Number
+  | RVar Ident
+  | RProj RRef RRef
+  | RFuncRef FuncRef
+  deriving Show
 
 showType :: Type -> String
 showType (TNumber TI32) = "i32"
@@ -69,52 +68,52 @@ showType (TLam [] retType) = "() -> " <> showType retType
 showType (TLam params retType) = 
   "(" <> intercalate ", " (map showType params) <> ") -> " <> showType retType
 
-instance Show Ref where
-  show (RArg i) = "arg" <> show i
-  show RRet = "ret"
-  show (RConst n) = show n
-  show (RVar idx) = show idx
-  show (RArr t idx) = show idx <> ":" <> showType t
-  show (RProj ref idx) = show ref <> "[" <> show idx <> "]"
-  show (RFuncRef (FuncRef i)) = "f" <> show i
-  show (RFuncRefRef idx) = show idx <> ":funcref"
+-- instance Show Ref where
+--   show RRet = "ret"
+--   show (RConst n) = show n
+--   show (RVar idx) = show idx
+--   show (RProj ref idx) = show ref <> "[" <> show idx <> "]"
+--   show (RFuncRef (FuncRef i)) = "f" <> show i
+--   show (RFuncRefRef idx) = show idx <> ":funcref"
 
 data Instruction
-  = SCopy Type {- source -} Ref {- dest -} Ref
-  | SIf Ref [Instruction] [Instruction]
-  | SCall {- funcref -} Ref {- args -} [Ref] {- return ref -} Ref
-  | SBinOp Op {- a -} Ref {- b -} Ref {- result -} Ref
-  | SFor {- counter -} Ref {- initial -} Int {- steps -} Int {- step -} Int [Instruction]
+  = SCopy Type {- dest -} LRef {- source -} RRef
+  | SIf RRef [Instruction] [Instruction]
+  | SCall {- return ref -} LRef {- funcref -} RRef {- args -} [RRef]
+  | SBinOp Op {- result -} LRef {- a -} RRef {- b -} RRef
+  | SFor {- counter -} RRef {- initial -} Int {- steps -} Int {- step -} Int [Instruction]
+  deriving Show
 
-instance Show Instruction where
-  show (SCopy t src dst) = show dst <> " := " <> show src
-  show (SIf cond thn els) = mconcat
-    [ "if " <> show cond <> " {\n"
-    , showBlock thn
-    , "} else {\n"
-    , showBlock els
-    , "}"
-    ]
-  show (SCall funcRef args ret) = show ret <> " := " <> show funcRef <> "(" <> intercalate ", " (fmap show args) <> ")"
-  show (SBinOp op a b res) = show res <> " := " <> show a <> " " <> show op <> " " <> show b
-  show (SFor counter initial steps step body) = mconcat
-    [ "for " <> show counter <> " = " <> show initial <> " to " <> show steps <> " step " <> show step <> " {\n"
-    , showBlock body
-    , "}"
-    ]
-
-showBlock :: [Instruction] -> String
-showBlock stmts = mconcat [ "  " <> line <> "\n" | stmt <- stmts, line <- lines (show stmt) ]
+-- instance Show Instruction where
+--   show (SCopy t src dst) = show dst <> " := " <> show src
+--   show (SIf cond thn els) = mconcat
+--     [ "if " <> show cond <> " {\n"
+--     , showBlock thn
+--     , "} else {\n"
+--     , showBlock els
+--     , "}"
+--     ]
+--   show (SCall funcRef args ret) = show ret <> " := " <> show funcRef <> "(" <> intercalate ", " (fmap show args) <> ")"
+--   show (SBinOp op a b res) = show res <> " := " <> show a <> " " <> show op <> " " <> show b
+--   show (SFor counter initial steps step body) = mconcat
+--     [ "for " <> show counter <> " = " <> show initial <> " to " <> show steps <> " step " <> show step <> " {\n"
+--     , showBlock body
+--     , "}"
+--     ]
+-- 
+-- showBlock :: [Instruction] -> String
+-- showBlock stmts = mconcat [ "  " <> line <> "\n" | stmt <- stmts, line <- lines (show stmt) ]
 
 -- PIPELINE --------------------------------------------------------------------
 
+---- [] compile time constant folding (e.g. $voices etc)
 ---- [-] typecheck [-range propagation]
 ---- [] float independent computations out of rec blocks
 ---- [] until fixpoint
 ------ [] fusion/simplifications
--------- [] eval small SOACs
+-------- [] eval or unroll small SOACs (when unrolling compute the total number of iterations (e.g. nested SOACs can explode))
 -------- [] calculate const expressions
--------- [] [a, b, c][1] == b
+-------- [] elim static indices [a, b, c][1] == b
 -------- [] rec |...| 5.0 == 5.0
 -------- [] (|a, b| a + b)(x, y) == x + y
 -------- [] fuse SOACs
@@ -122,17 +121,16 @@ showBlock stmts = mconcat [ "  " <> line <> "\n" | stmt <- stmts, line <- lines 
 ------ [] dead code elim
 ------ [] CSE (expression should hash to the same hash if e.g. bindings are reordered)
 ------ [] inline (awlays inline if something used only once, otherwise heuristic)
----- [+] fold selections
----- [+] ann binds
----- [] float pure expression to the topmost lambda that contains them
+---- [] float pure expression to the topmost lambda that contains them (e.g. constant arrays will be allocated at the topmost level and become right folded selections)
 ---- [] float KR/AR to the topmost lambda that contains them
+---- [+] ann binds
+---- [+] fold selections
 ---- [] backend
 ------ [] WASM
+-------- [] arrays with constants go into data sections
 -------- [] simple return values on stack, arrays in linear mem
 -------- [] assign array allocations
----------- [] (depends on the complexity of element computations; if sum cost of instructions/elements < log 2 * legnth elements * cost of branch; then compute all + dynamic offset is better, else binary if)
----------- [] if array captured, then alloc upfront
----------- [] otherwise - use nested ifs if elems < N (8-16?)
+---------- [] if elems < N (8-16?) - nested ifs
 ---------- [] otherwise - br_table jumps
 -------- [] allocate globals or locals per function (align at 4/8 bytes)
 -------- [] propagate shadow stack pointers to functions that need it (e.g. if they return an array or a binding is an array or a subfunction returns an array (also transitively))
@@ -149,28 +147,29 @@ data Value = VNumber Number | VArr [Value]
   deriving Show
 
 data Program = Program
-  { globals :: Map Ident (Type, [Instruction])
+  { globals :: Map Ident Type
   , funcMap :: Map FuncRef ProgramFunc
   , tickFunc :: ProgramFunc
   } deriving Show
-
-type Ann' = Ann (Type, AB.Pure)
 
 type CodegenM = ST.State ()
 
 -- innerJoin :: Applicative f => Ord k => Map k (f a) -> Map k (f b) -> Map k (f (a, b))
 -- innerJoin = M.intersectionWith (\fa fb -> (,) <$> fa <*> fb)
 
-codegen :: DefuncMap Ann' -> Ann' Expr -> CodegenM Program
+codegen :: DefuncMap (Ann Type) -> Ann Type Expr -> CodegenM Program
 codegen dfm = undefined
   where
-    collectLamAllocations :: C.LamAnn (Ann' Expr) -> ([Type], [Type])
+    collectLamAllocations :: C.LamAnn (Ann Type Expr) -> (Map Ident Type, Map Ident Type)
     collectLamAllocations (C.LamAnn typ _ bindings _) = mconcat
       [ case region of
-          C.AllocLocal -> ([t], [])
-          C.AllocGlobal -> ([], [t])
-      | (_, region, Ann (t, _)) <- bindings
+          C.AllocLocal -> (M.singleton n t, mempty)
+          C.AllocGlobal -> (mempty, M.singleton n t)
+      | (n, region, Ann (t, _)) <- bindings
       ]
+    
+    gen :: C.LamAnn (Ann Type Expr) -> W.Writer [Instruction] ()
+    gen (C.LamAnn typ _ bindings body) = undefined
 
 {-
 
