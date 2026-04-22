@@ -1,5 +1,9 @@
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE TypeOperators #-}
 
 module OSC.Transforms.AnnBind where
 
@@ -19,6 +23,9 @@ import OSC.Expr.Comp (Ident (..), Type, paramTypes)
 import qualified OSC.Expr.FoldSel as SRC
 import qualified OSC.Expr.Comp as C
 import OSC.Expr.AnnBind hiding (const)
+
+import Data.Records.Yarl.LinkedList
+import GHC.Records (HasField)
 
 --------------------------------------------------------------------------------
 
@@ -105,16 +112,28 @@ annCapturedBindings = fst . flip ST.evalState 0 . W.runWriterT . flip R.runReade
 
 --------------------------------------------------------------------------------
 
+type Ext l a r r' = (HasNotField l r, r' ~ (Field l a):r)
+
+type AnnR r f = Ann (Record r) f
+
 type PureM = R.Reader (Map Ident Pure)
 
-annPure_ :: Ann a Expr -> PureM (Ann (a, Pure) Expr)
-annPure_ ann@(Ann (a, expr)) = case expr of
-    PConst n -> pure $ Ann ((a, Pure), PConst n)
+(~>) :: Ext "pure" Pure r r' => Pure -> Record r -> Record r'
+p ~> r = Field p :> r
+
+recAnnM :: Ext "pure" b r r' => Monoid b => Traversable f => Monad m => (Ann (Record r) f -> m (Ann (Record r') f)) -> Ann (Record r) f -> m (Ann (Record r') f)
+recAnnM f (Ann (r, expr)) = do
+  expr' <- traverse (recAnnM f) expr
+  pure $ Ann (Field (foldMap ((.pure) . fst . unAnn) expr') :> r, expr')
+
+annPure_ :: Ext "pure" Pure r r' => AnnR r Expr -> PureM (AnnR r' Expr)
+annPure_ ann@(Ann (r, expr)) = case expr of
+    PConst n -> pure $ Ann (Pure ~> r, PConst n)
 
     PLamAnn typ params bindings body -> do
       env <- R.ask
       mdo
-        let bindingEnv = env <> M.fromList [ (n, snd $ fst $ unAnn e') | (n, _, e') <- bindings' ]
+        let bindingEnv = env <> M.fromList [ (n, (fst $ unAnn e').pure) | (n, _, e') <- bindings' ]
         bindings' <- sequence
           [ do
               e' <- R.local (const bindingEnv) (annPure_ e)
@@ -124,12 +143,12 @@ annPure_ ann@(Ann (a, expr)) = case expr of
         body' <- R.local (const bindingEnv) (annPure_ body)
         
         let p = extract [ e' | (_, _, e') <- bindings' ] <> extract [body']
-        pure $ Ann ((a, p), PLamAnn typ params bindings' body')
+        pure $ Ann (p ~> r, PLamAnn typ params bindings' body')
 
     PRecAnn typ delay param bindings body -> do
       env <- R.ask
       mdo
-        let bindingEnv = env <> M.fromList [ (n, snd $ fst $ unAnn e') | (n, _, e') <- bindings' ]
+        let bindingEnv = env <> M.fromList [ (n, (fst $ unAnn e').pure) | (n, _, e') <- bindings' ]
         bindings' <- sequence
           [ do
               e' <- R.local (const bindingEnv) (annPure_ e)
@@ -139,18 +158,18 @@ annPure_ ann@(Ann (a, expr)) = case expr of
         body' <- R.local (const bindingEnv) (annPure_ body)
         
         -- RecAnn is always impure
-        pure $ Ann ((a, Impure), PRecAnn typ delay param bindings' body')
+        pure $ Ann (Impure ~> r, PRecAnn typ delay param bindings' body')
 
     PVar ident -> do
       env <- R.ask
       let p = M.findWithDefault Pure ident env
-      pure $ Ann ((a, p), PVar ident)
+      pure $ Ann (p ~> r, PVar ident)
     
     -- Generic case: use tupAnnM-like traversal
-    _ -> tupAnnM annPure_ ann
+    _ -> recAnnM annPure_ ann
   where
-    extract :: [Ann (a, Pure) Expr] -> Pure
-    extract = foldMap (snd . fst . unAnn)
+    extract :: HasField "pure" r Pure => [Ann r Expr] -> Pure
+    extract = foldMap ((.pure) . fst . unAnn)
 
-annPure :: Ann a Expr -> Ann (a, Pure) Expr
-annPure expr = flip R.runReader mempty $ annPure_ expr
+-- annPure :: Ann a Expr -> Ann (a, Pure) Expr
+-- annPure expr = flip R.runReader mempty $ annPure_ expr

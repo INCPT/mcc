@@ -7,6 +7,7 @@ packages:
 extra-deps:
 - github: pkamenarsky/compdata
   commit: f655b264a9fc932aa0654b5becab1520ccfbbb4f
+- yarl-0.1.1.0@sha256:ae247595070d317e9d2241acc7ea3e33e34519e9b0dbd2150d8d80d15f34c41f,3519
 # until they merge bugfix into hackage we need to use the version on github
 # - llvm-hs-pure-7.0.0
 # - github: llvm-hs/llvm-hs

@@ -103,6 +103,7 @@ library
     , transformers
     , uniplate
     , unix
+    , yarl
   default-language: Haskell2010
 
 executable mcc
@@ -156,4 +157,5 @@ executable mcc
     , transformers
     , uniplate
     , unix
+    , yarl
   default-language: Haskell2010
