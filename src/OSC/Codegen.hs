@@ -124,10 +124,9 @@ showBlock stmts = mconcat [ "  " <> line <> "\n" | stmt <- stmts, line <- lines 
 ------ [] inline (awlays inline if something used only once, otherwise heuristic)
 ---- [+] fold selections
 ---- [+] ann binds
----- [] KR/AR propagation/float to the most top
----- [+] pureness propagation (this is so that when simplifications are turned off in some cases (like a big function that might be quicker to compute at runtime than simplified by the compiler) then everything still works)
+---- [] float pure expression to the topmost lambda that contains them
+---- [] float KR/AR to the topmost lambda that contains them
 ---- [] backend
------- [] precompute pure arrays once at init time
 ------ [] WASM
 -------- [] simple return values on stack, arrays in linear mem
 -------- [] assign array allocations

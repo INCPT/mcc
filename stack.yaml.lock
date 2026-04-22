@@ -15,13 +15,6 @@ packages:
     version: 0.13.1
   original:
     url: https://github.com/pkamenarsky/compdata/archive/f655b264a9fc932aa0654b5becab1520ccfbbb4f.tar.gz
-- completed:
-    hackage: yarl-0.1.1.0@sha256:ae247595070d317e9d2241acc7ea3e33e34519e9b0dbd2150d8d80d15f34c41f,3519
-    pantry-tree:
-      sha256: ab124052f457e05951a4e068e3db561acee3a83d83f3f6df40c3a1b5cec5029b
-      size: 1030
-  original:
-    hackage: yarl-0.1.1.0@sha256:ae247595070d317e9d2241acc7ea3e33e34519e9b0dbd2150d8d80d15f34c41f,3519
 snapshots:
 - completed:
     sha256: a8cfaae441160430cdde558cb80d4f9d60746e7417b275250e4e0af57ee14f36

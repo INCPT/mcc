@@ -1,14 +1,24 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module OSC.Expr.Functors where
 
 import Data.Functor.Identity (runIdentity)
+import Data.Typeable
 
 import qualified Control.Monad.Reader as R
 import Prettyprinter
+
+import OSC.Records
+
+import GHC.OverloadedLabels
+import GHC.Records
+import GHC.TypeLits
 
 class Corecursive f where
   embed :: a (f a) -> f a
@@ -70,6 +80,19 @@ pileM (Ann (a, e)) f = do
 
 pile :: Functor f => Ann a f -> (f (Ann a f) -> b) -> Ann (a, b) f
 pile (Ann (a, e)) f = Ann ((a, f e), fmap (flip pile f) e)
+
+---
+
+type AnnR r f = Ann (Record r) f
+
+toAnnR :: KnownSymbol k => Traversable f => Extend k ann '[] r => Label k -> Ann ann f -> AnnR r f
+toAnnR k = mapAnn (singleton k)
+
+-- | Record version of tupAnnM
+recAnnM :: Extend k b r r' => KnownSymbol k => Monoid b => Traversable f => Monad m => Label k -> (AnnR r f -> m (AnnR r' f)) -> AnnR r f -> m (AnnR r' f)
+recAnnM k f (Ann (r, expr)) = do
+  expr' <- traverse (recAnnM k f) expr
+  pure $ Ann (extend k (foldMap (get k . fst . unAnn) expr') r, expr')
 
 -- Ann -------------------------------------------------------------------------
 

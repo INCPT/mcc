@@ -1,3 +1,4 @@
+* TODO: arrays which are written to by the imperative code must be marked as impure too
 * TODO array constants get initialized once at the top
 * TODO SOACs: actually probably better to have the "comptime" constructs like map and range translate to loops
 ** otherwise we must interpret the code during compilation, which in an online setting where the compiler is JS or WASM will be slower than executing WASM loops directly
