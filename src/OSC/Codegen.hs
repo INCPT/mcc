@@ -50,7 +50,7 @@ data Ref
 
 data Slice
   = SConst Number
-  | SVar Location {- offset -} Int {- length -} Int
+  | SVar Location {- offset -} (Either Int Location) {- length -} Int
   | SFuncRef FuncRef
   deriving Show
 
@@ -174,40 +174,38 @@ toSlice (RFuncRef fr) = pure $ SFuncRef fr
 toSlice (RVar loc) = do
   (_, m) <- lift $ lift $ ST.get
   case M.lookup loc m of
-    Just typ -> pure $ SVar loc 0 (typeLength typ)
-    Nothing -> error $ "toSlice: unknown location: " ++ show loc
-  where
-    typeLength (TNumber _) = 1
-    typeLength (TArr _ dim) = dim
-    typeLength (TLam _ _) = 1
+    Just typ -> pure $ SVar loc 0 (C.elemCountOfType typ)
+    Nothing -> error $ "toSlice: unknown location: " <> show loc
 toSlice (RProj ref idx innerDim) = do
   slice <- toSlice ref
   idxSlice <- toSlice idx
+
   case (slice, idxSlice) of
-    (SVar loc offset len, SConst (I32 i)) ->
+    (SVar loc offset _, SConst (I32 i)) ->
       pure $ SVar loc (offset + fromIntegral i * innerDim) innerDim
-    (SVar loc offset len, SConst (I64 i)) ->
+    (SVar loc offset _, SConst (I64 i)) ->
       pure $ SVar loc (offset + fromIntegral i * innerDim) innerDim
     _ -> do
       -- Need to compute offset dynamically
-      offsetLoc <- alloc (TNumber TI32)
+      offsetLoc <- allocLoc C.ti32
+      let offsetVar = RVar offsetLoc
+
       case idxSlice of
-        SConst n -> copyRef TI32 (RVar offsetLoc) (RConst n)
-        SVar idxLoc idxOff idxLen -> 
-          copyRef TI32 (RVar offsetLoc) (RVar idxLoc)
+        SConst n -> copyRef offsetVar (RConst n)
+        SVar idxLoc 0 1 -> copyRef offsetVar (RVar idxLoc)
         _ -> error "toSlice: unexpected index slice type"
       
-      binOp Mul (RVar offsetLoc) (RConst $ I32 $ fromIntegral innerDim) (RVar offsetLoc)
+      binOp Mul offsetVar (RConst $ I32 innerDim) offsetVar
       
       case slice of
-        SVar loc offset len -> do
+        SVar loc offset _ -> do
           when (offset /= 0) $ do
-            binOp Add (RVar offsetLoc) (RConst $ I32 $ fromIntegral offset) (RVar offsetLoc)
-          pure $ SVar loc 0 innerDim -- offset computed in offsetLoc
+            binOp Add offsetVar offsetVar (RConst $ I32 offset)
+          pure $ SVar loc undefined innerDim
         _ -> error "toSlice: projection of non-variable slice"
 
-copyRef :: TNumber -> Ref -> Ref -> CodegenM ()
-copyRef typ dst src = do
+copyRef :: Ref -> Ref -> CodegenM ()
+copyRef dst src = do
   undefined
   -- case (dst, src) of
   --   (LVar (PId dst'), RVar (PId src')) -> undefined
@@ -236,8 +234,11 @@ binOp op dest = undefined -- lift $ W.tell [IBinOp op dest]
 call :: Ref -> Ref -> [Ref] -> CodegenM ()
 call dest funcRef = undefined -- lift $ W.tell [ICall dest funcRef]
 
+allocLoc :: Type -> CodegenM Location
+allocLoc typ = lift $ ST.state $ \(idx, m) -> (Local idx, (idx + 1, M.insert (Local idx) typ m))
+
 alloc :: Type -> CodegenM Ref
-alloc typ = fmap RVar $ lift $ ST.state $ \(idx, m) -> (Local idx, (idx + 1, M.insert (Local idx) typ m))
+alloc = fmap RVar . allocLoc
 
 if_ :: Ref -> CodegenM () -> CodegenM () -> CodegenM ()
 if_ cond t e = do
@@ -251,9 +252,6 @@ innerDims :: Type -> [Int]
 innerDims (TArr (TArr t dim) _) = dim:innerDims t
 innerDims (TArr _ _) = [1]
 innerDims _ = error "innerDims"
-
-innerDim :: Type -> Int
-innerDim = head . innerDims
 
 codegen :: DefuncMap (Ann Type) -> Ann Type Expr -> CodegenM Program
 codegen dfm = undefined
@@ -270,7 +268,7 @@ codegen dfm = undefined
       bodyVar <- alloc bodyTyp
       gen bodyVar body
       idxVars <- traverse toStack idxs
-      pure $ foldr (\(idx, dim) body' -> RProj body' idx dim) bodyVar (zip idxVars (innerDims bodyTyp))
+      pure $ foldr (\(idx, dim) body' -> RProj body' idx dim) bodyVar (zip idxVars (scanl1 (*) (innerDims bodyTyp)))
 
     prec param = do
       env <- R.ask
@@ -294,15 +292,17 @@ codegen dfm = undefined
     ---
     
     gen :: Ref -> Ann Type Expr -> CodegenM ()
-    gen ret (Ann (typ, PConst n)) = copyRef (C.baseType typ) ret (RConst n)
-    gen ret (Ann (typ, PFunc fr)) = copyRef (C.baseType typ) ret (RFuncRef fr)
+    gen ret (Ann (_, PConst n)) = copyRef ret (RConst n)
+    gen ret (Ann (_, PFunc fr)) = copyRef ret (RFuncRef fr)
 
-    gen ret (Ann (typ, PVar n)) = R.ask >>= \env -> copyRef (C.baseType typ) ret (env.varMap M.! n)
+    gen ret (Ann (_, PVar n)) = R.ask >>= \env -> copyRef ret (env.varMap M.! n)
 
-    gen ret (Ann (typ, PArr elems)) = sequence_
-      [ gen (RProj ret (RConst (C.I32 i)) (innerDim typ)) elem
-      | (i, elem) <- zip [0..] elems
-      ]
+    gen ret (Ann (typ, PArr elems)) = do
+      let innerDim = product $ innerDims typ
+      sequence_
+        [ gen (RProj ret (RConst (C.I32 i)) innerDim) elem
+        | (i, elem) <- zip [0..] elems
+        ]
 
     gen ret (Ann (_, POp op a b)) = do
       avar <- toStack a
@@ -336,8 +336,8 @@ codegen dfm = undefined
 
       recIf elems 0
 
-    gen ret (Ann (typ, PFoldedSelectR body idxs)) = copyRef (C.baseType typ) ret =<< pfoldedSelectR body idxs
-    gen ret (Ann (typ, (PRec param))) = copyRef (C.baseType typ) ret =<< prec param
+    gen ret (Ann (_, PFoldedSelectR body idxs)) = copyRef ret =<< pfoldedSelectR body idxs
+    gen ret (Ann (_, (PRec param))) = copyRef ret =<< prec param
     
 {-
 
