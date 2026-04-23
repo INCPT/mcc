@@ -129,3 +129,6 @@ universe' = query pure (<>)
 
 universe :: Foldable expr => Recursive f => f expr -> [expr (f expr)]
 universe = fmap project . query pure (<>)
+
+-- innerJoin :: Applicative f => Ord k => Map k (f a) -> Map k (f b) -> Map k (f (a, b))
+-- innerJoin = M.intersectionWith (\fa fb -> (,) <$> fa <*> fb)
