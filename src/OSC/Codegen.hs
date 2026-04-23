@@ -181,28 +181,36 @@ toSlice (RProj ref idx innerDim) = do
   idxSlice <- toSlice idx
 
   case (slice, idxSlice) of
+    -- Constant index with constant offset - compute statically
     (SVar loc (Left offset) _, SConst (I32 i)) ->
       pure $ SVar loc (Left (offset + fromIntegral i * innerDim)) innerDim
     (SVar loc (Left offset) _, SConst (I64 i)) ->
       pure $ SVar loc (Left (offset + fromIntegral i * innerDim)) innerDim
-    _ -> do
-      -- Need to compute offset dynamically
+    
+    -- Dynamic cases - need to compute offset at runtime
+    (SVar loc baseOffset _, _) -> do
       offsetLoc <- allocLoc C.ti32
       let offsetVar = RVar offsetLoc
 
+      -- Load index into offset variable
       case idxSlice of
         SConst n -> copyRef offsetVar (RConst n)
         SVar idxLoc (Left 0) 1 -> copyRef offsetVar (RVar idxLoc)
         _ -> error "toSlice: unexpected index slice type"
       
-      binOp Mul offsetVar (RConst $ I32 innerDim) offsetVar
+      -- Multiply by inner dimension
+      binOp Mul offsetVar (RConst $ I32 $ fromIntegral innerDim) offsetVar
       
-      case slice of
-        SVar loc (Left offset) _ -> do
-          when (offset /= 0) $ do
-            binOp Add offsetVar offsetVar (RConst $ I32 offset)
-          pure $ SVar loc (Right offsetLoc) innerDim
-        _ -> error "toSlice: projection of non-variable slice"
+      -- Add base offset
+      case baseOffset of
+        Left offset -> when (offset /= 0) $ do
+          binOp Add offsetVar (RConst $ I32 $ fromIntegral offset) offsetVar
+        Right baseLoc -> do
+          binOp Add offsetVar (RVar baseLoc) offsetVar
+      
+      pure $ SVar loc (Right offsetLoc) innerDim
+    
+    _ -> error "toSlice: projection of non-variable slice"
 
 copyRef :: Ref -> Ref -> CodegenM ()
 copyRef dst src = do
