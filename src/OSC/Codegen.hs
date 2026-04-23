@@ -195,12 +195,12 @@ toSlice (RProj ref idx innerDim) = do
         SVar idxLoc (Left 0) 1 -> copyRef offsetVar (RVar idxLoc)
         _ -> error "toSlice: unexpected index slice type"
       
-      binOp Mul offsetVar (RConst $ I32 $ fromIntegral innerDim) offsetVar
+      binOp Mul offsetVar (RConst $ I32 innerDim) offsetVar
       
       case slice of
         SVar loc (Left offset) _ -> do
           when (offset /= 0) $ do
-            binOp Add offsetVar offsetVar (RConst $ I32 $ fromIntegral offset)
+            binOp Add offsetVar offsetVar (RConst $ I32 offset)
           pure $ SVar loc (Right offsetLoc) innerDim
         _ -> error "toSlice: projection of non-variable slice"
 
