@@ -155,9 +155,6 @@ data Env = Env
 
 type CodegenM = R.ReaderT Env (W.WriterT [Instruction] (ST.State (Int, Map Location Type)))
 
--- innerJoin :: Applicative f => Ord k => Map k (f a) -> Map k (f b) -> Map k (f (a, b))
--- innerJoin = M.intersectionWith (\fa fb -> (,) <$> fa <*> fb)
-
 -- array[5][6][3]
 -- array[2] :: array[6][3] so slice length is 6 * 3 and offset is 2 * 6 * 3
 -- array[2][4] :: array[3] so slice length is 3 and offset is 2 * 6 * 3 + 4 * 3 or (2 * 6 + 4) * 3
@@ -183,9 +180,9 @@ toSlice (RProj ref idx innerDim) = do
   case (slice, idxSlice) of
     -- Constant index with constant offset - compute statically
     (SVar loc (Left offset) _, SConst (I32 i)) ->
-      pure $ SVar loc (Left (offset + fromIntegral i * innerDim)) innerDim
+      pure $ SVar loc (Left (offset + i * innerDim)) innerDim
     (SVar loc (Left offset) _, SConst (I64 i)) ->
-      pure $ SVar loc (Left (offset + fromIntegral i * innerDim)) innerDim
+      pure $ SVar loc (Left (offset + i * innerDim)) innerDim
     
     -- Dynamic cases - need to compute offset at runtime
     (SVar loc baseOffset _, _) -> do
@@ -199,12 +196,12 @@ toSlice (RProj ref idx innerDim) = do
         _ -> error "toSlice: unexpected index slice type"
       
       -- Multiply by inner dimension
-      binOp Mul offsetVar (RConst $ I32 $ fromIntegral innerDim) offsetVar
+      binOp Mul offsetVar (RConst $ I32 innerDim) offsetVar
       
       -- Add base offset
       case baseOffset of
         Left offset -> when (offset /= 0) $ do
-          binOp Add offsetVar (RConst $ I32 $ fromIntegral offset) offsetVar
+          binOp Add offsetVar (RConst $ I32 offset) offsetVar
         Right baseLoc -> do
           binOp Add offsetVar (RVar baseLoc) offsetVar
       
