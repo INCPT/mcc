@@ -211,33 +211,34 @@ toSlice (RProj ref idx innerDim) = do
 
 copyRef :: Ref -> Ref -> CodegenM ()
 copyRef dst src = do
-  undefined
-  -- case (dst, src) of
-  --   (LVar (PId dst'), RVar (PId src')) -> undefined
-  -- -- TODO
-  -- -- lift $ W.tell [ICopy typ dst undefined src undefined]
-  -- -- offsetLoc <- alloc (TNumber TI32)
-  -- -- restDims <- calcOffset offsetLoc idxs (tail $ arrayDims bodyTyp)
-  -- undefined
-  -- where
-  --   copyRef' typ dst src = lift $ W.tell [ICopy typ dst src]
-
-  --   calcOffset offsetLoc [] dims = pure dims
-  --   calcOffset offsetLoc (idx:idxs) dims@(_:dimr) = do
-  --     gen LPushStack idx
-  --     copyRef' TI32 LPushStack (RConst $ I32 $ product dims)
-  --     binOp Mul LPushStack
-  --     copyRef' TI32 LPushStack (RVar (offsetLoc, sliceOf 0 1))
-  --     binOp Add (LVar offsetLoc)
-  --     calcOffset offsetLoc idxs dimr
-  --   calcOffset _ _ [] = error "calcOffset"
+  dstSlice <- toSlice dst
+  srcSlice <- toSlice src
+  
+  -- Determine the base type from the slice
+  (_, m) <- lift $ lift $ ST.get
+  let baseType = case dst of
+        RVar loc -> case M.lookup loc m of
+          Just (TNumber tn) -> tn
+          Just (TArr (TNumber tn) _) -> tn
+          _ -> error "copyRef: unsupported type"
+        _ -> error "copyRef: can only copy to variables"
+  
+  lift $ W.tell [ICopy baseType dstSlice srcSlice]
 
 -- TODO: validate slices are of length 1
 binOp :: Op -> Ref -> Ref -> Ref -> CodegenM ()
-binOp op dest = undefined -- lift $ W.tell [IBinOp op dest]
+binOp op dest a b = do
+  destSlice <- toSlice dest
+  aSlice <- toSlice a
+  bSlice <- toSlice b
+  lift $ W.tell [IBinOp op destSlice aSlice bSlice]
 
 call :: Ref -> Ref -> [Ref] -> CodegenM ()
-call dest funcRef = undefined -- lift $ W.tell [ICall dest funcRef]
+call dest funcRef args = do
+  destSlice <- toSlice dest
+  funcRefSlice <- toSlice funcRef
+  argSlices <- traverse toSlice args
+  lift $ W.tell [ICall destSlice funcRefSlice argSlices]
 
 allocLoc :: Type -> CodegenM Location
 allocLoc typ = lift $ ST.state $ \(idx, m) -> (Local idx, (idx + 1, M.insert (Local idx) typ m))
@@ -250,8 +251,8 @@ if_ cond t e = do
   env <- R.ask
   ((), t') <- lift $ lift $ runWriterT $ runReaderT t env
   ((), e') <- lift $ lift $ runWriterT $ runReaderT e env
-  undefined
-  -- lift $ W.tell [IIf cond t' e']
+  condSlice <- toSlice cond
+  lift $ W.tell [IIf condSlice t' e']
 
 innerDims :: Type -> [Int]
 innerDims (TArr (TArr t dim) _) = dim:innerDims t
