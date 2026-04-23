@@ -44,7 +44,7 @@ data Location = Global Int | Local Int deriving (Eq, Ord, Show)
 data Ref
   = RConst Number
   | RVar Location
-  | RProj Ref Ref Int
+  | RProj {- expression -} Ref {- index -} Ref {- inner dimension, e.g. for the array[4][7], array[1] would set the inner dimension to 7 -} Int
   | RFuncRef FuncRef
   deriving Show
 
