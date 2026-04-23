@@ -41,7 +41,7 @@ import Debug.Trace
 
 data Location = Global Int | Local Int deriving (Eq, Ord, Show)
 
-data Proj = PId Location | PProj Proj (Ann Type Expr)
+data Proj = PId Location | PProjExpr Proj (Ann Type Expr) | PProjLoc Proj Location
   deriving Show
 
 data LRef
@@ -51,7 +51,7 @@ data LRef
   deriving Show
 
 projLRef :: LRef -> Ann Type Expr -> LRef
-projLRef (LVar p) idx = LVar (PProj p idx)
+projLRef (LVar p) idx = LVar (PProjExpr p idx)
 projLRef _ _ = error "projLRef"
 
 data RRef
@@ -62,7 +62,7 @@ data RRef
   deriving Show
 
 projRRef :: RRef -> Ann Type Expr -> RRef
-projRRef (RVar p) idx = RVar (PProj p idx)
+projRRef (RVar p) idx = RVar (PProjExpr p idx)
 projRRef _ _ = error "projLRef"
 
 showType :: Type -> String
@@ -165,7 +165,12 @@ data Program = Program
   , tickFunc :: ProgramFunc
   } deriving Show
 
-type CodegenM = R.ReaderT (Map Ident Location) (W.WriterT [Instruction] (ST.State (Int, Map Location Type)))
+data Env = Env
+  { varMap :: Map Ident Location
+  , recMap :: Map Ident (Location, Location)
+  }
+
+type CodegenM = R.ReaderT Env (W.WriterT [Instruction] (ST.State (Int, Map Location Type)))
 
 -- innerJoin :: Applicative f => Ord k => Map k (f a) -> Map k (f b) -> Map k (f (a, b))
 -- innerJoin = M.intersectionWith (\fa fb -> (,) <$> fa <*> fb)
@@ -231,19 +236,23 @@ codegen dfm = undefined
     -- TODO: do flattening of arrays and structs here; have copyVal for simple values and copySlice for array slices
     gen :: LRef -> Ann Type Expr -> CodegenM ()
     gen ret (Ann (typ, PConst n)) = copyRef (C.baseType typ) ret (RConst n)
+
     gen ret (Ann (typ, PVar n)) = do
       env <- R.ask
-      copyRef (C.baseType typ) ret (RVar (PId (env M.! n)))
+      copyRef (C.baseType typ) ret (RVar (PId (env.varMap M.! n)))
+
     gen ret (Ann (_, PArr elems)) = sequence_
       [ gen (projLRef ret (Ann (TNumber TI32, PConst (C.I32 i)))) elem
       | (i, elem) <- zip [0..] elems
       ]
+
     gen ret (Ann (_, POp op a b)) = do
       -- Values must be simple so we just push on stack (in reverse order)
       gen LPushStack b
       gen LPushStack a
       binOp op ret
-    gen ret (Ann (_, (PApp (Ann (_, PFunc fr)) args))) = do
+
+    gen ret (Ann (_, (PApp fexpr@(Ann (ftyp, f)) args))) = do
       -- Push arguments onto stack in reverse order
       rargs <- sequence
         [ do
@@ -253,8 +262,15 @@ codegen dfm = undefined
         | arg@(Ann (atyp, _)) <- reverse args
         ]
 
-      call ret (RFuncRef fr) rargs
+      case f of
+        PFunc fr -> call ret (RFuncRef fr) rargs
+        _ -> do
+          (lf, rf) <- allocType ftyp
+          gen lf fexpr
+          call ret rf rargs
+
     gen ret (Ann (typ, PFunc fr)) = copyRef (C.baseType typ) ret (RFuncRef fr)
+
     gen ret (Ann (_, (PFoldedSelectL elems idx@(Ann (idxTyp, _))))) = do
       condLoc <- alloc (TNumber TI32)
       idxLoc <- alloc idxTyp
@@ -270,12 +286,16 @@ codegen dfm = undefined
           copyRef TI32 LPushStack (RConst (I32 i))
           binOp Eq (LVar $ PId condLoc)
           if_ (RVar $ PId condLoc) (gen ret elem) (recIf condLoc elems ridx (i + 1))
+
     gen ret (Ann (_, (PFoldedSelectR body@(Ann (bodyTyp, _)) idxs))) = do
       (lbody, rbody) <- allocType bodyTyp
       gen lbody body
+      copyRef (C.baseType bodyTyp) ret (foldr (\idx body' -> projRRef body' idx) rbody idxs)
+    gen ret (Ann (typ, (PRec param))) = do
+      env <- R.ask
+      let (delayBufferLoc, delayIdxLoc) = env.recMap M.! param
+      copyRef (C.baseType typ) ret (RVar $ PProjLoc (PId delayBufferLoc) delayIdxLoc)
       undefined
-      where
-    gen _ _ = undefined
     
 {-
 
