@@ -214,7 +214,7 @@ if_ cond t e = do
 
 innerDims :: Type -> [Int]
 innerDims (TArr (TArr t dim) _) = dim:innerDims t
-innerDims (TArr _ _) = 1
+innerDims (TArr _ _) = [1]
 innerDims _ = error "innerDims"
 
 innerDim :: Type -> Int
@@ -269,29 +269,23 @@ codegen dfm = undefined
       | (i, elem) <- zip [0..] elems
       ]
 
-    gen ret (Ann (_, POp op a@(Ann (atyp, _)) b@(Ann (btyp, _)))) = do
-      avar <- alloc atyp
-      bvar <- alloc btyp
-      gen avar b
-      gen bvar a
+    gen ret (Ann (_, POp op a b)) = do
+      avar <- toStack a
+      bvar <- toStack b
       binOp op ret avar bvar
 
-    gen ret (Ann (_, (PApp fexpr@(Ann (ftyp, f)) args))) = do
+    gen ret (Ann (_, (PApp f args))) = do
       rargs <- traverse toStack args
 
       case f of
-        PFunc fr -> call ret (RFuncRef fr) rargs
+        Ann (_, PFunc fr) -> call ret (RFuncRef fr) rargs
         _ -> do
-          fvar <- alloc ftyp
-          gen fvar fexpr
+          fvar <- toStack f
           call ret fvar rargs
 
     gen ret (Ann (_, (PFoldedSelectL elems idx@(Ann (idxTyp, _))))) = do
       condVar <- alloc C.ti32
-      idxVar <- alloc idxTyp
-      ivar <- alloc idxTyp
-
-      gen idxVar idx
+      idxVar <- toStack idx
 
       let mkRef = case idxTyp of
             TNumber TI32 -> RConst . I32
@@ -302,12 +296,10 @@ codegen dfm = undefined
       let recIf [] _ = error "recif: no choice (this is a bug)"
           recIf [elem] _ = gen ret elem
           recIf (elem:elems) i = do
-            copyRef TI32 ivar (mkRef i)
-            binOp Eq condVar ivar idxVar
+            binOp Eq condVar (mkRef i) idxVar
             if_ condVar (gen ret elem) (recIf elems (i + 1))
 
       recIf elems 0
-      where
 
     gen ret (Ann (typ, PFoldedSelectR body idxs)) = copyRef (C.baseType typ) ret =<< pfoldedSelectR body idxs
     gen ret (Ann (typ, (PRec param))) = copyRef (C.baseType typ) ret =<< prec param
