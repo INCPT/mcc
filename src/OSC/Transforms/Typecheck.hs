@@ -225,7 +225,10 @@ typecheck expr = case unAnn expr of
       TArr elemType _ -> do
         case idxType of
           TNumber TI32 -> pure $ Ann ((pos, elemType), PSelect sel' idx')
-          TNumber TI64 -> pure $ Ann ((pos, elemType), PSelect sel' idx')
+          
+          -- NOTE: to support this toSlice in Codegen.hs must take into consideration i64s
+          -- TNumber TI64 -> pure $ Ann ((pos, elemType), PSelect sel' idx')
+
           _ -> E.throwError $ InvalidIndexType (fst . fst . unAnn $ idx') idxType
       _ -> E.throwError $ NotAnArray (fst . fst . unAnn $ sel') selType
   

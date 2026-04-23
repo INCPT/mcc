@@ -43,16 +43,19 @@ data Location = Global Int | Local Int deriving (Eq, Ord, Show)
 
 data Ref
   = RConst Number
+  | RRet Type
   | RArg Type Ident
   | RVar Type Location
   | RProj {- expression -} Ref {- index -} Ref {- inner dimension, e.g. for the array[4][7], array[1] would set the inner dimension to 7 -} Int
   | RFuncRef FuncRef
   deriving Show
 
+data SliceRoot = SArg Ident | SVar Location | SRet
+  deriving Show
+
 data Slice
   = SConst Number
-  | SVar Location {- offset -} (Either Int Location) {- length -} Int
-  | SArg Ident {- offset -} (Either Int Location) {- length -} Int
+  | SSlice Type {- arg or var or ret -} SliceRoot {- offset -} (Either Int Location) {- length -} Int
   | SFuncRef FuncRef
   deriving Show
 
@@ -75,7 +78,7 @@ showType (TLam params retType) =
 --   show (RFuncRefRef idx) = show idx <> ":funcref"
 
 data Instruction
-  = ICopy {- base type -} TNumber {- dest -} Slice {- source -} Slice
+  = ICopy {- dest -} Slice {- source -} Slice
   | IIf Slice [Instruction] [Instruction]
   | ICall {- return ref -} Slice {- funcref -} Slice [Slice]
   | IBinOp Op {- result -} Slice {- a -} Slice {- b -} Slice
@@ -137,7 +140,7 @@ data Instruction
 
 data ProgramFunc = ProgramFunc
   { params :: [(Ident, Type)]
-  , locals :: Map Ident Type
+  , locals :: [(Ident, Type)]
   , instructions :: [Instruction]
   } deriving Show
 
@@ -147,7 +150,8 @@ data Value = VNumber Number | VArr [Value]
 data Program = Program
   { globals :: Map Ident Type
   , funcMap :: Map FuncRef ProgramFunc
-  , tickFunc :: ProgramFunc
+  , tick :: [Instruction]
+  , startup :: [Instruction]
   } deriving Show
 
 data RecEnv = RecEnv
@@ -169,7 +173,7 @@ allocLoc :: (Int -> Location) -> Type -> AllocM Location
 allocLoc region typ = ST.state $ \(idx, m) -> (region idx, (idx + 1, M.insert (region idx) typ m))
 
 alloc :: Type -> CodegenM Ref
-alloc = fmap RVar . lift . lift . allocLoc Local
+alloc typ = fmap (RVar typ) $ lift $ lift $ allocLoc Local typ
 
 -- array[5][6][3]
 -- array[2] :: array[6][3] so slice length is 6 * 3 and offset is 2 * 6 * 3
@@ -184,29 +188,32 @@ alloc = fmap RVar . lift . lift . allocLoc Local
 toSlice :: Ref -> CodegenM Slice
 toSlice (RConst n) = pure $ SConst n
 toSlice (RFuncRef fr) = pure $ SFuncRef fr
-toSlice (RArg typ arg) = pure $ SArg arg (Left 0) (C.elemCountOfType typ)
-toSlice (RVar typ loc) = pure $ SVar loc (Left 0) (C.elemCountOfType typ)
+toSlice (RArg typ arg) = pure $ SSlice typ (SArg arg) (Left 0) (C.elemCountOfType typ)
+toSlice (RVar typ loc) = pure $ SSlice typ (SVar loc) (Left 0) (C.elemCountOfType typ)
+toSlice (RRet typ) = pure $ SSlice typ SRet (Left 0) (C.elemCountOfType typ)
 toSlice (RProj ref idx innerDim) = do
   slice <- toSlice ref
   idxSlice <- toSlice idx
-
+  
   case (slice, idxSlice) of
     -- Constant index with constant offset - compute statically
-    (SVar loc (Left offset) _, SConst (I32 i)) ->
-      pure $ SVar loc (Left (offset + i * innerDim)) innerDim
-    (SVar loc (Left offset) _, SConst (I64 i)) ->
-      pure $ SVar loc (Left (offset + i * innerDim)) innerDim
+    (SSlice typ loc (Left offset) _, SConst (I32 i)) ->
+      pure $ SSlice typ loc (Left (offset + i * innerDim)) innerDim
+    (SSlice typ loc (Left offset) _, SConst (I64 i)) ->
+      pure $ SSlice typ loc (Left (offset + i * innerDim)) innerDim
     
     -- Dynamic cases - need to compute offset at runtime
-    (SVar loc baseOffset _, _) -> do
+    (SSlice typ loc baseOffset _, _) -> do
       offsetLoc <- lift $ lift $ allocLoc Local C.ti32
-      let offsetVar = RVar offsetLoc
+      let offsetVar = RVar C.ti32 offsetLoc
 
       -- Load index into offset variable
       case idxSlice of
-        SConst n -> copyRef offsetVar (RConst n)
-        SVar idxLoc (Left 0) 1 -> copyRef offsetVar (RVar idxLoc)
-        _ -> error "toSlice: unexpected index slice type"
+        SConst n
+          | C.numberType n == TNumber TI32 -> copyRef offsetVar (RConst n)
+        SSlice (TNumber TI32) (SArg arg) (Left 0) 1 -> copyRef offsetVar (RArg C.ti32 arg)
+        SSlice (TNumber TI32) (SVar loc) (Left 0) 1 -> copyRef offsetVar (RVar C.ti32 loc)
+        _ -> error $ "toSlice: unexpected index slice type: " <> show idxSlice
       
       -- Multiply by inner dimension
       binOp Mul offsetVar (RConst $ I32 innerDim) offsetVar
@@ -216,9 +223,9 @@ toSlice (RProj ref idx innerDim) = do
         Left offset -> when (offset /= 0) $ do
           binOp Add offsetVar (RConst $ I32 offset) offsetVar
         Right baseLoc -> do
-          binOp Add offsetVar (RVar baseLoc) offsetVar
+          binOp Add offsetVar (RVar C.ti32 baseLoc) offsetVar
       
-      pure $ SVar loc (Right offsetLoc) innerDim
+      pure $ SSlice typ loc (Right offsetLoc) innerDim
     
     _ -> error "toSlice: projection of non-variable slice"
 
@@ -227,16 +234,7 @@ copyRef dst src = do
   dstSlice <- toSlice dst
   srcSlice <- toSlice src
   
-  -- Determine the base type from the slice
-  (_, m) <- lift $ lift $ ST.get
-  let baseType = case dst of
-        RVar typ loc -> case M.lookup loc m of
-          Just (TNumber tn) -> tn
-          Just (TArr (TNumber tn) _) -> tn
-          _ -> error "copyRef: unsupported type"
-        _ -> error "copyRef: can only copy to variables"
-  
-  lift $ W.tell [ICopy baseType dstSlice srcSlice]
+  lift $ W.tell [ICopy dstSlice srcSlice]
 
 binOp :: Op -> Ref -> Ref -> Ref -> CodegenM ()
 binOp op dest a b = do
@@ -266,13 +264,16 @@ innerDims (TArr _ _) = [1]
 innerDims _ = error "innerDims"
 
 codegen :: DefuncMap (Ann Type) -> Ann Type Expr -> CodegenM Program
-codegen dfm = undefined
+codegen dfm expr = do
+  lamAllocs <- mconcat <$> traverse (lift . lift . collectLamAllocations) (M.elems dfm.funcMap)
+  (recAllocs, recEnvs) <- mconcat <$> traverse (lift . lift . collectRecAllocations) dfm.recs
+  undefined
   where
     collectLamAllocations :: C.LamAnn (Ann Type Expr) -> AllocM (Map Ident Ref)
     collectLamAllocations (C.LamAnn _ _ bindings _) = M.fromList <$> sequence
       [ do
           loc <- allocLoc Global typ
-          pure (n, RVar loc)
+          pure (n, RVar typ loc)
       | (n, C.AllocGlobal, Ann (typ, _)) <- bindings
       ]
 
@@ -281,21 +282,21 @@ codegen dfm = undefined
       varMap <- sequence
         [ do
             loc <- allocLoc Global typ
-            pure (n, RVar loc)
+            pure (n, RVar typ loc)
         | (n, C.AllocGlobal, Ann (typ, _)) <- bindings
         ]
       
-      delayBuffer <- RVar <$> allocLoc Global (TArr typ delay)
-      writeIdx <- RVar <$> allocLoc Global C.ti32
-      readIdx <- RVar <$> allocLoc Global C.ti32
+      delayBuffer <- RVar (TArr typ delay) <$> allocLoc Global (TArr typ delay)
+      writeIdx <- RVar C.ti32 <$> allocLoc Global C.ti32
+      readIdx <- RVar C.ti32 <$> allocLoc Global C.ti32
 
       pure (M.fromList varMap, M.singleton param (RecEnv {..}))
 
-    genLam :: C.LamAnn (Ann Type Expr) -> CodegenM Ref
-    genLam (C.LamAnn _ params bindings body) = mdo
+    genLam :: Env -> C.LamAnn (Ann Type Expr) -> CodegenM ()
+    genLam env (C.LamAnn typ params bindings body) = mdo
        bindingRefs <- mconcat <$> sequenceA
          -- Arguments
-         [ pure $ M.fromList [ (p, RArg p) | p <- params ]
+         [ pure $ M.fromList [ (p, RArg typ p) | (p, typ) <- zip params (C.paramTypes "genLam" typ) ]
 
          -- Bindings (must be in topsort order)
          , M.fromList <$> sequenceA
@@ -313,7 +314,7 @@ codegen dfm = undefined
        let withBindingRefs :: Env -> Env
            withBindingRefs Env {..} = Env { varMap = bindingRefs <> varMap, .. }
 
-       R.local withBindingRefs $ rhs body
+       R.local withBindingRefs $ gen (RRet typ) body
 
     genRec :: C.RecAnn (Ann Type Expr) -> CodegenM ()
     genRec (C.RecAnn typ delay param bindings body) = do
