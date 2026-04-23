@@ -174,17 +174,17 @@ toSlice (RFuncRef fr) = pure $ SFuncRef fr
 toSlice (RVar loc) = do
   (_, m) <- lift $ lift $ ST.get
   case M.lookup loc m of
-    Just typ -> pure $ SVar loc 0 (C.elemCountOfType typ)
+    Just typ -> pure $ SVar loc (Left 0) (C.elemCountOfType typ)
     Nothing -> error $ "toSlice: unknown location: " <> show loc
 toSlice (RProj ref idx innerDim) = do
   slice <- toSlice ref
   idxSlice <- toSlice idx
 
   case (slice, idxSlice) of
-    (SVar loc offset _, SConst (I32 i)) ->
-      pure $ SVar loc (offset + fromIntegral i * innerDim) innerDim
-    (SVar loc offset _, SConst (I64 i)) ->
-      pure $ SVar loc (offset + fromIntegral i * innerDim) innerDim
+    (SVar loc (Left offset) _, SConst (I32 i)) ->
+      pure $ SVar loc (Left (offset + fromIntegral i * innerDim)) innerDim
+    (SVar loc (Left offset) _, SConst (I64 i)) ->
+      pure $ SVar loc (Left (offset + fromIntegral i * innerDim)) innerDim
     _ -> do
       -- Need to compute offset dynamically
       offsetLoc <- allocLoc C.ti32
@@ -192,16 +192,16 @@ toSlice (RProj ref idx innerDim) = do
 
       case idxSlice of
         SConst n -> copyRef offsetVar (RConst n)
-        SVar idxLoc 0 1 -> copyRef offsetVar (RVar idxLoc)
+        SVar idxLoc (Left 0) 1 -> copyRef offsetVar (RVar idxLoc)
         _ -> error "toSlice: unexpected index slice type"
       
-      binOp Mul offsetVar (RConst $ I32 innerDim) offsetVar
+      binOp Mul offsetVar (RConst $ I32 $ fromIntegral innerDim) offsetVar
       
       case slice of
-        SVar loc offset _ -> do
+        SVar loc (Left offset) _ -> do
           when (offset /= 0) $ do
-            binOp Add offsetVar offsetVar (RConst $ I32 offset)
-          pure $ SVar loc undefined innerDim
+            binOp Add offsetVar offsetVar (RConst $ I32 $ fromIntegral offset)
+          pure $ SVar loc (Right offsetLoc) innerDim
         _ -> error "toSlice: projection of non-variable slice"
 
 copyRef :: Ref -> Ref -> CodegenM ()
