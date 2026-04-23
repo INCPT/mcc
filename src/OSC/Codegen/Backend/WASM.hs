@@ -154,6 +154,31 @@ The following example shows how to calculate the -th element of [a, b, c] where 
 The Jump: When the index is provided, br_table pops it and jumps to the end of the corresponding block.
 Selective Execution: Because the jump skips everything before the target block's end marker, only the code following that specific block is executed. The br $exit at the end of each "case" ensures the other computations are skipped once yours is done.
 
+---
+
+To call a function using an index already on the stack, you must use the call_indirect instruction. 
+In WebAssembly, the standard call instruction requires a static index provided as an immediate value at compile time. For dynamic indices determined at runtime (like those sitting on the stack), Wasm uses a Table system. 
+Core Mechanism: call_indirect 
+The call_indirect instruction expects the function index to be the top-most value on the operand stack. It pops this index, looks it up in a specified table, and executes the corresponding function. 
+Requirements for Execution
+
+    A Function Table: You must define a table (usually of type funcref) that contains the functions you want to call.
+    Explicit Type Annotation: Unlike a direct call, you must specify the expected function signature (type) in the instruction. The runtime will check this against the actual function in the table and "trap" (error) if they do not match.
+    Stack Order: Any arguments for the function being called must be pushed onto the stack before the function index. 
+
+Example (WebAssembly Text Format)
+If you have a function index on the stack and want to call it as a function that takes two i32 arguments and returns one i32:
+
+;; 1. Push arguments for the target function
+local.get $arg1
+local.get $arg2
+
+;; 2. Push the function index (the target callee)
+local.get $my_dynamic_index
+
+;; 3. Call indirectly using the specific signature
+call_indirect (type $i32_i32_to_i32)
+
 -}
 
 data Config = Config
