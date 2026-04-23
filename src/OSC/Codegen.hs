@@ -1,45 +1,30 @@
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NoFieldSelectors #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE RecursiveDo #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TupleSections #-}
 
 module OSC.Codegen where
 
-import Data.Functor.Identity (Identity (Identity))
 import Control.Monad (when)
-import Control.Monad.Fix (MonadFix)
-import Control.Monad.Trans (MonadTrans, lift)
+import Control.Monad.Trans (lift)
 import qualified Control.Monad.Reader as R
-import Control.Monad.Reader (ReaderT, asks, ask, runReaderT)
-import qualified Control.Monad.State.Lazy as ST
-import Control.Monad.State.Lazy (MonadState, StateT, State, state, runState, runStateT)
+import Control.Monad.Reader (ReaderT, local, asks, ask, runReaderT)
+import Control.Monad.State.Lazy (State, state, runState)
 import Control.Monad.Trans.Writer (WriterT, runWriterT, tell)
 import qualified Control.Monad.Trans.Writer as W
-import Data.Functor.Product (Product (Pair))
 import Data.Map (Map)
 import Data.List (intercalate)
 import qualified Data.Map as M
-import Control.Monad.Free (Free (Free, Pure), liftF)
-import qualified Control.Monad.Trans.Free as TF
-import Control.Monad.Trans.Free (FreeT (FreeT), FreeF)
 
 import OSC.Expr.Comp (Ident, Type (..), TNumber (..), Number (..), Op (..))
-import qualified OSC.Expr.AnnBind as AB
 import qualified OSC.Expr.Comp as C
 import OSC.Expr.Functors
-import OSC.Expr.Defunc
+import OSC.Expr.Defunc hiding (const)
 
-import Debug.Trace
 
-data Location = Global Int | Local Int deriving (Eq, Ord, Show)
+newtype Location = Location Int
+  deriving (Eq, Ord, Show)
 
 data Ref
   = RConst Number
@@ -138,22 +123,6 @@ data Instruction
 
 --------------------------------------------------------------------------------
 
-data ProgramFunc = ProgramFunc
-  { params :: [(Ident, Type)]
-  , locals :: [(Ident, Type)]
-  , instructions :: [Instruction]
-  } deriving Show
-
-data Value = VNumber Number | VArr [Value]
-  deriving Show
-
-data Program = Program
-  { globals :: Map Ident Type
-  , funcMap :: Map FuncRef ProgramFunc
-  , tick :: [Instruction]
-  , startup :: [Instruction]
-  } deriving Show
-
 data RecEnv = RecEnv
   { delayBuffer :: Ref
   , writeIdx :: Ref
@@ -165,15 +134,15 @@ data Env = Env
   , recMap :: Map Ident RecEnv
   }
 
-type AllocM = ST.State (Int, Map Location Type)
+type AllocM = State (Int, Map Location Type)
 
-type CodegenM = R.ReaderT Env (W.WriterT [Instruction] AllocM)
+type CodegenM = ReaderT Env (WriterT [Instruction] AllocM)
 
-allocLoc :: (Int -> Location) -> Type -> AllocM Location
-allocLoc region typ = ST.state $ \(idx, m) -> (region idx, (idx + 1, M.insert (region idx) typ m))
+allocLoc :: Type -> AllocM Location
+allocLoc typ = state $ \(idx, m) -> (Location idx, (idx + 1, M.insert (Location idx) typ m))
 
 alloc :: Type -> CodegenM Ref
-alloc typ = fmap (RVar typ) $ lift $ lift $ allocLoc Local typ
+alloc typ = fmap (RVar typ) $ lift $ lift $ allocLoc typ
 
 -- array[5][6][3]
 -- array[2] :: array[6][3] so slice length is 6 * 3 and offset is 2 * 6 * 3
@@ -204,7 +173,7 @@ toSlice (RProj ref idx innerDim) = do
     
     -- Dynamic cases - need to compute offset at runtime
     (SSlice typ loc baseOffset _, _) -> do
-      offsetLoc <- lift $ lift $ allocLoc Local C.ti32
+      offsetLoc <- lift $ lift $ allocLoc C.ti32
       let offsetVar = RVar C.ti32 offsetLoc
 
       -- Load index into offset variable
@@ -234,45 +203,71 @@ copyRef dst src = do
   dstSlice <- toSlice dst
   srcSlice <- toSlice src
   
-  lift $ W.tell [ICopy dstSlice srcSlice]
+  lift $ tell [ICopy dstSlice srcSlice]
 
 binOp :: Op -> Ref -> Ref -> Ref -> CodegenM ()
 binOp op dest a b = do
   destSlice <- toSlice dest
   aSlice <- toSlice a
   bSlice <- toSlice b
-  lift $ W.tell [IBinOp op destSlice aSlice bSlice]
+  lift $ tell [IBinOp op destSlice aSlice bSlice]
 
 call :: Ref -> Ref -> [Ref] -> CodegenM ()
 call dest funcRef args = do
   destSlice <- toSlice dest
   funcRefSlice <- toSlice funcRef
   argSlices <- traverse toSlice args
-  lift $ W.tell [ICall destSlice funcRefSlice argSlices]
+  lift $ tell [ICall destSlice funcRefSlice argSlices]
 
 if_ :: Ref -> CodegenM () -> CodegenM () -> CodegenM ()
 if_ cond t e = do
-  env <- R.ask
+  env <- ask
   ((), t') <- lift $ lift $ runWriterT $ runReaderT t env
   ((), e') <- lift $ lift $ runWriterT $ runReaderT e env
   condSlice <- toSlice cond
-  lift $ W.tell [IIf condSlice t' e']
+  lift $ tell [IIf condSlice t' e']
 
 innerDims :: Type -> [Int]
 innerDims (TArr (TArr t dim) _) = dim:innerDims t
 innerDims (TArr _ _) = [1]
 innerDims _ = error "innerDims"
 
-codegen :: DefuncMap (Ann Type) -> Ann Type Expr -> CodegenM Program
-codegen dfm expr = do
-  lamAllocs <- mconcat <$> traverse (lift . lift . collectLamAllocations) (M.elems dfm.funcMap)
-  (recAllocs, recEnvs) <- mconcat <$> traverse (lift . lift . collectRecAllocations) dfm.recs
-  undefined
+data ProgramFunc = ProgramFunc
+  { params :: [(Ident, Type)]
+  , locals :: Map Location Type
+  , instructions :: [Instruction]
+  } deriving Show
+
+data Program = Program
+  { globals :: Map Location Type
+  , funcMap :: Map FuncRef ProgramFunc
+  , tick :: [Instruction]
+  , startup :: [Instruction]
+  , ref :: Ref
+  } deriving Show
+
+codegen :: DefuncMap (Ann Type) -> Ann Type Expr -> Program
+codegen dfm expr = Program {..}
   where
+    ((((_, tick), funcMap, ref), startup), (_, globals)) = flip runState (0, mempty) $ runWriterT top
+
+    top = do
+      lamAllocs <- mconcat <$> traverse (lift . collectLamAllocations) (M.elems dfm.funcMap)
+      (recAllocs, recEnvs) <- mconcat <$> traverse (lift . collectRecAllocations) dfm.recs
+  
+      let env = Env { varMap = lamAllocs <> recAllocs, recMap = recEnvs }
+  
+      tick <- lift $ W.runWriterT $ flip R.runReaderT env $ sequence_ [ genRec rec_ | rec_ <- dfm.recs ]
+
+      let funcMap = fmap (genLam env) dfm.funcMap
+  
+      ref <- flip R.runReaderT env $ rhs expr
+      pure (tick, funcMap, ref)
+
     collectLamAllocations :: C.LamAnn (Ann Type Expr) -> AllocM (Map Ident Ref)
     collectLamAllocations (C.LamAnn _ _ bindings _) = M.fromList <$> sequence
       [ do
-          loc <- allocLoc Global typ
+          loc <- allocLoc typ
           pure (n, RVar typ loc)
       | (n, C.AllocGlobal, Ann (typ, _)) <- bindings
       ]
@@ -281,19 +276,25 @@ codegen dfm expr = do
     collectRecAllocations (C.RecAnn typ delay param bindings _) = do
       varMap <- sequence
         [ do
-            loc <- allocLoc Global typ
+            loc <- allocLoc typ
             pure (n, RVar typ loc)
         | (n, C.AllocGlobal, Ann (typ, _)) <- bindings
         ]
       
-      delayBuffer <- RVar (TArr typ delay) <$> allocLoc Global (TArr typ delay)
-      writeIdx <- RVar C.ti32 <$> allocLoc Global C.ti32
-      readIdx <- RVar C.ti32 <$> allocLoc Global C.ti32
+      delayBuffer <- RVar (TArr typ delay) <$> allocLoc (TArr typ delay)
+      writeIdx <- RVar C.ti32 <$> allocLoc C.ti32
+      readIdx <- RVar C.ti32 <$> allocLoc C.ti32
 
       pure (M.fromList varMap, M.singleton param (RecEnv {..}))
 
-    genLam :: Env -> C.LamAnn (Ann Type Expr) -> CodegenM ()
-    genLam env (C.LamAnn typ params bindings body) = mdo
+    genLam :: Env -> C.LamAnn (Ann Type Expr) -> ProgramFunc
+    genLam env lam@(C.LamAnn typ params_ _ _) = ProgramFunc {..}
+      where
+        params = zip params_ (C.paramTypes "genLam" typ)
+        ((_, instructions), (_, locals)) = flip runState (0, mempty) $ W.runWriterT $ flip runReaderT env (genLam_ lam)
+
+    genLam_ :: C.LamAnn (Ann Type Expr) -> CodegenM ()
+    genLam_ (C.LamAnn typ params bindings body) = mdo
        bindingRefs <- mconcat <$> sequenceA
          -- Arguments
          [ pure $ M.fromList [ (p, RArg typ p) | (p, typ) <- zip params (C.paramTypes "genLam" typ) ]
@@ -301,10 +302,10 @@ codegen dfm expr = do
          -- Bindings (must be in topsort order)
          , M.fromList <$> sequenceA
              [ case region of
-                 C.AllocLocal -> (n,) <$> R.local withBindingRefs (rhs bbody)
+                 C.AllocLocal -> (n,) <$> local withBindingRefs (rhs bbody)
                  C.AllocGlobal -> do
                    -- Set global ref as return value for binding rhs
-                   ret <- R.asks ((M.! n) . (.varMap))
+                   ret <- asks ((M.! n) . (.varMap))
                    gen ret bbody
                    pure (n, ret)
              | (n, region, bbody) <- bindings
@@ -314,23 +315,23 @@ codegen dfm expr = do
        let withBindingRefs :: Env -> Env
            withBindingRefs Env {..} = Env { varMap = bindingRefs <> varMap, .. }
 
-       R.local withBindingRefs $ gen (RRet typ) body
+       local withBindingRefs $ gen (RRet typ) body
 
     genRec :: C.RecAnn (Ann Type Expr) -> CodegenM ()
-    genRec (C.RecAnn typ delay param bindings body) = do
-      env <- R.ask
+    genRec (C.RecAnn _ delay param bindings body) = do
+      env <- ask
       let recEnv = env.recMap M.! param
 
       mdo
         bindingRefs <- mconcat <$> sequenceA
           [ pure $ M.singleton param (RProj recEnv.delayBuffer recEnv.readIdx 1)
-          , M.fromList <$> sequenceA [ (n,) <$> R.local withBindingRefs (rhs bbody) | (n, _, bbody) <- bindings ]
+          , M.fromList <$> sequenceA [ (n,) <$> local withBindingRefs (rhs bbody) | (n, _, bbody) <- bindings ]
           ]
 
         let withBindingRefs :: Env -> Env
             withBindingRefs Env {..} = Env { varMap = bindingRefs <> varMap, .. }
 
-        R.local withBindingRefs $ gen (RProj recEnv.delayBuffer recEnv.writeIdx 1) body
+        local withBindingRefs $ gen (RProj recEnv.delayBuffer recEnv.writeIdx 1) body
 
         -- Increment read & write index
         binOp Add recEnv.writeIdx (RConst $ I32 1) recEnv.writeIdx
@@ -347,7 +348,7 @@ codegen dfm expr = do
       pure $ foldr (\(idx, dim) body' -> RProj body' idx dim) bodyVar (zip idxVars (scanl1 (*) (innerDims bodyTyp)))
 
     prec param = do
-      env <- R.ask
+      env <- ask
       let envRec = env.recMap M.! param
       pure (RProj envRec.delayBuffer envRec.readIdx 1)
 
@@ -355,7 +356,7 @@ codegen dfm expr = do
     rhs (Ann (_, PConst n)) = pure $ RConst n
     rhs (Ann (_, PFunc fr)) = pure $ RFuncRef fr
 
-    rhs (Ann (_, PVar n)) = R.ask >>= \env -> pure (env.varMap M.! n)
+    rhs (Ann (_, PVar n)) = ask >>= \env -> pure (env.varMap M.! n)
 
     rhs e@(Ann (typ, PArr _)) = alloc typ >>= \var -> gen var e >> pure var
     rhs e@(Ann (typ, POp _ _ _)) = alloc typ >>= \var -> gen var e >> pure var
@@ -371,7 +372,7 @@ codegen dfm expr = do
     gen ret (Ann (_, PConst n)) = copyRef ret (RConst n)
     gen ret (Ann (_, PFunc fr)) = copyRef ret (RFuncRef fr)
 
-    gen ret (Ann (_, PVar n)) = R.ask >>= \env -> copyRef ret (env.varMap M.! n)
+    gen ret (Ann (_, PVar n)) = ask >>= \env -> copyRef ret (env.varMap M.! n)
 
     gen ret (Ann (typ, PArr elems)) = do
       let innerDim = product $ innerDims typ
