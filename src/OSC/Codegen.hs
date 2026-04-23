@@ -41,33 +41,18 @@ import Debug.Trace
 
 data Location = Global Int | Local Int deriving (Eq, Ord, Show)
 
-data Proj = PId Location | PProjExpr Proj (Ann Type Expr) Int | PProjLoc Proj Location Int
-  deriving Show
-
-data LRef' var
-  = LRet
-  | LPushStack
-  | LVar var
-  deriving Show
-
-type LRef = LRef' Proj
-
-projLRef :: LRef -> Ann Type Expr -> Int -> LRef
-projLRef (LVar p) idx dim = LVar (PProjExpr p idx dim)
-projLRef _ _ _ = error "projLRef"
-
-data RRef' var
+data Ref
   = RConst Number
-  | RPopStack
-  | RVar var
+  | RVar Location
+  | RProj Ref Ref Int
   | RFuncRef FuncRef
   deriving Show
 
-type RRef = RRef' Proj
-
-projRRef :: RRef -> Ann Type Expr -> Int -> RRef
-projRRef (RVar p) idx dim = RVar (PProjExpr p idx dim)
-projRRef _ _ _ = error "projLRef"
+data Slice
+  = SConst Number
+  | SVar Location {- offset -} Int {- length -} Int
+  | SFuncRef FuncRef
+  deriving Show
 
 showType :: Type -> String
 showType (TNumber TI32) = "i32"
@@ -87,18 +72,12 @@ showType (TLam params retType) =
 --   show (RFuncRef (FuncRef i)) = "f" <> show i
 --   show (RFuncRefRef idx) = show idx <> ":funcref"
 
-data Slice = Slice { offset :: Int, length :: Int }
-  deriving Show
-
-sliceOf :: Int -> Int -> Slice
-sliceOf = Slice
-
 data Instruction
-  = ICopy {- base type -} TNumber {- dest -} (LRef' (Location, Slice)) {- source -} (RRef' (Location, Slice))
-  | IIf RRef [Instruction] [Instruction]
-  | ICall {- return ref -} LRef {- funcref -} (RRef' Location) {- args -} [RRef' Location]
-  | IBinOp Op {- result -} (LRef' Location)
-  | IFor {- counter -} RRef {- initial -} Int {- steps -} Int {- step -} Int [Instruction]
+  = ICopy {- base type -} TNumber {- dest -} Slice {- source -} Slice
+  | IIf Slice [Instruction] [Instruction]
+  | ICall {- return ref -} Slice {- funcref -} Slice [Slice]
+  | IBinOp Op {- result -} Slice {- a -} Slice {- b -} Slice
+  | IFor {- counter -} Location {- initial -} Int {- steps -} Int {- step -} Int [Instruction]
   deriving Show
 
 -- instance Show Instruction where
@@ -170,8 +149,8 @@ data Program = Program
   } deriving Show
 
 data Env = Env
-  { varMap :: Map Ident Location
-  , recMap :: Map Ident (Location, Location)
+  { varMap :: Map Ident Ref
+  , recMap :: Map Ident (Ref, Ref)
   }
 
 type CodegenM = R.ReaderT Env (W.WriterT [Instruction] (ST.State (Int, Map Location Type)))
@@ -189,31 +168,57 @@ type CodegenM = R.ReaderT Env (W.WriterT [Instruction] (ST.State (Int, Map Locat
 -- array[3]
 -- array[2] :: i32 (for example) so slice length is 1 and offset is 2 * 1
 
-binOp :: Op -> LRef' Location -> CodegenM ()
-binOp op dest = lift $ W.tell [IBinOp op dest]
+toSlice :: Ref -> CodegenM Slice
+toSlice = undefined
 
-call :: LRef -> RRef' Location -> [RRef' Location] -> CodegenM ()
-call dest funcRef args = lift $ W.tell [ICall dest funcRef args]
+copyRef :: TNumber -> Ref -> Ref -> CodegenM ()
+copyRef typ dst src = do
+  undefined
+  -- case (dst, src) of
+  --   (LVar (PId dst'), RVar (PId src')) -> undefined
+  -- -- TODO
+  -- -- lift $ W.tell [ICopy typ dst undefined src undefined]
+  -- -- offsetLoc <- alloc (TNumber TI32)
+  -- -- restDims <- calcOffset offsetLoc idxs (tail $ arrayDims bodyTyp)
+  -- undefined
+  -- where
+  --   copyRef' typ dst src = lift $ W.tell [ICopy typ dst src]
 
-alloc :: Type -> CodegenM Location
-alloc typ = lift $ ST.state $ \(idx, m) -> (Local idx, (idx + 1, M.insert (Local idx) typ m))
+  --   calcOffset offsetLoc [] dims = pure dims
+  --   calcOffset offsetLoc (idx:idxs) dims@(_:dimr) = do
+  --     gen LPushStack idx
+  --     copyRef' TI32 LPushStack (RConst $ I32 $ product dims)
+  --     binOp Mul LPushStack
+  --     copyRef' TI32 LPushStack (RVar (offsetLoc, sliceOf 0 1))
+  --     binOp Add (LVar offsetLoc)
+  --     calcOffset offsetLoc idxs dimr
+  --   calcOffset _ _ [] = error "calcOffset"
 
-if_ :: RRef -> CodegenM () -> CodegenM () -> CodegenM ()
+-- TODO: validate slices are of length 1
+binOp :: Op -> Ref -> Ref -> Ref -> CodegenM ()
+binOp op dest = undefined -- lift $ W.tell [IBinOp op dest]
+
+call :: Ref -> Ref -> [Ref] -> CodegenM ()
+call dest funcRef = undefined -- lift $ W.tell [ICall dest funcRef]
+
+alloc :: Type -> CodegenM Ref
+alloc typ = fmap RVar $ lift $ ST.state $ \(idx, m) -> (Local idx, (idx + 1, M.insert (Local idx) typ m))
+
+if_ :: Ref -> CodegenM () -> CodegenM () -> CodegenM ()
 if_ cond t e = do
   env <- R.ask
   ((), t') <- lift $ lift $ runWriterT $ runReaderT t env
   ((), e') <- lift $ lift $ runWriterT $ runReaderT e env
-  lift $ W.tell [IIf cond t' e']
+  undefined
+  -- lift $ W.tell [IIf cond t' e']
 
-allocType :: Type -> CodegenM (LRef, RRef)
-allocType typ = case typ of
-  TNumber _ -> pure (LPushStack, RPopStack)
-  TArr _ _ -> do
-    loc <- alloc typ
-    pure (LVar (PId loc), RVar (PId loc))
-  TLam _ _ -> do
-    loc <- alloc typ
-    pure (LVar (PId loc), RVar (PId loc))
+innerDims :: Type -> [Int]
+innerDims (TArr (TArr t dim) _) = dim:innerDims t
+innerDims (TArr _ _) = 1
+innerDims _ = error "innerDims"
+
+innerDim :: Type -> Int
+innerDim = head . innerDims
 
 codegen :: DefuncMap (Ann Type) -> Ann Type Expr -> CodegenM Program
 codegen dfm = undefined
@@ -226,98 +231,86 @@ codegen dfm = undefined
       | (n, region, Ann (t, _)) <- bindings
       ]
     
-    innerDims :: Type -> [Int]
-    innerDims (TArr (TArr t dim) _) = dim:innerDims t
-    innerDims (TArr _ _) = 1
-    innerDims _ = error "innerDims"
+    pfoldedSelectR body@(Ann (bodyTyp, _)) idxs = do
+      bodyVar <- alloc bodyTyp
+      gen bodyVar body
+      idxVars <- traverse toStack idxs
+      pure $ foldr (\(idx, dim) body' -> RProj body' idx dim) bodyVar (zip idxVars (innerDims bodyTyp))
 
-    innerDim :: Type -> Int
-    innerDim = head . innerDims
-
-    copyRef :: TNumber -> LRef -> RRef -> CodegenM ()
-    copyRef typ dst src = do
-      case (dst, src) of
-        (LVar (PId dst'), RVar (PId src')) -> undefined
-      -- TODO
-      -- lift $ W.tell [ICopy typ dst undefined src undefined]
-      -- offsetLoc <- alloc (TNumber TI32)
-      -- restDims <- calcOffset offsetLoc idxs (tail $ arrayDims bodyTyp)
-      undefined
-      where
-        copyRef' typ dst src = lift $ W.tell [ICopy typ dst src]
-
-        calcOffset offsetLoc [] dims = pure dims
-        calcOffset offsetLoc (idx:idxs) dims@(_:dimr) = do
-          gen LPushStack idx
-          copyRef' TI32 LPushStack (RConst $ I32 $ product dims)
-          binOp Mul LPushStack
-          copyRef' TI32 LPushStack (RVar (offsetLoc, sliceOf 0 1))
-          binOp Add (LVar (offsetLoc, sliceOf 0 1))
-          calcOffset offsetLoc idxs dimr
-        calcOffset _ _ [] = error "calcOffset"
-    
-    gen :: LRef -> Ann Type Expr -> CodegenM ()
-    gen ret (Ann (typ, PConst n)) = copyRef (C.baseType typ) ret (RConst n)
-
-    gen ret (Ann (typ, PVar n)) = do
+    prec param = do
       env <- R.ask
-      copyRef (C.baseType typ) ret (RVar (PId (env.varMap M.! n)))
+      let (delayBufferLoc, delayIdxLoc) = env.recMap M.! param
+      pure (RProj delayBufferLoc delayIdxLoc 1)
+
+    toStack :: Ann Type Expr -> CodegenM Ref
+    toStack (Ann (_, PConst n)) = pure $ RConst n
+    toStack (Ann (_, PFunc fr)) = pure $ RFuncRef fr
+
+    toStack (Ann (_, PVar n)) = R.ask >>= \env -> pure (env.varMap M.! n)
+
+    toStack e@(Ann (typ, PArr _)) = alloc typ >>= \var -> gen var e >> pure var
+    toStack e@(Ann (typ, POp _ _ _)) = alloc typ >>= \var -> gen var e >> pure var
+    toStack e@(Ann (typ, PApp _ _)) = alloc typ >>= \var -> gen var e >> pure var
+    toStack e@(Ann (typ, PFoldedSelectL _ _)) = alloc typ >>= \var -> gen var e >> pure var
+
+    toStack (Ann (_, PFoldedSelectR body idxs)) = pfoldedSelectR body idxs
+    toStack (Ann (_, (PRec param))) = prec param
+
+    ---
+    
+    gen :: Ref -> Ann Type Expr -> CodegenM ()
+    gen ret (Ann (typ, PConst n)) = copyRef (C.baseType typ) ret (RConst n)
+    gen ret (Ann (typ, PFunc fr)) = copyRef (C.baseType typ) ret (RFuncRef fr)
+
+    gen ret (Ann (typ, PVar n)) = R.ask >>= \env -> copyRef (C.baseType typ) ret (env.varMap M.! n)
 
     gen ret (Ann (typ, PArr elems)) = sequence_
-      [ gen (projLRef ret (Ann (C.ti32, PConst (C.I32 i))) (innerDim typ)) elem
+      [ gen (RProj ret (RConst (C.I32 i)) (innerDim typ)) elem
       | (i, elem) <- zip [0..] elems
       ]
 
-    gen ret (Ann (_, POp op a b)) = do
-      -- Values must be simple so we just push on stack (in reverse order)
-      gen LPushStack b
-      gen LPushStack a
-      binOp op ret
+    gen ret (Ann (_, POp op a@(Ann (atyp, _)) b@(Ann (btyp, _)))) = do
+      avar <- alloc atyp
+      bvar <- alloc btyp
+      gen avar b
+      gen bvar a
+      binOp op ret avar bvar
 
     gen ret (Ann (_, (PApp fexpr@(Ann (ftyp, f)) args))) = do
-      -- Push arguments onto stack in reverse order
-      rargs <- sequence
-        [ do
-            (larg, rarg) <- allocType atyp
-            gen larg arg
-            pure rarg
-        | arg@(Ann (atyp, _)) <- reverse args
-        ]
+      rargs <- traverse toStack args
 
       case f of
         PFunc fr -> call ret (RFuncRef fr) rargs
         _ -> do
-          (lf, rf) <- allocType ftyp
-          gen lf fexpr
-          call ret rf rargs
-
-    gen ret (Ann (typ, PFunc fr)) = copyRef (C.baseType typ) ret (RFuncRef fr)
+          fvar <- alloc ftyp
+          gen fvar fexpr
+          call ret fvar rargs
 
     gen ret (Ann (_, (PFoldedSelectL elems idx@(Ann (idxTyp, _))))) = do
-      condLoc <- alloc C.ti32
-      idxLoc <- alloc idxTyp
+      condVar <- alloc C.ti32
+      idxVar <- alloc idxTyp
+      ivar <- alloc idxTyp
 
-      gen (LVar $ PId idxLoc) idx
-      recIf condLoc elems (RVar $ PId idxLoc) 0
+      gen idxVar idx
+
+      let mkRef = case idxTyp of
+            TNumber TI32 -> RConst . I32
+            TNumber TI64 -> RConst . I64
+            _ -> error "eqRef"
+
+      -- TODO: binary tree if
+      let recIf [] _ = error "recif: no choice (this is a bug)"
+          recIf [elem] _ = gen ret elem
+          recIf (elem:elems) i = do
+            copyRef TI32 ivar (mkRef i)
+            binOp Eq condVar ivar idxVar
+            if_ condVar (gen ret elem) (recIf elems (i + 1))
+
+      recIf elems 0
       where
-        -- TODO: binary tree if
-        recIf _ [] _ _ = error "recif: no choice (this is a bug)"
-        recIf _ [elem] _ _ = gen ret elem
-        recIf condLoc (elem:elems) ridx i = do
-          copyRef TI32 LPushStack ridx
-          copyRef TI32 LPushStack (RConst (I32 i))
-          binOp Eq (LVar $ PId condLoc)
-          if_ (RVar $ PId condLoc) (gen ret elem) (recIf condLoc elems ridx (i + 1))
 
-    gen ret (Ann (_, (PFoldedSelectR body@(Ann (bodyTyp, _)) idxs))) = do
-      (lbody, rbody) <- allocType bodyTyp
-      gen lbody body
-      copyRef (C.baseType bodyTyp) ret (foldr (\(idx, dim) body' -> projRRef body' idx dim) rbody (zip idxs (innerDims bodyTyp)))
-    gen ret (Ann (typ, (PRec param))) = do
-      env <- R.ask
-      let (delayBufferLoc, delayIdxLoc) = env.recMap M.! param
-      copyRef (C.baseType typ) ret (RVar $ PProjLoc (PId delayBufferLoc) delayIdxLoc 1)
-      undefined
+    gen ret (Ann (typ, PFoldedSelectR body idxs)) = copyRef (C.baseType typ) ret =<< pfoldedSelectR body idxs
+    gen ret (Ann (typ, (PRec param))) = copyRef (C.baseType typ) ret =<< prec param
     
 {-
 
