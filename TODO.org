@@ -59,3 +59,10 @@
 * TODO: what happens if part of the return value is a capture?
 ** this is basically return value ref propagation up the binding chain
 ** the most recent returned binding (or argument) gets tagged with "write to return value ref"
+
+* TODO: HM type inference -> lambda specialization -> inline -> CSE -> float pure expressions out of CSel/etc
+
+* TODO: oversampling just means that we insert some stateful code around the oversampled function (which we should always inline when generating code; this can happen directly in the codegen)
+* TODO: zig std math: https://github.com/ziglang/zig/tree/master/lib/std/math
+
+* https://github.com/juce-framework/JUCE/blob/master/modules/juce_dsp/processors/juce_Oversampling.cpp
