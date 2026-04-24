@@ -16,7 +16,7 @@ import qualified Control.Monad.Trans.Writer as W
 import Data.Map (Map)
 import Data.List (intercalate)
 import qualified Data.Map as M
-import Prettyprinter (Pretty(..), (<+>), vsep, hsep, parens, brackets, braces, indent)
+import Prettyprinter (Pretty(..), (<+>), vsep, hsep, parens, brackets, indent)
 
 import OSC.Expr.Comp (Ident, Type (..), TNumber (..), Number (..), Op (..))
 import qualified OSC.Expr.Comp as C
@@ -260,14 +260,14 @@ codegen dfm expr = Program {..}
 
     genLam_ :: C.LamAnn (Ann Type Expr) -> CodegenM ()
     genLam_ (C.LamAnn typ params bindings body) = mdo
-       bindingRefs <- mconcat <$> sequenceA
+       bindingVars <- mconcat <$> sequence
          -- Arguments
          [ pure $ M.fromList [ (p, RArg typ p) | (p, typ) <- zip params (C.paramTypes "genLam" typ) ]
 
          -- Bindings (must be in topsort order)
-         , M.fromList <$> sequenceA
+         , M.fromList <$> sequence
              [ case region of
-                 C.AllocLocal -> (n,) <$> local withBindingRefs (rhs bbody)
+                 C.AllocLocal -> (n,) <$> local withBindingVars (rhs bbody)
                  C.AllocGlobal -> do
                    -- Set global ref as return value for binding rhs
                    ret <- asks ((M.! n) . (.varMap))
@@ -277,10 +277,10 @@ codegen dfm expr = Program {..}
              ]
          ]
 
-       let withBindingRefs :: Env -> Env
-           withBindingRefs Env {..} = Env { varMap = bindingRefs <> varMap, .. }
+       let withBindingVars :: Env -> Env
+           withBindingVars Env {..} = Env { varMap = bindingVars <> varMap, .. }
 
-       local withBindingRefs $ gen (RRet $ C.returnType typ) body
+       local withBindingVars $ gen (RRet $ C.returnType typ) body
 
     genRec :: C.RecAnn (Ann Type Expr) -> CodegenM ()
     genRec (C.RecAnn _ delay param bindings body) = do
@@ -288,15 +288,15 @@ codegen dfm expr = Program {..}
       let recEnv = env.recMap M.! param
 
       mdo
-        bindingRefs <- mconcat <$> sequenceA
+        bindingVars <- mconcat <$> sequenceA
           [ pure $ M.singleton param (RProj recEnv.delayBuffer recEnv.readIdx 1)
-          , M.fromList <$> sequenceA [ (n,) <$> local withBindingRefs (rhs bbody) | (n, _, bbody) <- bindings ]
+          , M.fromList <$> sequenceA [ (n,) <$> local withBindingVars (rhs bbody) | (n, _, bbody) <- bindings ]
           ]
 
-        let withBindingRefs :: Env -> Env
-            withBindingRefs Env {..} = Env { varMap = bindingRefs <> varMap, .. }
+        let withBindingVars :: Env -> Env
+            withBindingVars Env {..} = Env { varMap = bindingVars <> varMap, .. }
 
-        local withBindingRefs $ gen (RProj recEnv.delayBuffer recEnv.writeIdx 1) body
+        local withBindingVars $ gen (RProj recEnv.delayBuffer recEnv.writeIdx 1) body
 
         -- Increment read & write index
         binOp Add recEnv.writeIdx (RConst $ I32 1) recEnv.writeIdx
