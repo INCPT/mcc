@@ -20,10 +20,10 @@ defunc_ :: RFunctor f => f SRC.Expr -> DefuncM f (f Expr)
 defunc_ = bitraverse rtraverse diff
   where
     diff (LamAnn lam) = do
-      fr <- ST.state $ \(fr, dfm) -> (FuncRef fr, (fr + 1, dfm))
+      lamFr <- ST.state $ \(fr, dfm) -> (FuncRef fr, (fr + 1, dfm))
       lam' <- traverse defunc_ lam
-      ST.modify $ \(fr, dfm) -> (fr, dfm { funcMap = M.insert (FuncRef fr) lam' dfm.funcMap })
-      pure $ Func fr
+      ST.modify $ \(fr, dfm) -> (fr, dfm { funcMap = M.insert lamFr lam' dfm.funcMap })
+      pure $ Func lamFr
     diff (RecAnn rec_@(C.RecAnn _ _ param _ _)) = do
       rec_' <- traverse defunc_ rec_
       ST.modify $ \(fr, dfm) -> (fr, dfm { recs = rec_':dfm.recs })

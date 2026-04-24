@@ -10,6 +10,8 @@ import Data.Map (Map)
 import Control.Monad.State
 import Data.Maybe (fromMaybe)
 
+{-
+
 data Value = VNumber Number | VArr [Value]
   deriving Show
 
@@ -158,3 +160,5 @@ irInterpretToList steps ir mainType mainFuncFR = evalState (replicateM steps run
     applyOp Eq (VNumber (F32 a)) (VNumber (F32 b)) = VNumber (I32 (if a == b then 1 else 0))
     applyOp Eq (VNumber (F64 a)) (VNumber (F64 b)) = VNumber (I64 (if a == b then 1 else 0))
     applyOp _ _ _ = error "applyOp: unsupported operation"
+
+-}

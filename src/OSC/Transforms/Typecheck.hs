@@ -263,7 +263,7 @@ typecheck expr = case unAnn expr of
 infer :: Show pos => ExpA pos -> Either (TypeError pos) (Ann Type Expr)
 infer = fmap (mapAnn snd) . E.runExcept . flip R.runReaderT mempty . typecheck
 
-dbgInfer :: Show pos => ExpA pos -> Ann Type Expr
+dbgInfer :: ExpA () -> Ann Type Expr
 dbgInfer expr = case fmap (mapAnn snd) $ E.runExcept $ flip R.runReaderT mempty $ typecheck expr of
   Right a -> a
   Left _ -> (Ann (TNumber TI32, PConst (I32 666)))
