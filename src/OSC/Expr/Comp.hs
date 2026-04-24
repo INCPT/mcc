@@ -130,7 +130,7 @@ instance Pretty Op where
     Shr -> "shr"
     Rotl -> "rotl"
     Rotr -> "rotr"
-    Eq -> "="
+    Eq -> "=="
     Ne -> "!="
     Gt -> ">"
     Lt -> "<"

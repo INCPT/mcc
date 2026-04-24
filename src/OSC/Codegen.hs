@@ -122,7 +122,7 @@ toSlice (RConst n) = pure $ SConst n
 toSlice (RFuncRef fr) = pure $ SFuncRef fr
 toSlice (RArg typ arg) = pure $ SSlice typ (SArg arg) (Left 0) (C.elemCountOfType typ)
 toSlice (RVar typ loc) = pure $ SSlice typ (SVar loc) (Left 0) (C.elemCountOfType typ)
-toSlice (RRet typ) = pure $ SSlice typ SRet (Left 0) (C.elemCountOfType typ)
+toSlice (RRet _) = error $ "toSlice: trying to slice ret"
 toSlice (RProj ref idx innerDim) = do
   slice <- toSlice ref
   idxSlice <- toSlice idx
@@ -267,13 +267,16 @@ codegen dfm expr = Program {..}
          -- Bindings (must be in topsort order)
          , M.fromList <$> sequence
              [ case region of
-                 C.AllocLocal -> (n,) <$> local withBindingVars (rhs bbody)
+                 C.AllocLocal -> do
+                   var <- alloc typ
+                   local withBindingVars $ gen var bbody
+                   pure (n, var)
                  C.AllocGlobal -> do
                    -- Set global ref as return value for binding rhs
-                   ret <- asks ((M.! n) . (.varMap))
-                   gen ret bbody
-                   pure (n, ret)
-             | (n, region, bbody) <- bindings
+                   var <- asks ((M.! n) . (.varMap))
+                   local withBindingVars $ gen var bbody
+                   pure (n, var)
+             | (n, region, bbody@(Ann (typ, _))) <- bindings
              ]
          ]
 

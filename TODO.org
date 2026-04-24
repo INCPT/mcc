@@ -1,3 +1,5 @@
+* TODO binary ifs
+* TODO variable delays
 * TODO glsl? ERecs are multipass
 * TODO folds can not return lambdas
 * TODO arrays which are written to by the imperative code must be marked as impure too

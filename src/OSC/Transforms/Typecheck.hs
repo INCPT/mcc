@@ -271,7 +271,7 @@ dbgInfer expr = case fmap (mapAnn snd) $ E.runExcept $ flip R.runReaderT mempty 
 --------------------------------------------------------------------------------
 
 e1 :: Ann () Expr
-e1 = select (arr [(op Add (cnst $ C.I32 4) (cnst $ C.I32 8))]) (cnst $ C.I32 0)
+e1 = select (arr [(op Add (cnst $ C.I32 4) (cnst $ C.I32 8)), cnst $ C.I32 1]) (cnst $ C.I32 0)
   where
     cnst = B.const
 
