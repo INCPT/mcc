@@ -200,10 +200,7 @@ genSelect ctx targetType = do
   
   -- Generate an in-bounds index (0 to arrLen-1)
   idxVal <- choose (0, arrLen - 1)
-  idx <- elements
-    [ B.const (C.I32 idxVal)
-    , B.const (C.I64 idxVal)
-    ]
+  let idx = B.const (C.I32 idxVal)
   
   pure $ select arr idx
 
@@ -386,5 +383,8 @@ randomERec = do
   recType <- genNonFuncType 2
   genRec emptyCtx recType
 
-sample' :: Gen a -> IO [a]
-sample' = T.sample'
+sampleExpr :: IO [Fix Expr]
+sampleExpr = T.sample' randomExpr
+
+sampleOneExpr :: IO (Fix Expr)
+sampleOneExpr = last <$> T.sample' randomExpr

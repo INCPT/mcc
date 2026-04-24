@@ -21,7 +21,7 @@ data Expr exp
   deriving (Functor, Foldable, Traversable, Generic, Show)
 
 $(genSmartConstructors ''Expr)
-$(genPatternSynonyms "P" ''Expr)
+$(genPatternSynonyms ('P':) ''Expr)
 
 instance Pretty exp => Pretty (Expr exp) where
   pretty = genPretty

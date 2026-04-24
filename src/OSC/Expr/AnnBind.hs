@@ -30,7 +30,7 @@ data Expr exp
   | RecAnn (C.RecAnn exp)
  deriving (Functor, Foldable, Traversable, Generic, Show)
 
-$(genPatternSynonyms "P" ''Expr)
+$(genPatternSynonyms ('P':) ''Expr)
 $(genSmartConstructors ''Expr)
 
 instance Pretty exp => Pretty (Expr exp) where
@@ -40,5 +40,5 @@ data Diff exp
   = Lam (C.Lam exp)
   | Rec (C.Rec exp)
 
-$(genPatternSynonyms "P" ''Diff)
+$(genPatternSynonyms ('P':) ''Diff)
 $(genBitraversableInstance ''SRC.Expr ''Expr ''Diff)

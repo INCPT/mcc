@@ -92,7 +92,7 @@ b1 c = embed $ CompB $ B1 c
 -- Creating pattern synonyms:
 -- ---------------------------
 --
--- $(genPatternSynonyms "" ''Comp)
+-- $(genPatternSynonyms id ''Comp)
 --
 -- For a type with constructors wrapping other types:
 --   data A = A1 a b | A2 c
@@ -487,8 +487,8 @@ genBitraverseSubsetNestedTraverse depth var travVar goVar =
 
 --------------------------------------------------------------------------------
 
-genPatternSynonyms :: String -> Name -> Q [Dec]
-genPatternSynonyms prefix typeName = do
+genPatternSynonyms :: (String -> String) -> Name -> Q [Dec]
+genPatternSynonyms adjustName typeName = do
   info <- reify typeName
   validateTypeParams typeName info
   validateNoExistentials typeName info
@@ -508,12 +508,12 @@ genPatternSynonyms prefix typeName = do
       innerInfo <- reify innerTypeName
       let innerCons = getConstructors innerInfo
       fmap mconcat . forM innerCons $ \(innerConName, innerFields) -> do
-        let patternName = mkName (prefix ++ nameBase innerConName)
+        let patternName = mkName (adjustName $ nameBase innerConName)
         decs <- genPatternSynonym typeName typeVar patternName conName innerConName innerFields
         pure (decs, [patternName])
     _ -> do
       -- Regular constructor - generate a simple pattern
-      let patternName = mkName (prefix ++ nameBase conName)
+      let patternName = mkName (adjustName $ nameBase conName)
       decs <- genSimplePatternSynonym typeName typeVar patternName conName fields
       pure (decs, [patternName])
   

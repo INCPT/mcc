@@ -1,7 +1,8 @@
 * TODO binary ifs
 * TODO variable delays
-* TODO glsl? ERecs are multipass
 * TODO folds can not return lambdas
+* TODO interval propagation
+* TODO generate out of bounds intervals
 * TODO arrays which are written to by the imperative code must be marked as impure too
 * TODO array constants get initialized once at the top
 * TODO SOACs: actually probably better to have the "comptime" constructs like map and range translate to loops
@@ -68,3 +69,5 @@
 * TODO: zig std math: https://github.com/ziglang/zig/tree/master/lib/std/math
 
 * https://github.com/juce-framework/JUCE/blob/master/modules/juce_dsp/processors/juce_Oversampling.cpp
+
+* TODO glsl? ERecs are multipass
