@@ -16,6 +16,7 @@ import qualified Control.Monad.Trans.Writer as W
 import Data.Map (Map)
 import Data.List (intercalate)
 import qualified Data.Map as M
+import Prettyprinter (Pretty(..), Doc, (<+>), vsep, hsep, parens, brackets, braces, indent, viaShow)
 
 import OSC.Expr.Comp (Ident, Type (..), TNumber (..), Number (..), Op (..))
 import qualified OSC.Expr.Comp as C
@@ -53,6 +54,72 @@ showType (TArr t dim) = showType t <> "[" <> show dim <> "]"
 showType (TLam [] retType) = "() -> " <> showType retType
 showType (TLam params retType) = 
   "(" <> intercalate ", " (map showType params) <> ") -> " <> showType retType
+
+instance Pretty Ref where
+  pretty (RConst n) = pretty n
+  pretty (RRet typ) = "ret:" <> pretty (showType typ)
+  pretty (RArg typ ident) = "arg:" <> pretty ident <> ":" <> pretty (showType typ)
+  pretty (RVar typ (Location loc)) = "var" <> pretty loc <> ":" <> pretty (showType typ)
+  pretty (RProj ref idx innerDim) = pretty ref <> brackets (pretty idx <> ":" <> pretty innerDim)
+  pretty (RFuncRef (FuncRef i)) = "f" <> pretty i
+
+instance Pretty SliceRoot where
+  pretty (SArg ident) = "arg:" <> pretty ident
+  pretty (SVar (Location loc)) = "var" <> pretty loc
+  pretty SRet = "ret"
+
+instance Pretty Slice where
+  pretty (SConst n) = pretty n
+  pretty (SSlice typ root (Left offset) len) = 
+    pretty root <> brackets (pretty offset <> ".." <> pretty (offset + len)) <> ":" <> pretty (showType typ)
+  pretty (SSlice typ root (Right (Location offsetLoc)) len) =
+    pretty root <> brackets ("var" <> pretty offsetLoc <> ".." <> "var" <> pretty offsetLoc <> "+" <> pretty len) <> ":" <> pretty (showType typ)
+  pretty (SFuncRef (FuncRef i)) = "f" <> pretty i
+
+instance Pretty Instruction where
+  pretty (ICopy dest src) = pretty dest <+> ":=" <+> pretty src
+  pretty (IIf cond thn els) = vsep
+    [ "if" <+> pretty cond <+> "{"
+    , indent 2 (vsep (map pretty thn))
+    , "} else {"
+    , indent 2 (vsep (map pretty els))
+    , "}"
+    ]
+  pretty (ICall ret funcRef args) = 
+    pretty ret <+> ":=" <+> pretty funcRef <> parens (hsep (punctuate "," (map pretty args)))
+    where punctuate sep = foldr (\x acc -> if null acc then [x] else x <> sep : acc) []
+  pretty (IBinOp op dest a b) = pretty dest <+> ":=" <+> pretty a <+> pretty op <+> pretty b
+  pretty (IFor (Location counter) initial steps step body) = vsep
+    [ "for var" <> pretty counter <+> "=" <+> pretty initial <+> "to" <+> pretty steps <+> "step" <+> pretty step <+> "{"
+    , indent 2 (vsep (map pretty body))
+    , "}"
+    ]
+
+instance Pretty ProgramFunc where
+  pretty (ProgramFunc params locals instructions) = vsep
+    [ "params:" <+> hsep (punctuate "," [ pretty ident <> ":" <> pretty (showType typ) | (ident, typ) <- params ])
+    , "locals:" <+> hsep (punctuate "," [ "var" <> pretty loc <> ":" <> pretty (showType typ) | (Location loc, typ) <- M.toList locals ])
+    , "body:"
+    , indent 2 (vsep (map pretty instructions))
+    ]
+    where punctuate sep = foldr (\x acc -> if null acc then [x] else x <> sep : acc) []
+
+instance Pretty Program where
+  pretty (Program globals funcMap tick startup ref) = vsep
+    [ "globals:" <+> hsep (punctuate "," [ "var" <> pretty loc <> ":" <> pretty (showType typ) | (Location loc, typ) <- M.toList globals ])
+    , ""
+    , "functions:"
+    , vsep [ "f" <> pretty i <> ":" <+> braces (indent 2 (pretty func)) | (FuncRef i, func) <- M.toList funcMap ]
+    , ""
+    , "startup:"
+    , indent 2 (vsep (map pretty startup))
+    , ""
+    , "tick:"
+    , indent 2 (vsep (map pretty tick))
+    , ""
+    , "result:" <+> pretty ref
+    ]
+    where punctuate sep = foldr (\x acc -> if null acc then [x] else x <> sep : acc) []
 
 -- instance Show Ref where
 --   show RRet = "ret"
