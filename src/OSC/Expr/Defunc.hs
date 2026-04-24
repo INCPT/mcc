@@ -46,3 +46,15 @@ data DefuncMap f = DefuncMap
   { funcMap :: M.Map FuncRef (C.LamAnn (f Expr))
   , recs :: [C.RecAnn (f Expr)]
   }
+
+instance Pretty (f Expr) => Pretty (DefuncMap f) where
+  pretty (DefuncMap funcMap recs) = vsep
+    [ "functions:"
+    , indent 2 $ vsep
+        [ pretty fr <> ":" <+> pretty lam
+        | (fr, lam) <- M.toList funcMap
+        ]
+    , ""
+    , "recs:"
+    , indent 2 $ vsep (map pretty recs)
+    ]
