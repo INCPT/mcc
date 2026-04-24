@@ -246,6 +246,8 @@ data Program = Program
   , ref :: Ref
   } deriving Show
 
+--------------------------------------------------------------------------------
+
 codegen :: DefuncMap (Ann Type) -> Ann Type Expr -> Program
 codegen dfm expr = Program {..}
   where
@@ -315,7 +317,7 @@ codegen dfm expr = Program {..}
        let withBindingRefs :: Env -> Env
            withBindingRefs Env {..} = Env { varMap = bindingRefs <> varMap, .. }
 
-       local withBindingRefs $ gen (RRet typ) body
+       local withBindingRefs $ gen (RRet $ C.returnType typ) body
 
     genRec :: C.RecAnn (Ann Type Expr) -> CodegenM ()
     genRec (C.RecAnn _ delay param bindings body) = do

@@ -54,6 +54,7 @@ library
       OSC.Expr.Gen
       OSC.Expr.Interpret
       OSC.Expr.TH
+      OSC.Main
       OSC.Pretty
       OSC.Records
       OSC.Transforms.AnnBind
