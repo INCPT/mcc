@@ -46,7 +46,7 @@ withSubsts :: [Ident] -> CaptureM a -> CaptureM (a, Ident -> Maybe Ident)
 withSubsts names f = do
   (prev, env) <- R.ask
 
-  substs <- fmap M.fromList $ sequence [ (n,) <$> nextName | n <- names ]
+  substs <- fmap M.fromList $ sequence [ (n,) <$> nextName n | n <- names ]
 
   -- Process f and capture free vars
   (a, captured) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (substs, prev <> env) f
@@ -56,9 +56,9 @@ withSubsts names f = do
 
   pure (a, \n -> if S.member n captured then M.lookup n substs else Nothing)
   where
-    nextName = do
+    nextName orig = do
       n <- ST.state $ \n -> (n, n + 1)
-      pure $ Captured n
+      pure $ Captured orig n
 
 annCapturedBindings_ :: Ann Type SRC.Expr -> CaptureM (Ann Type Expr)
 annCapturedBindings_ = bitraverse (rtraverse . trav) diff

@@ -214,6 +214,10 @@ data Program = Program
 codegen :: DefuncMap (Ann Type) -> Ann Type Expr -> Program
 codegen dfm expr = Program {..}
   where
+    lookupE e k m = case M.lookup k m of
+      Just v -> v
+      Nothing -> error e
+
     (((tick, funcMap, ref), startup), (_, globals)) = flip runState (0, mempty) $ runWriterT top
 
     top = do
@@ -273,7 +277,7 @@ codegen dfm expr = Program {..}
                    pure (n, var)
                  C.AllocGlobal -> do
                    -- Set global ref as return value for binding rhs
-                   var <- asks ((M.! n) . (.varMap))
+                   var <- asks ((lookupE "genLam_: global" n) . (.varMap))
                    local withBindingVars $ gen var bbody
                    pure (n, var)
              | (n, region, bbody@(Ann (typ, _))) <- bindings
@@ -288,7 +292,7 @@ codegen dfm expr = Program {..}
     genRec :: C.RecAnn (Ann Type Expr) -> CodegenM ()
     genRec (C.RecAnn _ delay param bindings body) = do
       env <- ask
-      let recEnv = env.recMap M.! param
+      let recEnv = lookupE "genRec: param" param env.recMap
 
       mdo
         bindingVars <- mconcat <$> sequenceA
@@ -317,14 +321,14 @@ codegen dfm expr = Program {..}
 
     prec param = do
       env <- ask
-      let envRec = env.recMap M.! param
+      let envRec = lookupE "prec: param" param env.recMap
       pure (RProj envRec.delayBuffer envRec.readIdx 1)
 
     rhs :: Ann Type Expr -> CodegenM Ref
     rhs (Ann (_, PConst n)) = pure $ RConst n
     rhs (Ann (_, PFunc fr)) = pure $ RFuncRef fr
 
-    rhs (Ann (_, PVar n)) = ask >>= \env -> pure (env.varMap M.! n)
+    rhs (Ann (_, PVar n)) = ask >>= \env -> pure (lookupE ("rhs: PVar: " <> show n) n env.varMap)
 
     rhs e@(Ann (typ, PArr _)) = alloc typ >>= \var -> gen var e >> pure var
     rhs e@(Ann (typ, POp _ _ _)) = alloc typ >>= \var -> gen var e >> pure var
@@ -340,7 +344,7 @@ codegen dfm expr = Program {..}
     gen ret (Ann (_, PConst n)) = copyRef ret (RConst n)
     gen ret (Ann (_, PFunc fr)) = copyRef ret (RFuncRef fr)
 
-    gen ret (Ann (_, PVar n)) = ask >>= \env -> copyRef ret (env.varMap M.! n)
+    gen ret (Ann (_, PVar n)) = ask >>= \env -> copyRef ret (lookupE ("gen: PVar: " <> show n) n env.varMap)
 
     gen ret (Ann (typ, PArr elems)) = do
       let innerDim = product $ innerDims typ

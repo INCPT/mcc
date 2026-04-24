@@ -97,7 +97,7 @@ numberType (F32 _) = TNumber TF32
 numberType (I64 _) = TNumber TI64
 numberType (F64 _) = TNumber TF64
 
-data Ident = Ident String | Captured Int
+data Ident = Ident String | Captured {- original ident -} Ident {- unique index -} Int
   deriving (Eq, Ord, Show)
 
 instance IsString Ident where
@@ -105,7 +105,7 @@ instance IsString Ident where
 
 instance Pretty Ident where
   pretty (Ident name) = pretty name
-  pretty (Captured n) = "<captured_" <> pretty n <> ">"
+  pretty (Captured name n) = "<captured_" <> pretty n <> "(" <> pretty name <> ")>"
 
 data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Rotl | Rotr 
         | Eq | Ne | Gt | Lt | GEt | LEt 
