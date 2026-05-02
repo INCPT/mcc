@@ -113,6 +113,11 @@ annCapturedBindings = fst . flip ST.evalState 0 . W.runWriterT . flip R.runReade
 
 --------------------------------------------------------------------------------
 
+rename :: Ann Type SRC.Expr -> CaptureM (Ann Type Expr)
+rename = undefined
+
+--------------------------------------------------------------------------------
+
 type PureM = R.Reader (Map Ident Pure)
 
 -- TODO: arrays which are written to by the imperative code must be marked as impure too
