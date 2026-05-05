@@ -20,7 +20,7 @@ import qualified Data.Set as S
 
 import OSC.Expr.Bitraversable
 import OSC.Expr.Functors
-import OSC.Expr.Comp (Ident (..), Type, paramTypes)
+import OSC.Expr.Comp (Ident (..), Captured (..), Type, paramTypes)
 import qualified OSC.Expr.FoldSel as SRC
 import qualified OSC.Expr.Comp as C
 import OSC.Expr.AnnBind hiding (const)
@@ -32,95 +32,89 @@ import GHC.Records (HasField)
 
 type CaptureM = R.ReaderT (Map Ident Ident, Map Ident Ident) (W.WriterT (Set Ident) (ST.State Int))
 
-capture :: Ident -> (Maybe Ident -> a) -> CaptureM a
-capture n f = do
-  (_, env) <- R.ask
-  
-  case M.lookup n env of
-    Just subst -> do
-      W.tell (S.singleton n)
-      pure $ f (Just subst)
-    Nothing -> pure $ f Nothing
+--------------------------------------------------------------------------------
 
-withSubsts :: [Ident] -> CaptureM a -> CaptureM (a, Ident -> Maybe Ident)
-withSubsts names f = do
-  (prev, env) <- R.ask
+type RenameM = R.ReaderT (M.Map Ident Captured) (W.WriterT (Set Captured) (ST.State Int))
 
-  substs <- fmap M.fromList $ sequence [ (n,) <$> nextName n | n <- names ]
-
-  -- Process f and capture free vars
-  (a, captured) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (substs, prev <> env) f
-
-  -- Propagate captures excluding params and bindings
-  W.tell (captured S.\\ S.fromList names)
-
-  pure (a, \n -> if S.member n captured then M.lookup n substs else Nothing)
+annCapturedBindings_ :: Ann Type SRC.Expr -> RenameM (Ann Type Expr)
+annCapturedBindings_ = bitraverse rtraverse diff
   where
-    nextName orig = do
+    nextName (Ident orig) = do
       n <- ST.state $ \n -> (n, n + 1)
       pure $ Captured orig n
 
-annCapturedBindings_ :: Ann Type SRC.Expr -> CaptureM (Ann Type Expr)
-annCapturedBindings_ = bitraverse (rtraverse . trav) diff
-  where
-    trav _ (SRC.PVar n) = capture n $ \subst -> case subst of
-      Just subst -> PVar subst
-      Nothing -> PVar n
-    trav rmap e = rmap e
+    diff :: Diff (Ann Type SRC.Expr) -> RenameM (Expr (Ann Type Expr))
+    diff (PIVar n) = R.ask >>= \env -> do
+      let cpt = env M.! n
+      W.tell $ S.singleton cpt
+      pure $ PCVar cpt
 
-    diff :: Diff (Ann Type SRC.Expr) -> CaptureM (Expr (Ann Type Expr))
     diff (PLam typ params bindings body) = do
-      ((bindings', body'), lkupSubst) <- withSubsts (params <> fmap fst bindings) $ do
-        bindings' <- sequenceA [ (n,) <$> annCapturedBindings_ bbody | (n, bbody) <- bindings ]
+      env <- R.ask
+
+      cptParams <- sequence [ (n,) <$> nextName n | n <- params ]
+      cptBindings <- sequence [ (n,) <$> nextName n | (n, _) <- bindings ]
+
+      let cptMap = M.fromList (cptParams <> cptBindings)
+      let cptSet = S.fromList (M.elems cptMap)
+
+      ((bindings', body'), captured) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (cptMap <> env) $ do
+        bindings' <- sequence [ (n,) <$> annCapturedBindings_ bbody | ((_, bbody), (_, n)) <- zip bindings cptBindings ]
         body' <- annCapturedBindings_ body
         pure (bindings', body')
 
-      let bindings'' = mconcat
-            [ [ case lkupSubst n of
-                  Just n' -> (n', C.AllocGlobal, Ann (t, e))
-                  Nothing -> (n, C.AllocLocal, Ann (t, e))
-              | (n, Ann (t, e)) <- bindings'
-              ]
-            , [ (paramSubst, C.AllocGlobal, Ann (t, Expr $ C.Var p))
-              | (p, t) <- zip params (paramTypes ("markCapturedBindings: " <> show typ) typ)
-              , Just paramSubst <- [ lkupSubst p ]
-              ]
-            ]
-
-      pure $ PLamAnn typ params bindings'' body'
-   
-    diff (PRec typ delay param bindings body) = do
-      ((bindings', body'), lkupSubst) <- withSubsts (param:fmap fst bindings) $ do
-        bindings' <- sequenceA [ (n,) <$> annCapturedBindings_ bbody | (n, bbody) <- bindings ]
-        body' <- annCapturedBindings_ body
-        pure (bindings', body')
-
-      let paramSubst = case lkupSubst param of
-            Just subst -> subst
-            Nothing -> param
+      W.tell (captured S.\\ cptSet)
 
       let bindings'' =
-            [ case lkupSubst n of
-                Just n' -> (n', C.AllocGlobal, Ann (t, e))
-                Nothing -> (n, C.AllocLocal, Ann (t, e))
+            [ if S.member n captured
+                then (n, C.AllocGlobal, Ann (t, e))
+                else (n, C.AllocLocal, Ann (t, e))
             | (n, Ann (t, e)) <- bindings'
             ]
-   
-      pure $ PRecAnn typ delay paramSubst bindings'' body'
+      let params' =
+            [ if S.member p captured
+                then (p, C.AllocGlobal)
+                else (p, C.AllocLocal)
+            | ((_, p), t) <- zip cptParams (paramTypes ("markCapturedBindings: " <> show typ) typ)
+            ]
+
+      pure $ PLamAnn typ params' bindings'' body'
+
+    diff (PRec typ delay param bindings body) = do
+      env <- R.ask
+
+      cptParam <- nextName param
+      cptBindings <- sequence [ (n,) <$> nextName n | (n, _) <- bindings ]
+
+      let cptMap = M.fromList ((param, cptParam):cptBindings)
+      let cptSet = S.fromList (M.elems cptMap)
+
+      ((bindings', body'), captured) <- lift $ lift $ W.runWriterT $ flip R.runReaderT (cptMap <> env) $ do
+        bindings' <- sequence [ (n,) <$> annCapturedBindings_ bbody | ((_, bbody), (_, n)) <- zip bindings cptBindings ]
+        body' <- annCapturedBindings_ body
+        pure (bindings', body')
+
+      W.tell (captured S.\\ cptSet)
+
+      let bindings'' =
+            [ if S.member n captured
+                then (n, C.AllocGlobal, Ann (t, e))
+                else (n, C.AllocLocal, Ann (t, e))
+            | (n, Ann (t, e)) <- bindings'
+            ]
+
+      pure $ PRecAnn typ delay cptParam bindings'' body'
 
 annCapturedBindings :: Ann Type SRC.Expr -> Ann Type Expr
 annCapturedBindings = fst . flip ST.evalState 0 . W.runWriterT . flip R.runReaderT mempty . annCapturedBindings_
 
 --------------------------------------------------------------------------------
 
-rename :: Ann Type SRC.Expr -> CaptureM (Ann Type Expr)
-rename = undefined
-
---------------------------------------------------------------------------------
-
 type PureM = R.Reader (Map Ident Pure)
 
 -- TODO: arrays which are written to by the imperative code must be marked as impure too
+
+{-
 
 annPure_ :: Extend "pure" Pure r r' => AnnR r Expr -> PureM (AnnR r' Expr)
 annPure_ ann@(Ann (r, expr)) = case expr of
@@ -152,10 +146,10 @@ annPure_ ann@(Ann (r, expr)) = case expr of
       -- RecAnn is always impure
       pure $ Ann (Impure ~> r, PRecAnn typ delay param bindings' body')
 
-    PVar ident -> do
+    PCVar ident -> do
       env <- R.ask
       let p = M.findWithDefault Pure ident env
-      pure $ Ann (p ~> r, PVar ident)
+      pure $ Ann (p ~> r, PCVar ident)
     
     -- Generic case: use recAnnM-like traversal
     _ -> recAnnM #pure annPure_ ann
@@ -168,6 +162,8 @@ annPure_ ann@(Ann (r, expr)) = case expr of
 
 annPure :: Extend "pure" Pure r r' => AnnR r Expr -> AnnR r' Expr
 annPure expr = flip R.runReader mempty $ annPure_ expr
+
+-}
 
 --------------------------------------------------------------------------------
 

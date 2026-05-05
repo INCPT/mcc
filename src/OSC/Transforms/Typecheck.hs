@@ -70,7 +70,7 @@ checkDuplicates pos bindings = do
 
 checkCycles :: Show ann => pos -> [(Ident, ExpA ann)] -> TypecheckM pos [(Ident, ExpA ann)]
 checkCycles pos bindings = do
-  let nodeEdges expr = S.fromList [ {- (\x -> trace ("VAR :" <> show x) x) $ -} n | Ann (_, BExpr (C.Var n)) <- universe' expr ]
+  let nodeEdges expr = S.fromList [ {- (\x -> trace ("VAR :" <> show x) x) $ -} n | Ann (_, BExpr (C.IVar n)) <- universe' expr ]
   case topsort nodeEdges bindings of
     Left scc -> E.throwError $ CyclicDependency pos scc
     Right sorted -> pure sorted
@@ -154,10 +154,10 @@ typecheck expr = case unAnn expr of
       then pure $ Ann ((pos, TArr at (length as + 1)), PArr (a':as'))
       else E.throwError $ ArrayElementTypeMismatch pos (at:types)
   
-  (pos, PVar n) -> do
+  (pos, PIVar n) -> do
     env <- R.ask
     case M.lookup n env of
-      Just t -> pure $ Ann ((pos, t), PVar n)
+      Just t -> pure $ Ann ((pos, t), PIVar n)
       Nothing -> E.throwError $ UnknownBinding pos n
   
   (pos, PLam typ params bindings body) -> do
@@ -278,4 +278,4 @@ e1 = select (arr [(op Add (cnst $ C.I32 4) (cnst $ C.I32 8)), cnst $ C.I32 1]) (
 -- e2 :: ExpA ()
 -- e2 = Ann {unAnn = ((),Lam (TLam [] (TNumber TF32)) [] [(Ident "g756",Ann {unAnn = ((),Rec (TNumber TI64) 2 (Ident "b500") [(Ident "f453",Ann {unAnn = ((),App (Ann {unAnn = ((),Lam (TLam [TNumber TI64,TArr (TNumber TI32) 3] (TArr (TNumber TI32) 1)) [Ident "c130",Ident "f982"] [(Ident "b182",Ann {unAnn = ((),Const (F64 0.5030272493895455))}),(Ident "a179",Ann {unAnn = ((),Const (I32 0))}),(Ident "b8",Ann {unAnn = ((),Const (F64 (-1.0)))})] (Ann {unAnn = ((),Arr [Ann {unAnn = ((),Var (Ident "a179"))}])}))}) [Ann {unAnn = ((),Const (I64 1))},Ann {unAnn = ((),Arr [Ann {unAnn = ((),Const (I32 1))},Ann {unAnn = ((),Const (I32 (-1)))},Ann {unAnn = ((),Const (I32 (-1)))}])}])}),(Ident "y862",Ann {unAnn = ((),Const (F64 0.7922093797675532))}),(Ident "y851",Ann {unAnn = ((),Lam (TLam [] (TNumber TF64)) [] [(Ident "x699",Ann {unAnn = ((),Var (Ident "y862"))}),(Ident "g666",Ann {unAnn = ((),Const (F32 (-1.0)))})] (Ann {unAnn = ((),Var (Ident "x699"))}))})] (Ann {unAnn = ((),Op Add (Ann {unAnn = ((),Op Sub (Ann {unAnn = ((),Var (Ident "b500"))}) (Ann {unAnn = ((),Const (I64 1))}))}) (Ann {unAnn = ((),Const (I64 (-1)))}))}))})] (Ann {unAnn = ((),Const (F32 1.5))}))}
 -- 
-e3 = Ann {unAnn = ((),PLam (TLam [] (TNumber TF32)) [] [(Ident "x568",Ann {unAnn = ((),PConst (F32 (-1.0)))}),(Ident "f477",Ann {unAnn = ((),PVar (Ident "x568"))}),(Ident "a193",Ann {unAnn = ((),PConst (F64 0.9879229879464689))})] (Ann {unAnn = ((),PConst (F32 (-1.0)))}))}
+e3 = Ann {unAnn = ((),PLam (TLam [] (TNumber TF32)) [] [(Ident "x568",Ann {unAnn = ((),PConst (F32 (-1.0)))}),(Ident "f477",Ann {unAnn = ((),PIVar (Ident "x568"))}),(Ident "a193",Ann {unAnn = ((),PConst (F64 0.9879229879464689))})] (Ann {unAnn = ((),PConst (F32 (-1.0)))}))}

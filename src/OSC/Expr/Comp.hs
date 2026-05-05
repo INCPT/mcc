@@ -97,7 +97,7 @@ numberType (F32 _) = TNumber TF32
 numberType (I64 _) = TNumber TI64
 numberType (F64 _) = TNumber TF64
 
-data Ident = Ident String | Captured {- original ident -} Ident {- unique index -} Int
+data Ident = Ident String
   deriving (Eq, Ord, Show)
 
 instance IsString Ident where
@@ -105,7 +105,12 @@ instance IsString Ident where
 
 instance Pretty Ident where
   pretty (Ident name) = pretty name
-  pretty (Captured name n) = "<captured_" <> pretty n <> "(" <> pretty name <> ")>"
+
+data Captured = Captured String Int
+  deriving (Eq, Ord, Show)
+
+instance Pretty Captured where
+  pretty (Captured name id) = pretty name <> "#" <> pretty id
 
 data Op = Add | Sub | Mul | Div | Mod | And | Or | Xor | Shl | Shr | Rotl | Rotr 
         | Eq | Ne | Gt | Lt | GEt | LEt 
@@ -216,11 +221,22 @@ instance Pretty exp => Pretty (FoldedSelect exp) where
     where
       list docs = parens $ hsep docs
 
+data IVar exp = IVar Ident
+  deriving (Functor, Foldable, Traversable, Show)
+
+instance Pretty (IVar exp) where
+  pretty (IVar v) = pretty v
+
+data CVar exp = CVar Captured
+  deriving (Functor, Foldable, Traversable, Show)
+
+instance Pretty (CVar exp) where
+  pretty (CVar v) = pretty v
+
 data Expr exp
   = Const Number
   | Arr [exp]
   | Op Op exp exp
-  | Var Ident
   | App exp [exp]
   deriving (Functor, Foldable, Traversable, Show)
 
@@ -229,7 +245,6 @@ instance Pretty exp => Pretty (Expr exp) where
     Const n -> pretty n
     Arr elems -> parens $ hsep ["arr", list (map pretty elems)]
     Op op a b -> parens $ hsep [pretty op, pretty a, pretty b]
-    Var ident -> pretty ident
     App func args -> parens $ hsep ["app", pretty func, list (map pretty args)]
     where
       list docs = parens $ hsep docs
@@ -242,7 +257,7 @@ instance Pretty AllocRegion where
     AllocLocal -> "<local>"
     AllocGlobal -> "<global>"
 
-data LamAnn exp = LamAnn Type [Ident] [(Ident, AllocRegion, exp)] exp
+data LamAnn exp = LamAnn Type [(Captured, AllocRegion)] [(Captured, AllocRegion, exp)] exp
   deriving (Functor, Foldable, Traversable, Show)
 
 instance Pretty exp => Pretty (LamAnn exp) where
@@ -260,7 +275,7 @@ instance Pretty exp => Pretty (LamAnn exp) where
       prettyBinding (ident, region, expr) = parens $ hsep
         [pretty ident, pretty region, pretty expr]
 
-data RecAnn exp = RecAnn Type Int Ident [(Ident, AllocRegion, exp)] exp
+data RecAnn exp = RecAnn Type Int Captured [(Captured, AllocRegion, exp)] exp
   deriving (Functor, Foldable, Traversable, Show)
 
 instance Pretty exp => Pretty (RecAnn exp) where

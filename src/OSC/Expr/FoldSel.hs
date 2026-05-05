@@ -16,6 +16,7 @@ import GHC.Generics
 data Expr exp
   = Expr (C.Expr exp)
   | FoldedSelect (C.FoldedSelect exp)
+  | Var (C.IVar exp)
   | Lam (C.Lam exp)
   | Rec (C.Rec exp)
  deriving (Functor, Foldable, Traversable, Generic, Show)

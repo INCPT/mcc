@@ -15,8 +15,9 @@ import GHC.Generics
 
 data Expr exp
   = BExpr (C.Expr exp)
-  | BLam (C.Lam exp)
   | BSelect (C.Select exp)
+  | BVAr (C.IVar exp)
+  | BLam (C.Lam exp)
   | BRec (C.Rec exp)
   deriving (Functor, Foldable, Traversable, Generic, Show)
 

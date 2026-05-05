@@ -26,6 +26,7 @@ instance Semigroup Pure where
 data Expr exp
   = Expr (C.Expr exp)
   | FoldedSelect (C.FoldedSelect exp)
+  | Var (C.CVar exp)
   | LamAnn (C.LamAnn exp)
   | RecAnn (C.RecAnn exp)
  deriving (Functor, Foldable, Traversable, Generic, Show)
@@ -37,8 +38,9 @@ instance Pretty exp => Pretty (Expr exp) where
   pretty = genPretty
 
 data Diff exp
-  = Lam (C.Lam exp)
-  | Rec (C.Rec exp)
+  = DLam (C.Lam exp)
+  | DRec (C.Rec exp)
+  | DVar (C.IVar exp)
 
 $(genPatternSynonyms ('P':) ''Diff)
 $(genBitraversableInstance ''SRC.Expr ''Expr ''Diff)
