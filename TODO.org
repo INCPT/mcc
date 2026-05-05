@@ -1,3 +1,4 @@
+* TODO recs should write their result into a global so that each call site doesn't do the indexing
 * TODO binary ifs
 * TODO variable delays
 * TODO folds can not return lambdas
