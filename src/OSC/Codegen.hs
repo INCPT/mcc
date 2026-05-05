@@ -122,7 +122,7 @@ toSlice (RConst n) = pure $ SConst n
 toSlice (RFuncRef fr) = pure $ SFuncRef fr
 toSlice (RArg typ arg) = pure $ SSlice typ (SArg arg) (Left 0) (C.elemCountOfType typ)
 toSlice (RVar typ loc) = pure $ SSlice typ (SVar loc) (Left 0) (C.elemCountOfType typ)
-toSlice (RRet _) = error $ "toSlice: trying to slice ret"
+toSlice (RRet typ) = pure $ SSlice typ SRet (Left 0) (C.elemCountOfType typ)
 toSlice (RProj ref idx innerDim) = do
   slice <- toSlice ref
   idxSlice <- toSlice idx
@@ -193,7 +193,7 @@ if_ cond t e = do
 innerDims :: Type -> [Int]
 innerDims (TArr (TArr t dim) _) = dim:innerDims t
 innerDims (TArr _ _) = [1]
-innerDims _ = error "innerDims"
+innerDims _ = []
 
 data ProgramFunc = ProgramFunc
   { params :: [(Captured, C.AllocRegion, Type)]
