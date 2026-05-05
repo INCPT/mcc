@@ -255,12 +255,12 @@ codegen dfm expr = Program {..}
             pure (n, RVar typ loc)
         | (n, C.AllocGlobal, Ann (typ, _)) <- bindings
         ]
-      
+
       delayBuffer <- RVar (TArr typ delay) <$> allocLoc (TArr typ delay)
       writeIdx <- RVar C.ti32 <$> allocLoc C.ti32
       readIdx <- RVar C.ti32 <$> allocLoc C.ti32
 
-      pure (M.fromList varMap, M.singleton param (RecEnv {..}))
+      pure (M.fromList ((param, RProj delayBuffer readIdx 1):varMap), M.singleton param (RecEnv {..}))
 
     genLam :: Env -> C.LamAnn (Ann Type Expr) -> ProgramFunc
     genLam env lam@(C.LamAnn typ params_ _ _) = ProgramFunc {..}
@@ -310,8 +310,7 @@ codegen dfm expr = Program {..}
 
       mdo
         bindingVars <- mconcat <$> sequenceA
-          [ pure $ M.singleton param (RProj recEnv.delayBuffer recEnv.readIdx 1)
-          , M.fromList <$> sequenceA [ (n,) <$> local withBindingVars (rhs bbody) | (n, _, bbody) <- bindings ]
+          [ M.fromList <$> sequenceA [ (n,) <$> local withBindingVars (rhs bbody) | (n, _, bbody) <- bindings ]
           ]
 
         let withBindingVars :: Env -> Env
