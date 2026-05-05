@@ -75,7 +75,7 @@ annCapturedBindings_ = bitraverse rtraverse diff
             [ if S.member p captured
                 then (p, C.AllocGlobal)
                 else (p, C.AllocLocal)
-            | ((_, p), t) <- zip cptParams (paramTypes ("markCapturedBindings: " <> show typ) typ)
+            | (_, p) <- cptParams
             ]
 
       pure $ PLamAnn typ params' bindings'' body'

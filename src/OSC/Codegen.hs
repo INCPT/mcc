@@ -18,7 +18,7 @@ import Data.List (intercalate)
 import qualified Data.Map as M
 import Prettyprinter (Pretty(..), (<+>), vsep, hsep, parens, brackets, indent)
 
-import OSC.Expr.Comp (Ident, Type (..), TNumber (..), Number (..), Op (..))
+import OSC.Expr.Comp (Captured, Type (..), TNumber (..), Number (..), Op (..))
 import qualified OSC.Expr.Comp as C
 import OSC.Expr.Functors
 import OSC.Expr.Defunc hiding (const)
@@ -30,13 +30,13 @@ newtype Location = Location Int
 data Ref
   = RConst Number
   | RRet Type
-  | RArg Type Ident
+  | RArg Type Captured
   | RVar Type Location
   | RProj {- expression -} Ref {- index -} Ref {- inner dimension, e.g. for the array[4][7], array[1] would set the inner dimension to 7 -} Int
   | RFuncRef FuncRef
   deriving Show
 
-data SliceRoot = SArg Ident | SVar Location | SRet
+data SliceRoot = SArg Captured | SVar Location | SRet
   deriving Show
 
 data Slice
@@ -93,8 +93,8 @@ data RecEnv = RecEnv
   }
 
 data Env = Env
-  { varMap :: Map Ident Ref
-  , recMap :: Map Ident RecEnv
+  { varMap :: Map Captured Ref
+  , recMap :: Map Captured RecEnv
   }
 
 type AllocM = State (Int, Map Location Type)
@@ -196,7 +196,7 @@ innerDims (TArr _ _) = [1]
 innerDims _ = error "innerDims"
 
 data ProgramFunc = ProgramFunc
-  { params :: [(Ident, Type)]
+  { params :: [(Captured, C.AllocRegion, Type)]
   , locals :: Map Location Type
   , instructions :: [Instruction]
   } deriving Show
@@ -233,15 +233,21 @@ codegen dfm expr = Program {..}
       ref <- flip R.runReaderT env $ rhs expr
       pure (tick, funcMap, ref)
 
-    collectLamAllocations :: C.LamAnn (Ann Type Expr) -> AllocM (Map Ident Ref)
-    collectLamAllocations (C.LamAnn _ _ bindings _) = M.fromList <$> sequence
-      [ do
-          loc <- allocLoc typ
-          pure (n, RVar typ loc)
-      | (n, C.AllocGlobal, Ann (typ, _)) <- bindings
+    collectLamAllocations :: C.LamAnn (Ann Type Expr) -> AllocM (Map Captured Ref)
+    collectLamAllocations (C.LamAnn typ params bindings _) = fmap M.fromList $ sequence $ mconcat
+      [ [ do
+            loc <- allocLoc typ
+            pure (n, RVar typ loc)
+        | (n, C.AllocGlobal, Ann (typ, _)) <- bindings
+        ]
+      , [ do
+            loc <- allocLoc typ
+            pure (n, RVar typ loc)
+        | ((n, C.AllocGlobal), typ) <- zip params (C.paramTypes "collecLamAllocations" typ)
+        ]
       ]
 
-    collectRecAllocations :: C.RecAnn (Ann Type Expr) -> AllocM (Map Ident Ref, Map Ident RecEnv)
+    collectRecAllocations :: C.RecAnn (Ann Type Expr) -> AllocM (Map Captured Ref, Map Captured RecEnv)
     collectRecAllocations (C.RecAnn typ delay param bindings _) = do
       varMap <- sequence
         [ do
@@ -259,14 +265,22 @@ codegen dfm expr = Program {..}
     genLam :: Env -> C.LamAnn (Ann Type Expr) -> ProgramFunc
     genLam env lam@(C.LamAnn typ params_ _ _) = ProgramFunc {..}
       where
-        params = zip params_ (C.paramTypes "genLam" typ)
+        params = [ (n, region, typ) | ((n, region), typ) <- zip params_ (C.paramTypes "genLam" typ) ]
         ((_, instructions), (_, locals)) = flip runState (0, mempty) $ W.runWriterT $ flip runReaderT env (genLam_ lam)
 
     genLam_ :: C.LamAnn (Ann Type Expr) -> CodegenM ()
     genLam_ (C.LamAnn typ params bindings body) = mdo
        bindingVars <- mconcat <$> sequence
          -- Arguments
-         [ pure $ M.fromList [ (p, RArg typ p) | (p, typ) <- zip params (C.paramTypes "genLam" typ) ]
+         [ M.fromList <$> sequence
+              [ do
+                  when (region == C.AllocGlobal) $ do
+                    var <- asks ((lookupE "genLam_: global" p) . (.varMap))
+                    copyRef var (RArg typ p)
+
+                  pure (p, RArg typ p)
+              | ((p, region), typ) <- zip params (C.paramTypes "genLam" typ)
+              ]
 
          -- Bindings (must be in topsort order)
          , M.fromList <$> sequence
@@ -328,7 +342,7 @@ codegen dfm expr = Program {..}
     rhs (Ann (_, PConst n)) = pure $ RConst n
     rhs (Ann (_, PFunc fr)) = pure $ RFuncRef fr
 
-    rhs (Ann (_, PVar n)) = ask >>= \env -> pure (lookupE ("rhs: PVar: " <> show n) n env.varMap)
+    rhs (Ann (_, PCVar n)) = ask >>= \env -> pure (lookupE ("rhs: PVar: " <> show n) n env.varMap)
 
     rhs e@(Ann (typ, PArr _)) = alloc typ >>= \var -> gen var e >> pure var
     rhs e@(Ann (typ, POp _ _ _)) = alloc typ >>= \var -> gen var e >> pure var
@@ -344,7 +358,7 @@ codegen dfm expr = Program {..}
     gen ret (Ann (_, PConst n)) = copyRef ret (RConst n)
     gen ret (Ann (_, PFunc fr)) = copyRef ret (RFuncRef fr)
 
-    gen ret (Ann (_, PVar n)) = ask >>= \env -> copyRef ret (lookupE ("gen: PVar: " <> show n) n env.varMap)
+    gen ret (Ann (_, PCVar n)) = ask >>= \env -> copyRef ret (lookupE ("gen: PVar: " <> show n) n env.varMap)
 
     gen ret (Ann (typ, PArr elems)) = do
       let innerDim = product $ innerDims typ
@@ -442,7 +456,7 @@ instance Pretty Instruction where
 
 instance Pretty ProgramFunc where
   pretty (ProgramFunc params locals instructions) = vsep
-    [ "params:" <+> hsep (punctuate "," [ pretty ident <> ":" <> pretty (showType typ) | (ident, typ) <- params ])
+    [ "params:" <+> hsep (punctuate "," [ pretty ident <> ":" <> pretty region <> ":" <> pretty (showType typ) | (ident, region, typ) <- params ])
     , "locals:" <+> hsep (punctuate "," [ "var" <> pretty loc <> ":" <> pretty (showType typ) | (Location loc, typ) <- M.toList locals ])
     , "body:"
     , indent 2 (vsep (map pretty instructions))

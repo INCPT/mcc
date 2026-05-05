@@ -70,7 +70,7 @@ checkDuplicates pos bindings = do
 
 checkCycles :: Show ann => pos -> [(Ident, ExpA ann)] -> TypecheckM pos [(Ident, ExpA ann)]
 checkCycles pos bindings = do
-  let nodeEdges expr = S.fromList [ {- (\x -> trace ("VAR :" <> show x) x) $ -} n | Ann (_, BExpr (C.IVar n)) <- universe' expr ]
+  let nodeEdges expr = S.fromList [ {- (\x -> trace ("VAR :" <> show x) x) $ -} n | Ann (_, BVar (C.IVar n)) <- universe' expr ]
   case topsort nodeEdges bindings of
     Left scc -> E.throwError $ CyclicDependency pos scc
     Right sorted -> pure sorted

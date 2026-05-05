@@ -8,7 +8,7 @@ module OSC.Expr.Defunc where
 import qualified Data.Map as M
 
 import qualified OSC.Expr.AnnBind as SRC
-import OSC.Expr.Comp (Ident)
+import OSC.Expr.Comp (Captured)
 import qualified OSC.Expr.Comp as C
 import OSC.Expr.TH
 
@@ -25,8 +25,9 @@ instance Pretty FuncRef where
 
 data Expr exp
   = Expr (C.Expr exp)
+  | Var (C.CVar exp)
   | FoldedSelect (C.FoldedSelect exp)
-  | Rec Ident
+  | Rec Captured
   | Func FuncRef
  deriving (Functor, Foldable, Traversable, Generic, Show)
 
