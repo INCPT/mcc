@@ -60,10 +60,11 @@ applyOp _ _ _ = error "applyOp: unsupported operation"
 
 -- Allocate flattened array storage
 allocateFlattened :: Type -> Value
-allocateFlattened typ =
+allocateFlattened typ@(TArr _ _) =
   let bt = baseType typ
       count = elemCountOfType typ
   in VArr (replicate count (zeroValue (TNumber bt)))
+allocateFlattened typ = zeroValue typ
 
 -- Get a value from a location
 getVar :: Location -> VarTable -> Value
@@ -88,7 +89,7 @@ writeSlice (VArr dest) offset (VArr src) =
 writeSlice (VArr dest) offset (VNumber n) =
   let (before, _:after) = splitAt offset dest
   in VArr (before <> [VNumber n] <> after)
-writeSlice _ _ _ = error "writeSlice: type mismatch"
+writeSlice _ _ v = v
 
 -- Read a slice value from the execution context
 readSlice :: Slice -> VarTable -> Map Captured Value -> Maybe Value -> Value
@@ -175,11 +176,11 @@ interpInstrs (instr:instrs) locals args retVal = do
       interpInstrs instrs locals' args retVal'
 
     IIf cond thn els -> do
-      let VNumber condVal = readSlice cond allVars args retVal
+      let condVal = readSlice cond allVars args retVal
       let branch = case condVal of
-            I32 0 -> els
-            I64 0 -> els
-            _ -> thn
+            VNumber (I32 x) -> if x > 0 then thn else els
+            VNumber (I64 x) -> if x > 0 then thn else els
+            c -> error $ show c
       (locals', retVal') <- interpInstrs branch locals args retVal
       interpInstrs instrs locals' args retVal'
 
