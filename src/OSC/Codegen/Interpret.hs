@@ -222,7 +222,9 @@ interpInstrs (instr:instrs) locals args retVal = do
 
     IFor counterLoc initial steps step body -> do
       let loop i locals' retVal'
-            | i >= steps = pure (locals', retVal')
+            | step > 0 && i >= steps = pure (locals', retVal')
+            | step < 0 && i <= steps = pure (locals', retVal')
+            | step == 0 = pure (locals', retVal')  -- Avoid infinite loop
             | otherwise = do
                 let locals'' = setVar counterLoc (VNumber (I32 i)) locals'
                 modify $ \ExecState {..} -> ExecState { globals = M.union locals'' globals, .. }
