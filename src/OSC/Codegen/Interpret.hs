@@ -244,7 +244,7 @@ initInterpreter prog =
   let startup = do
         -- Allocate globals
         let globalVars = M.fromList [ (loc, allocateFlattened typ) | (loc, typ) <- M.toList prog.globals ]
-        modify $ \ExecState {..} -> ExecState { globals = globalVars, funcMap = prog.funcMap, .. }
+        put $ ExecState { globals = globalVars, funcMap = prog.funcMap }
         
         -- Run startup instructions
         (_, _) <- interpInstrs prog.startup M.empty M.empty Nothing
@@ -258,14 +258,6 @@ initInterpreter prog =
       eval = evalRef prog.ref
   
   in (startup, tick, eval)
-
--- Run the interpreter
-runInterpreter :: Program -> (ExecState -> a) -> a
-runInterpreter prog f =
-  let (startup, _, _) = initInterpreter prog
-      initialState = ExecState { globals = M.empty, funcMap = prog.funcMap }
-      finalState = execState startup initialState
-  in f finalState
 
 -- Interpret a program and generate a list of values
 interpretToList :: Program -> Int -> [Value]
