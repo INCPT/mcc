@@ -121,30 +121,30 @@ readSlice (SSlice _ SRet (Right offsetLoc) len) vars _ (Just retVal) =
 readSlice slice _ _ _ = error $ "readSlice: invalid slice: " <> show slice
 
 -- Write a slice value to the execution context
-writeSliceCtx :: Slice -> Value -> VarTable -> Map Captured Value -> Maybe Value -> (VarTable, Maybe Value)
-writeSliceCtx (SSlice _ (SVar loc) (Left offset) _) val vars _ retVal =
-  let current = fromMaybe (error $ "writeSliceCtx: SVar (Left offset): location not found: " <> show loc) (M.lookup loc vars)
+writeSliceCtx :: String -> Slice -> Value -> VarTable -> Map Captured Value -> Maybe Value -> (VarTable, Maybe Value)
+writeSliceCtx callSite (SSlice _ (SVar loc) (Left offset) _) val vars _ retVal =
+  let current = fromMaybe (error $ "writeSliceCtx [" <> callSite <> "]: SVar (Left offset): location not found: " <> show loc) (M.lookup loc vars)
       updated = writeSlice current offset val
   in (setVar loc updated vars, retVal)
-writeSliceCtx (SSlice _ (SVar loc) (Right offsetLoc) _) val vars _ retVal =
-  let VNumber offsetNum = fromMaybe (error $ "writeSliceCtx: SVar (Right offsetLoc) - offsetLoc: location not found: " <> show offsetLoc) (M.lookup offsetLoc vars)
+writeSliceCtx callSite (SSlice _ (SVar loc) (Right offsetLoc) _) val vars _ retVal =
+  let VNumber offsetNum = fromMaybe (error $ "writeSliceCtx [" <> callSite <> "]: SVar (Right offsetLoc) - offsetLoc: location not found: " <> show offsetLoc) (M.lookup offsetLoc vars)
       offset = case offsetNum of
         I32 i -> fromIntegral i
         I64 i -> fromIntegral i
         _ -> error "writeSliceCtx: offset must be integer"
-      current = fromMaybe (error $ "writeSliceCtx: SVar (Right offsetLoc) - loc: location not found: " <> show loc) (M.lookup loc vars)
+      current = fromMaybe (error $ "writeSliceCtx [" <> callSite <> "]: SVar (Right offsetLoc) - loc: location not found: " <> show loc) (M.lookup loc vars)
       updated = writeSlice current offset val
   in (setVar loc updated vars, retVal)
-writeSliceCtx (SSlice _ SRet (Left offset) _) val vars _ (Just retVal) =
+writeSliceCtx _ (SSlice _ SRet (Left offset) _) val vars _ (Just retVal) =
   (vars, Just (writeSlice retVal offset val))
-writeSliceCtx (SSlice _ SRet (Right offsetLoc) _) val vars _ (Just retVal) =
-  let VNumber offsetNum = fromMaybe (error $ "writeSliceCtx: SRet (Right offsetLoc): location not found: " <> show offsetLoc) (M.lookup offsetLoc vars)
+writeSliceCtx callSite (SSlice _ SRet (Right offsetLoc) _) val vars _ (Just retVal) =
+  let VNumber offsetNum = fromMaybe (error $ "writeSliceCtx [" <> callSite <> "]: SRet (Right offsetLoc): location not found: " <> show offsetLoc) (M.lookup offsetLoc vars)
       offset = case offsetNum of
         I32 i -> fromIntegral i
         I64 i -> fromIntegral i
         _ -> error "writeSliceCtx: offset must be integer"
   in (vars, Just (writeSlice retVal offset val))
-writeSliceCtx slice _ _ _ _ = error $ "writeSliceCtx: invalid destination slice: " <> show slice
+writeSliceCtx callSite slice _ _ _ _ = error $ "writeSliceCtx [" <> callSite <> "]: invalid destination slice: " <> show slice
 
 -- Interpret instructions with local variables, arguments, and return value
 interpInstrs :: [Instruction] -> VarTable -> Map Captured Value -> Maybe Value -> InterpM (VarTable, Maybe Value)
@@ -156,7 +156,9 @@ interpInstrs (instr:instrs) locals args retVal = do
   case instr of
     ICopy dest src -> do
       let srcVal = readSlice src allVars args retVal
-      let (locals', retVal') = writeSliceCtx dest srcVal locals args retVal
+      let (locals', retVal') = case writeSliceCtx dest srcVal locals args retVal of
+            result@(vars, _) | M.member (Location AllocGlobal 1) vars || not (M.member (Location AllocGlobal 1) locals) -> result
+            _ -> error $ "ICopy: writeSliceCtx failed for dest=" <> show dest <> ", src=" <> show src
       modify $ \ExecState {..} -> ExecState { globals = M.union locals' globals, .. }
       interpInstrs instrs locals' args retVal'
 
@@ -164,7 +166,9 @@ interpInstrs (instr:instrs) locals args retVal = do
       let aVal = readSlice a allVars args retVal
       let bVal = readSlice b allVars args retVal
       let resultVal = applyOp op aVal bVal
-      let (locals', retVal') = writeSliceCtx dest resultVal locals args retVal
+      let (locals', retVal') = case writeSliceCtx dest resultVal locals args retVal of
+            result@(vars, _) | M.member (Location AllocGlobal 1) vars || not (M.member (Location AllocGlobal 1) locals) -> result
+            _ -> error $ "IBinOp: writeSliceCtx failed for op=" <> show op <> ", dest=" <> show dest <> ", a=" <> show a <> ", b=" <> show b
       modify $ \ExecState {..} -> ExecState { globals = M.union locals' globals, .. }
       interpInstrs instrs locals' args retVal'
 
@@ -205,7 +209,7 @@ interpInstrs (instr:instrs) locals args retVal = do
           
           case mfinalRet of
             Just finalRet -> do
-              let (locals', retVal') = writeSliceCtx retSlice finalRet locals args retVal
+              let (locals', retVal') = writeSliceCtx "ICall" retSlice finalRet locals args retVal
               modify $ \ExecState {..} -> ExecState { globals = M.union locals' globals, .. }
               interpInstrs instrs locals' args retVal'
             Nothing -> error "finalRet"
