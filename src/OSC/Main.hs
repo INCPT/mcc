@@ -3,8 +3,10 @@ module OSC.Main where
 import OSC.Expr.Base
 import OSC.Expr.Comp
 import OSC.Expr.Functors
+import qualified OSC.Expr.Interpret as I
 
 import OSC.Codegen
+import OSC.Codegen.Interpret
 
 import OSC.Transforms.Typecheck
 import OSC.Transforms.AnnBind
@@ -12,6 +14,15 @@ import OSC.Transforms.FoldSel
 import OSC.Transforms.Defunc
 
 import OSC.Pretty
+
+stgInterpret expr = I.interpretToList expr'
+   where
+      expr' = dbgInfer expr
+
+stgRun expr = interpretToList program 20
+   where
+      (expr', dfm) = defunc $ annCapturedBindings $ foldSelections $ dbgInfer expr
+      program = codegen dfm expr'
 
 stgCompile expr = prettyString program
    where

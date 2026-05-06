@@ -140,7 +140,7 @@ interpret (Ann (_, PArr as)) = do
     as <- sequence simas
     pure $ VArr as
 
-interpret (Ann (_, PVar n)) = do
+interpret (Ann (_, PIVar n)) = do
   env <- R.ask
   case M.lookup n env of
     Just var -> pure var

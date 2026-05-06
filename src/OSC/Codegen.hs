@@ -196,7 +196,7 @@ innerDims (TArr _ _) = [1]
 innerDims _ = []
 
 data ProgramFunc = ProgramFunc
-  { params :: [(Captured, C.AllocRegion, Type)]
+  { params :: [(Captured, Type)]
   , locals :: Map Location Type
   , instructions :: [Instruction]
   } deriving Show
@@ -266,7 +266,7 @@ codegen dfm expr = Program {..}
     genLam :: Env -> C.LamAnn (Ann Type Expr) -> ProgramFunc
     genLam env lam@(C.LamAnn typ params_ _ _) = ProgramFunc {..}
       where
-        params = [ (n, region, typ) | ((n, region), typ) <- zip params_ (C.paramTypes "genLam" typ) ]
+        params = [ (n, typ) | ((n, _), typ) <- zip params_ (C.paramTypes "genLam" typ) ]
         ((_, instructions), (_, locals)) = flip runState (0, mempty) $ flip R.runReaderT C.AllocLocal $ W.runWriterT $ flip runReaderT env (genLam_ lam)
 
     genLam_ :: C.LamAnn (Ann Type Expr) -> CodegenM ()
@@ -460,7 +460,7 @@ instance Pretty Instruction where
 
 instance Pretty ProgramFunc where
   pretty (ProgramFunc params locals instructions) = vsep
-    [ "params:" <+> hsep (punctuate "," [ pretty ident <> ":" <> pretty region <> ":" <> pretty (showType typ) | (ident, region, typ) <- params ])
+    [ "params:" <+> hsep (punctuate "," [ pretty ident <> ":" <> pretty (showType typ) | (ident, typ) <- params ])
     , "locals:" <+> hsep (punctuate "," [ allocRegion region <> pretty loc <> ":" <> pretty (showType typ) | (Location region loc, typ) <- M.toList locals ])
     , "body:"
     , indent 2 (vsep (map pretty instructions))

@@ -279,3 +279,8 @@ e1 = select (arr [(op Add (cnst $ C.I32 4) (cnst $ C.I32 8)), cnst $ C.I32 1]) (
 -- e2 = Ann {unAnn = ((),Lam (TLam [] (TNumber TF32)) [] [(Ident "g756",Ann {unAnn = ((),Rec (TNumber TI64) 2 (Ident "b500") [(Ident "f453",Ann {unAnn = ((),App (Ann {unAnn = ((),Lam (TLam [TNumber TI64,TArr (TNumber TI32) 3] (TArr (TNumber TI32) 1)) [Ident "c130",Ident "f982"] [(Ident "b182",Ann {unAnn = ((),Const (F64 0.5030272493895455))}),(Ident "a179",Ann {unAnn = ((),Const (I32 0))}),(Ident "b8",Ann {unAnn = ((),Const (F64 (-1.0)))})] (Ann {unAnn = ((),Arr [Ann {unAnn = ((),Var (Ident "a179"))}])}))}) [Ann {unAnn = ((),Const (I64 1))},Ann {unAnn = ((),Arr [Ann {unAnn = ((),Const (I32 1))},Ann {unAnn = ((),Const (I32 (-1)))},Ann {unAnn = ((),Const (I32 (-1)))}])}])}),(Ident "y862",Ann {unAnn = ((),Const (F64 0.7922093797675532))}),(Ident "y851",Ann {unAnn = ((),Lam (TLam [] (TNumber TF64)) [] [(Ident "x699",Ann {unAnn = ((),Var (Ident "y862"))}),(Ident "g666",Ann {unAnn = ((),Const (F32 (-1.0)))})] (Ann {unAnn = ((),Var (Ident "x699"))}))})] (Ann {unAnn = ((),Op Add (Ann {unAnn = ((),Op Sub (Ann {unAnn = ((),Var (Ident "b500"))}) (Ann {unAnn = ((),Const (I64 1))}))}) (Ann {unAnn = ((),Const (I64 (-1)))}))}))})] (Ann {unAnn = ((),Const (F32 1.5))}))}
 -- 
 e3 = Ann {unAnn = ((),PLam (TLam [] (TNumber TF32)) [] [(Ident "x568",Ann {unAnn = ((),PConst (F32 (-1.0)))}),(Ident "f477",Ann {unAnn = ((),PIVar (Ident "x568"))}),(Ident "a193",Ann {unAnn = ((),PConst (F64 0.9879229879464689))})] (Ann {unAnn = ((),PConst (F32 (-1.0)))}))}
+
+e4 :: Ann () Expr
+e4 = app (lam (C.TLam [C.ti32] C.ti32) ["a"] [] (iVar "a")) [cnst $ C.I32 1]
+  where
+    cnst = B.const
