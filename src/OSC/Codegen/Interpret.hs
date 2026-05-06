@@ -266,3 +266,21 @@ runInterpreter prog f =
       initialState = ExecState { globals = M.empty, funcMap = prog.funcMap }
       finalState = execState startup initialState
   in f finalState
+
+-- Interpret a program and generate a list of values
+interpretToList :: Program -> Int -> [Value]
+interpretToList prog n =
+  let (startup, tick, eval) = initInterpreter prog
+      initialState = ExecState { globals = M.empty, funcMap = prog.funcMap }
+      
+      -- Run startup
+      stateAfterStartup = execState startup initialState
+      
+      -- Generate n values by calling eval then tick
+      go 0 st = []
+      go count st =
+        let (val, st') = runState eval st
+            st'' = execState tick st'
+        in val : go (count - 1) st''
+  
+  in go n stateAfterStartup
