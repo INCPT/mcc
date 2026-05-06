@@ -99,18 +99,20 @@ readSlice (SSlice _ (SArg arg) (Left offset) len) _ args _ =
     Just val -> extractSlice val offset len
     Nothing -> error $ "readSlice: arg not found: " <> show arg
 readSlice (SSlice _ (SVar loc) (Left offset) len) vars _ _ =
-  extractSlice (getVar loc vars) offset len
+  let val = fromMaybe (error $ "readSlice: SVar (Left offset): location not found: " <> show loc) (M.lookup loc vars)
+  in extractSlice val offset len
 readSlice (SSlice _ (SVar loc) (Right offsetLoc) len) vars _ _ =
-  let VNumber offsetNum = getVar offsetLoc vars
+  let VNumber offsetNum = fromMaybe (error $ "readSlice: SVar (Right offsetLoc) - offsetLoc: location not found: " <> show offsetLoc) (M.lookup offsetLoc vars)
       offset = case offsetNum of
         I32 i -> fromIntegral i
         I64 i -> fromIntegral i
         _ -> error "readSlice: offset must be integer"
-  in extractSlice (getVar loc vars) offset len
+      val = fromMaybe (error $ "readSlice: SVar (Right offsetLoc) - loc: location not found: " <> show loc) (M.lookup loc vars)
+  in extractSlice val offset len
 readSlice (SSlice _ SRet (Left offset) len) _ _ (Just retVal) =
   extractSlice retVal offset len
 readSlice (SSlice _ SRet (Right offsetLoc) len) vars _ (Just retVal) =
-  let VNumber offsetNum = getVar offsetLoc vars
+  let VNumber offsetNum = fromMaybe (error $ "readSlice: SRet (Right offsetLoc): location not found: " <> show offsetLoc) (M.lookup offsetLoc vars)
       offset = case offsetNum of
         I32 i -> fromIntegral i
         I64 i -> fromIntegral i
@@ -121,22 +123,22 @@ readSlice slice _ _ _ = error $ "readSlice: invalid slice: " <> show slice
 -- Write a slice value to the execution context
 writeSliceCtx :: Slice -> Value -> VarTable -> Map Captured Value -> Maybe Value -> (VarTable, Maybe Value)
 writeSliceCtx (SSlice _ (SVar loc) (Left offset) _) val vars _ retVal =
-  let current = getVar loc vars
+  let current = fromMaybe (error $ "writeSliceCtx: SVar (Left offset): location not found: " <> show loc) (M.lookup loc vars)
       updated = writeSlice current offset val
   in (setVar loc updated vars, retVal)
 writeSliceCtx (SSlice _ (SVar loc) (Right offsetLoc) _) val vars _ retVal =
-  let VNumber offsetNum = getVar offsetLoc vars
+  let VNumber offsetNum = fromMaybe (error $ "writeSliceCtx: SVar (Right offsetLoc) - offsetLoc: location not found: " <> show offsetLoc) (M.lookup offsetLoc vars)
       offset = case offsetNum of
         I32 i -> fromIntegral i
         I64 i -> fromIntegral i
         _ -> error "writeSliceCtx: offset must be integer"
-      current = getVar loc vars
+      current = fromMaybe (error $ "writeSliceCtx: SVar (Right offsetLoc) - loc: location not found: " <> show loc) (M.lookup loc vars)
       updated = writeSlice current offset val
   in (setVar loc updated vars, retVal)
 writeSliceCtx (SSlice _ SRet (Left offset) _) val vars _ (Just retVal) =
   (vars, Just (writeSlice retVal offset val))
 writeSliceCtx (SSlice _ SRet (Right offsetLoc) _) val vars _ (Just retVal) =
-  let VNumber offsetNum = getVar offsetLoc vars
+  let VNumber offsetNum = fromMaybe (error $ "writeSliceCtx: SRet (Right offsetLoc): location not found: " <> show offsetLoc) (M.lookup offsetLoc vars)
       offset = case offsetNum of
         I32 i -> fromIntegral i
         I64 i -> fromIntegral i
@@ -226,7 +228,7 @@ evalRef (RConst n) = pure $ VNumber n
 evalRef (RFuncRef _) = pure $ VNumber (I32 0)
 evalRef (RVar typ loc) = do
   globs <- gets (.globals)
-  pure $ getVar loc globs
+  pure $ fromMaybe (error $ "evalRef: RVar: location not found: " <> show loc) (M.lookup loc globs)
 evalRef (RProj ref idx innerDim) = do
   val <- evalRef ref
   idxVal <- evalRef idx
