@@ -121,18 +121,20 @@ readSlice (SSlice _ SRet (Right offsetLoc) len) vars _ (Just retVal) =
 readSlice slice _ _ _ = error $ "readSlice: invalid slice: " <> show slice
 
 -- Write a slice value to the execution context
+-- Returns (updated locals, updated retVal)
+-- Note: vars contains both locals and globals merged
 writeSliceCtx :: String -> Slice -> Value -> VarTable -> Map Captured Value -> Maybe Value -> (VarTable, Maybe Value)
 writeSliceCtx callSite (SSlice _ (SVar loc) (Left offset) _) val vars _ retVal =
-  let current = fromMaybe (error $ "writeSliceCtx [" <> callSite <> "]: SVar (Left offset): location not found: " <> show loc) (M.lookup loc vars)
+  let current = fromMaybe (error $ "writeSliceCtx [" <> callSite <> "]: SVar (Left offset): location not found: " <> show loc <> ", available: " <> show (M.keys vars)) (M.lookup loc vars)
       updated = writeSlice current offset val
   in (setVar loc updated vars, retVal)
 writeSliceCtx callSite (SSlice _ (SVar loc) (Right offsetLoc) _) val vars _ retVal =
-  let VNumber offsetNum = fromMaybe (error $ "writeSliceCtx [" <> callSite <> "]: SVar (Right offsetLoc) - offsetLoc: location not found: " <> show offsetLoc) (M.lookup offsetLoc vars)
+  let VNumber offsetNum = fromMaybe (error $ "writeSliceCtx [" <> callSite <> "]: SVar (Right offsetLoc) - offsetLoc: location not found: " <> show offsetLoc <> ", available: " <> show (M.keys vars)) (M.lookup offsetLoc vars)
       offset = case offsetNum of
         I32 i -> fromIntegral i
         I64 i -> fromIntegral i
         _ -> error "writeSliceCtx: offset must be integer"
-      current = fromMaybe (error $ "writeSliceCtx [" <> callSite <> "]: SVar (Right offsetLoc) - loc: location not found: " <> show loc) (M.lookup loc vars)
+      current = fromMaybe (error $ "writeSliceCtx [" <> callSite <> "]: SVar (Right offsetLoc) - loc: location not found: " <> show loc <> ", available: " <> show (M.keys vars)) (M.lookup loc vars)
       updated = writeSlice current offset val
   in (setVar loc updated vars, retVal)
 writeSliceCtx _ (SSlice _ SRet (Left offset) _) val vars _ (Just retVal) =
@@ -156,20 +158,20 @@ interpInstrs (instr:instrs) locals args retVal = do
   case instr of
     ICopy dest src -> do
       let srcVal = readSlice src allVars args retVal
-      let (locals', retVal') = case writeSliceCtx dest srcVal locals args retVal of
-            result@(vars, _) | M.member (Location AllocGlobal 1) vars || not (M.member (Location AllocGlobal 1) locals) -> result
-            _ -> error $ "ICopy: writeSliceCtx failed for dest=" <> show dest <> ", src=" <> show src
-      modify $ \ExecState {..} -> ExecState { globals = M.union locals' globals, .. }
+      let (allVars', retVal') = writeSliceCtx "ICopy" dest srcVal allVars args retVal
+      -- Split back into locals and globals
+      let (locals', globs') = M.partitionWithKey (\(Location region _) _ -> region == AllocLocal) allVars'
+      modify $ \ExecState {..} -> ExecState { globals = globs', .. }
       interpInstrs instrs locals' args retVal'
 
     IBinOp op dest a b -> do
       let aVal = readSlice a allVars args retVal
       let bVal = readSlice b allVars args retVal
       let resultVal = applyOp op aVal bVal
-      let (locals', retVal') = case writeSliceCtx dest resultVal locals args retVal of
-            result@(vars, _) | M.member (Location AllocGlobal 1) vars || not (M.member (Location AllocGlobal 1) locals) -> result
-            _ -> error $ "IBinOp: writeSliceCtx failed for op=" <> show op <> ", dest=" <> show dest <> ", a=" <> show a <> ", b=" <> show b
-      modify $ \ExecState {..} -> ExecState { globals = M.union locals' globals, .. }
+      let (allVars', retVal') = writeSliceCtx "IBinOp" dest resultVal allVars args retVal
+      -- Split back into locals and globals
+      let (locals', globs') = M.partitionWithKey (\(Location region _) _ -> region == AllocLocal) allVars'
+      modify $ \ExecState {..} -> ExecState { globals = globs', .. }
       interpInstrs instrs locals' args retVal'
 
     IIf cond thn els -> do
@@ -209,8 +211,10 @@ interpInstrs (instr:instrs) locals args retVal = do
           
           case mfinalRet of
             Just finalRet -> do
-              let (locals', retVal') = writeSliceCtx "ICall" retSlice finalRet locals args retVal
-              modify $ \ExecState {..} -> ExecState { globals = M.union locals' globals, .. }
+              let (allVars', retVal') = writeSliceCtx "ICall" retSlice finalRet allVars args retVal
+              -- Split back into locals and globals
+              let (locals', globs') = M.partitionWithKey (\(Location region _) _ -> region == AllocLocal) allVars'
+              modify $ \ExecState {..} -> ExecState { globals = globs', .. }
               interpInstrs instrs locals' args retVal'
             Nothing -> error "finalRet"
         Nothing -> error $ "ICall: function not found: " <> show fr
