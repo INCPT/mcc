@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module OSC.Codegen.Interpret where
 
@@ -7,6 +8,7 @@ import Control.Monad.State
 
 import OSC.Expr.Comp
 import OSC.Codegen
+import OSC.Expr.Defunc hiding (const)
 import qualified Data.Map as M
 import Data.Map (Map)
 import Data.Maybe (fromMaybe)
@@ -153,7 +155,7 @@ interpInstrs (instr:instrs) locals args retVal = do
     ICopy dest src -> do
       let srcVal = readSlice src allVars args retVal
       let (locals', retVal') = writeSliceCtx dest srcVal locals args retVal
-      modify $ \s -> s { globals = M.union locals' s.globals }
+      modify $ \ExecState {..} -> ExecState { globals = M.union locals' globals, .. }
       interpInstrs instrs locals' args retVal'
 
     IBinOp op dest a b -> do
@@ -161,7 +163,7 @@ interpInstrs (instr:instrs) locals args retVal = do
       let bVal = readSlice b allVars args retVal
       let resultVal = applyOp op aVal bVal
       let (locals', retVal') = writeSliceCtx dest resultVal locals args retVal
-      modify $ \s -> s { globals = M.union locals' s.globals }
+      modify $ \ExecState {..} -> ExecState { globals = M.union locals' globals, .. }
       interpInstrs instrs locals' args retVal'
 
     IIf cond thn els -> do
@@ -174,41 +176,45 @@ interpInstrs (instr:instrs) locals args retVal = do
       interpInstrs instrs locals' args retVal'
 
     ICall retSlice funcSlice argSlices -> do
-      let VNumber (I32 _) = readSlice funcSlice allVars args retVal -- Function ref (ignored for now)
       
+      
+      let fr = case funcSlice of
+            SFuncRef fr -> fr
+            slice -> let VNumber (I32 fr) = readSlice funcSlice allVars args retVal in FuncRef fr
+              
       -- For now, just handle function calls by looking up in funcMap
       -- This is simplified - in reality we'd need to handle the function reference properly
-      case funcSlice of
-        SFuncRef fr -> do
-          funcs <- gets (.funcMap)
-          case M.lookup fr funcs of
-            Just func -> do
-              let argVals = M.fromList [ (arg, readSlice argSlice allVars args retVal) 
-                                       | (argSlice, (arg, _)) <- zip argSlices func.params ]
-              
-              -- Allocate locals for the function
-              let funcLocals = M.fromList [ (loc, allocateFlattened typ) | (loc, typ) <- M.toList func.locals ]
-              
-              -- Allocate return value based on slice type
-              let retType = case retSlice of
-                    SSlice typ _ _ _ -> typ
-                    _ -> error "ICall: return must be a slice"
-              let initialRet = allocateFlattened retType
-              
-              (_, Just finalRet) <- interpInstrs func.instructions funcLocals argVals (Just initialRet)
-              
+      funcs <- gets (.funcMap)
+      case M.lookup fr funcs of
+        Just func -> do
+          let argVals = M.fromList [ (arg, readSlice argSlice allVars args retVal) 
+                                   | (argSlice, (arg, _)) <- zip argSlices func.params ]
+          
+          -- Allocate locals for the function
+          let funcLocals = M.fromList [ (loc, allocateFlattened typ) | (loc, typ) <- M.toList func.locals ]
+          
+          -- Allocate return value based on slice type
+          let retType = case retSlice of
+                SSlice typ _ _ _ -> typ
+                _ -> error "ICall: return must be a slice"
+          let initialRet = allocateFlattened retType
+          
+          (_, mfinalRet) <- interpInstrs func.instructions funcLocals argVals (Just initialRet)
+          
+          case mfinalRet of
+            Just finalRet -> do
               let (locals', retVal') = writeSliceCtx retSlice finalRet locals args retVal
-              modify $ \s -> s { globals = M.union locals' s.globals }
+              modify $ \ExecState {..} -> ExecState { globals = M.union locals' globals, .. }
               interpInstrs instrs locals' args retVal'
-            Nothing -> error $ "ICall: function not found: " <> show fr
-        _ -> error "ICall: function reference must be SFuncRef"
+            Nothing -> error "finalRet"
+        Nothing -> error $ "ICall: function not found: " <> show fr
 
     IFor counterLoc initial steps step body -> do
       let loop i locals' retVal'
             | i >= steps = pure (locals', retVal')
             | otherwise = do
                 let locals'' = setVar counterLoc (VNumber (I32 i)) locals'
-                modify $ \s -> s { globals = M.union locals'' s.globals }
+                modify $ \ExecState {..} -> ExecState { globals = M.union locals'' globals, .. }
                 (locals''', retVal'') <- interpInstrs body locals'' args retVal'
                 loop (i + step) locals''' retVal''
       (locals', retVal') <- loop initial locals retVal
@@ -238,7 +244,7 @@ initInterpreter prog =
   let startup = do
         -- Allocate globals
         let globalVars = M.fromList [ (loc, allocateFlattened typ) | (loc, typ) <- M.toList prog.globals ]
-        modify $ \s -> s { globals = globalVars, funcMap = prog.funcMap }
+        modify $ \ExecState {..} -> ExecState { globals = globalVars, funcMap = prog.funcMap, .. }
         
         -- Run startup instructions
         (_, _) <- interpInstrs prog.startup M.empty M.empty Nothing
