@@ -89,6 +89,7 @@ data RecEnv = RecEnv
   { delayBuffer :: Ref
   , writeIdx :: Ref
   , readIdx :: Ref
+  , current :: Ref
   }
 
 data Env = Env
@@ -258,8 +259,9 @@ codegen dfm expr = Program {..}
       delayBuffer <- RVar (TArr typ delay) <$> allocLoc (TArr typ delay)
       writeIdx <- RVar C.ti32 <$> allocLoc C.ti32
       readIdx <- RVar C.ti32 <$> allocLoc C.ti32
+      current <- RVar typ <$> allocLoc typ
 
-      pure (M.fromList ((param, RProj delayBuffer readIdx 1):varMap), M.singleton param (RecEnv {..}))
+      pure (M.fromList ((param, current):varMap), M.singleton param (RecEnv {..}))
 
     genLam :: Env -> C.LamAnn (Ann Type Expr) -> ProgramFunc
     genLam env lam@(C.LamAnn typ params_ _ _) = ProgramFunc {..}
@@ -316,6 +318,9 @@ codegen dfm expr = Program {..}
             withBindingVars Env {..} = Env { varMap = bindingVars <> varMap, .. }
 
         local withBindingVars $ gen (RProj recEnv.delayBuffer recEnv.writeIdx 1) body
+        
+        -- Copy current value
+        copyRef recEnv.current (RProj recEnv.delayBuffer recEnv.readIdx 1)
 
         -- Increment read & write index
         binOp Add recEnv.writeIdx (RConst $ I32 1) recEnv.writeIdx
@@ -331,10 +336,7 @@ codegen dfm expr = Program {..}
       idxVars <- traverse rhs idxs
       pure $ foldr (\(idx, dim) body' -> RProj body' idx dim) bodyVar (zip idxVars (scanl1 (*) (innerDims bodyTyp)))
 
-    prec param = do
-      env <- ask
-      let envRec = lookupE "prec: param" param env.recMap
-      pure (RProj envRec.delayBuffer envRec.readIdx 1)
+    prec param = ask >>= \env -> pure (lookupE "prec: param" param env.recMap).current
 
     rhs :: Ann Type Expr -> CodegenM Ref
     rhs (Ann (_, PConst n)) = pure $ RConst n
