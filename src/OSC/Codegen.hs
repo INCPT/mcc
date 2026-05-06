@@ -16,15 +16,14 @@ import qualified Control.Monad.Trans.Writer as W
 import Data.Map (Map)
 import Data.List (intercalate)
 import qualified Data.Map as M
-import Prettyprinter (Pretty(..), (<+>), vsep, hsep, parens, brackets, indent)
+import Prettyprinter (Pretty(..), Doc, (<+>), vsep, hsep, parens, brackets, indent)
 
 import OSC.Expr.Comp (Captured, Type (..), TNumber (..), Number (..), Op (..))
 import qualified OSC.Expr.Comp as C
 import OSC.Expr.Functors
 import OSC.Expr.Defunc hiding (const)
 
-
-newtype Location = Location Int
+data Location = Location C.AllocRegion Int
   deriving (Eq, Ord, Show)
 
 data Ref
@@ -97,12 +96,12 @@ data Env = Env
   , recMap :: Map Captured RecEnv
   }
 
-type AllocM = State (Int, Map Location Type)
+type AllocM = R.ReaderT C.AllocRegion (State (Int, Map Location Type))
 
 type CodegenM = ReaderT Env (WriterT [Instruction] AllocM)
 
 allocLoc :: Type -> AllocM Location
-allocLoc typ = state $ \(idx, m) -> (Location idx, (idx + 1, M.insert (Location idx) typ m))
+allocLoc typ = R.ask >>= \region -> state $ \(idx, m) -> (Location region idx, (idx + 1, M.insert (Location region idx) typ m))
 
 alloc :: Type -> CodegenM Ref
 alloc typ = fmap (RVar typ) $ lift $ lift $ allocLoc typ
@@ -218,7 +217,7 @@ codegen dfm expr = Program {..}
       Just v -> v
       Nothing -> error e
 
-    (((tick, funcMap, ref), startup), (_, globals)) = flip runState (0, mempty) $ runWriterT top
+    (((tick, funcMap, ref), startup), (_, globals)) = flip runState (0, mempty) $ flip runReaderT C.AllocGlobal $ runWriterT top
 
     top = do
       lamAllocs <- mconcat <$> traverse (lift . collectLamAllocations) (M.elems dfm.funcMap)
@@ -266,7 +265,7 @@ codegen dfm expr = Program {..}
     genLam env lam@(C.LamAnn typ params_ _ _) = ProgramFunc {..}
       where
         params = [ (n, region, typ) | ((n, region), typ) <- zip params_ (C.paramTypes "genLam" typ) ]
-        ((_, instructions), (_, locals)) = flip runState (0, mempty) $ W.runWriterT $ flip runReaderT env (genLam_ lam)
+        ((_, instructions), (_, locals)) = flip runState (0, mempty) $ flip R.runReaderT C.AllocLocal $ W.runWriterT $ flip runReaderT env (genLam_ lam)
 
     genLam_ :: C.LamAnn (Ann Type Expr) -> CodegenM ()
     genLam_ (C.LamAnn typ params bindings body) = mdo
@@ -403,6 +402,10 @@ codegen dfm expr = Program {..}
 
 -- Pretty instances ------------------------------------------------------------
 
+allocRegion :: C.AllocRegion -> Doc a
+allocRegion C.AllocGlobal = "global"
+allocRegion C.AllocLocal = "local"
+
 showType :: Type -> String
 showType (TNumber TI32) = "i32"
 showType (TNumber TF32) = "f32"
@@ -417,21 +420,21 @@ instance Pretty Ref where
   pretty (RConst n) = pretty n
   pretty (RRet typ) = "ret:" <> pretty (showType typ)
   pretty (RArg typ ident) = "arg:" <> pretty ident <> ":" <> pretty (showType typ)
-  pretty (RVar typ (Location loc)) = "var" <> pretty loc <> ":" <> pretty (showType typ)
+  pretty (RVar typ (Location region loc)) = allocRegion region <> pretty loc <> ":" <> pretty (showType typ)
   pretty (RProj ref idx innerDim) = pretty ref <> brackets (pretty idx <> ":" <> pretty innerDim)
   pretty (RFuncRef (FuncRef i)) = "f" <> pretty i
 
 instance Pretty SliceRoot where
   pretty (SArg ident) = "arg:" <> pretty ident
-  pretty (SVar (Location loc)) = "var" <> pretty loc
+  pretty (SVar (Location region loc)) = allocRegion region <> pretty loc
   pretty SRet = "ret"
 
 instance Pretty Slice where
   pretty (SConst n) = pretty n
   pretty (SSlice typ root (Left offset) len) = 
     pretty root <> brackets (pretty offset <> ".." <> pretty (offset + len)) <> ":" <> pretty (showType typ)
-  pretty (SSlice typ root (Right (Location offsetLoc)) len) =
-    pretty root <> brackets ("var" <> pretty offsetLoc <> ".." <> "var" <> pretty offsetLoc <> "+" <> pretty len) <> ":" <> pretty (showType typ)
+  pretty (SSlice typ root (Right (Location region offsetLoc)) len) =
+    pretty root <> brackets (allocRegion region <> pretty offsetLoc <> ".." <> allocRegion region <> pretty offsetLoc <> "+" <> pretty len) <> ":" <> pretty (showType typ)
   pretty (SFuncRef (FuncRef i)) = "f" <> pretty i
 
 instance Pretty Instruction where
@@ -447,8 +450,8 @@ instance Pretty Instruction where
     pretty ret <+> ":=" <+> pretty funcRef <> parens (hsep (punctuate "," (map pretty args)))
     where punctuate sep = foldr (\x acc -> if null acc then [x] else x <> sep : acc) []
   pretty (IBinOp op dest a b) = pretty dest <+> ":=" <+> pretty a <+> pretty op <+> pretty b
-  pretty (IFor (Location counter) initial steps step body) = vsep
-    [ "for var" <> pretty counter <+> "=" <+> pretty initial <+> "to" <+> pretty steps <+> "step" <+> pretty step <+> "{"
+  pretty (IFor (Location region counter) initial steps step body) = vsep
+    [ "for " <> allocRegion region <> pretty counter <+> "=" <+> pretty initial <+> "to" <+> pretty steps <+> "step" <+> pretty step <+> "{"
     , indent 2 (vsep (map pretty body))
     , "}"
     ]
@@ -456,7 +459,7 @@ instance Pretty Instruction where
 instance Pretty ProgramFunc where
   pretty (ProgramFunc params locals instructions) = vsep
     [ "params:" <+> hsep (punctuate "," [ pretty ident <> ":" <> pretty region <> ":" <> pretty (showType typ) | (ident, region, typ) <- params ])
-    , "locals:" <+> hsep (punctuate "," [ "var" <> pretty loc <> ":" <> pretty (showType typ) | (Location loc, typ) <- M.toList locals ])
+    , "locals:" <+> hsep (punctuate "," [ allocRegion region <> pretty loc <> ":" <> pretty (showType typ) | (Location region loc, typ) <- M.toList locals ])
     , "body:"
     , indent 2 (vsep (map pretty instructions))
     ]
@@ -464,7 +467,7 @@ instance Pretty ProgramFunc where
 
 instance Pretty Program where
   pretty (Program globals funcMap tick startup ref) = vsep
-    [ "globals:" <+> hsep (punctuate "," [ "var" <> pretty loc <> ":" <> pretty (showType typ) | (Location loc, typ) <- M.toList globals ])
+    [ "globals:" <+> hsep (punctuate "," [ allocRegion region <> pretty loc <> ":" <> pretty (showType typ) | (Location region loc, typ) <- M.toList globals ])
     , ""
     , "functions:"
     , vsep [ "f" <> pretty i <> ":" <+> vsep [ "{",  indent 2 (pretty func), "}" ] | (FuncRef i, func) <- M.toList funcMap ]

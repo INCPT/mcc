@@ -250,7 +250,7 @@ instance Pretty exp => Pretty (Expr exp) where
       list docs = parens $ hsep docs
 
 data AllocRegion = AllocLocal | AllocGlobal
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
 instance Pretty AllocRegion where
   pretty = \case
