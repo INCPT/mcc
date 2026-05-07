@@ -170,10 +170,10 @@ readSlice (SSlice _ (SVar loc) (Left offset) len) _ _ = do
   val <- getVar loc
   pure $ extractSlice val offset len
 readSlice (SSlice _ (SVar loc) (Right offsetLoc) len) _ _ = do
-  VNumber offsetNum <- getVar offsetLoc
-  let offset = case offsetNum of
-        I32 i -> fromIntegral i
-        I64 i -> fromIntegral i
+  offsetVal <- getVar offsetLoc
+  let offset = case offsetVal of
+        VNumber (I32 i) -> fromIntegral i
+        VNumber (I64 i) -> fromIntegral i
         _ -> error "readSlice: offset must be integer"
   val <- getVar loc
   pure $ extractSlice val offset len
@@ -181,10 +181,10 @@ readSlice (SSlice _ SRet (Left offset) len) _ (Just retRef) = do
   retVal <- lift $ readSTRef retRef
   pure $ extractSlice retVal offset len
 readSlice (SSlice _ SRet (Right offsetLoc) len) _ (Just retRef) = do
-  VNumber offsetNum <- getVar offsetLoc
-  let offset = case offsetNum of
-        I32 i -> fromIntegral i
-        I64 i -> fromIntegral i
+  offsetVal <- getVar offsetLoc
+  let offset = case offsetVal of
+        VNumber (I32 i) -> fromIntegral i
+        VNumber (I64 i) -> fromIntegral i
         _ -> error "readSlice: offset must be integer"
   retVal <- lift $ readSTRef retRef
   pure $ extractSlice retVal offset len
@@ -197,10 +197,10 @@ writeSliceCtx callSite (SSlice _ (SVar loc) (Left offset) _) val _ _ = do
   let updated = writeSlice current offset val
   setVar loc updated
 writeSliceCtx callSite (SSlice _ (SVar loc) (Right offsetLoc) _) val _ _ = do
-  VNumber offsetNum <- getVar offsetLoc
-  let offset = case offsetNum of
-        I32 i -> fromIntegral i
-        I64 i -> fromIntegral i
+  offsetVal <- getVar offsetLoc
+  let offset = case offsetVal of
+        VNumber (I32 i) -> fromIntegral i
+        VNumber (I64 i) -> fromIntegral i
         _ -> error "writeSliceCtx: offset must be integer"
   current <- getVar loc
   let updated = writeSlice current offset val
@@ -209,10 +209,10 @@ writeSliceCtx _ (SSlice _ SRet (Left offset) _) val _ (Just retRef) = do
   retVal <- lift $ readSTRef retRef
   lift $ writeSTRef retRef (writeSlice retVal offset val)
 writeSliceCtx callSite (SSlice _ SRet (Right offsetLoc) _) val _ (Just retRef) = do
-  VNumber offsetNum <- getVar offsetLoc
-  let offset = case offsetNum of
-        I32 i -> fromIntegral i
-        I64 i -> fromIntegral i
+  offsetVal <- getVar offsetLoc
+  let offset = case offsetVal of
+        VNumber (I32 i) -> fromIntegral i
+        VNumber (I64 i) -> fromIntegral i
         _ -> error "writeSliceCtx: offset must be integer"
   retVal <- lift $ readSTRef retRef
   lift $ writeSTRef retRef (writeSlice retVal offset val)
@@ -248,8 +248,10 @@ interpInstrs (instr:instrs) args retRef = trace (show instr) $ do
       fr <- case funcSlice of
         SFuncRef fr -> pure fr
         slice -> do
-          VNumber (I32 fr) <- readSlice funcSlice args retRef
-          pure $ FuncRef fr
+          funcVal <- readSlice funcSlice args retRef
+          case funcVal of
+            VNumber (I32 fr) -> pure $ FuncRef fr
+            _ -> error "ICall: function reference must be i32"
 
       env <- ask
       case M.lookup fr env.funcMap of
@@ -307,10 +309,9 @@ evalRef (RVar typ loc) = getVar loc
 evalRef (RProj ref idx innerDim) = do
   val <- evalRef ref
   idxVal <- evalRef idx
-  let VNumber idxNum = idxVal
-  let offset = case idxNum of
-        I32 i -> fromIntegral i * innerDim
-        I64 i -> fromIntegral i * innerDim
+  let offset = case idxVal of
+        VNumber (I32 i) -> fromIntegral i * innerDim
+        VNumber (I64 i) -> fromIntegral i * innerDim
         _ -> error "evalRef: index must be integer"
   pure $ extractSlice val offset innerDim
 evalRef ref = error $ "evalRef: cannot evaluate ref at top level: " <> show ref
