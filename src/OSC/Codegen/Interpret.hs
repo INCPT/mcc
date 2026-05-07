@@ -10,6 +10,7 @@ import OSC.Expr.Comp
 import OSC.Codegen
 import OSC.Expr.Defunc hiding (const)
 import qualified Data.Map as M
+import Data.Bits ((.&.), (.|.), xor, shiftL, shiftR, rotateL, rotateR)
 import Data.Map (Map)
 import Data.Maybe (fromMaybe)
 
@@ -34,6 +35,10 @@ zeroValue (TNumber TI64) = VNumber (I64 0)
 zeroValue (TNumber TF64) = VNumber (F64 0)
 zeroValue (TArr t dim) = VArr (replicate dim (zeroValue t))
 zeroValue (TLam _ _) = VNumber (I32 0)
+
+-- Helper function to copy the sign from one float to another
+copySign :: (RealFloat a) => a -> a -> a
+copySign x y = if signum y < 0 then negate (abs x) else abs x
 
 applyOp :: Op -> Value -> Value -> Value
 applyOp Add (VNumber (I32 a)) (VNumber (I32 b)) = VNumber (I32 (a + b))
