@@ -3,8 +3,11 @@
 
 module OSC.Codegen.Interpret where
 
-import Control.Monad (replicateM, forM_, when)
-import Control.Monad.State
+import Control.Applicative ((<|>))
+import Control.Monad (forM_, when)
+import Control.Monad.ST
+import Control.Monad.Reader as R
+import Data.STRef
 
 import OSC.Expr.Comp
 import OSC.Codegen
@@ -19,14 +22,13 @@ import Debug.Trace
 data Value = VNumber Number | VArr [Value]
   deriving Show
 
-type VarTable = Map Location Value
-
-data ExecState = ExecState
-  { globals :: VarTable
+data ExecEnv s = ExecEnv
+  { globals :: Map Location (STRef s Value)
+  , locals :: Map Location (STRef s Value)
   , funcMap :: Map FuncRef ProgramFunc
   }
 
-type InterpM = State ExecState
+type InterpretM s = ReaderT (ExecEnv s) (ST s)
 
 zeroValue :: Type -> Value
 zeroValue (TNumber TI32) = VNumber (I32 0)
@@ -122,12 +124,20 @@ allocateFlattened typ@(TArr _ _) =
 allocateFlattened typ = zeroValue typ
 
 -- Get a value from a location
-getVar :: Location -> VarTable -> Value
-getVar loc vars = fromMaybe (error $ "getVar: location not found: " <> show loc) (M.lookup loc vars)
+getVar :: Location -> InterpretM s Value
+getVar loc = do
+  env <- ask
+  case M.lookup loc env.locals <|> M.lookup loc env.globals of
+    Just ref -> lift $ readSTRef ref
+    Nothing -> error $ "getVar: location not found: " <> show loc
 
 -- Set a value at a location
-setVar :: Location -> Value -> VarTable -> VarTable
-setVar = M.insert
+setVar :: Location -> Value -> InterpretM s ()
+setVar loc val = do
+  env <- ask
+  case M.lookup loc env.locals <|> M.lookup loc env.globals of
+    Just ref -> lift $ writeSTRef ref val
+    Nothing -> error $ "setVar: location not found: " <> show loc
 
 -- Extract a slice from a value
 extractSlice :: Value -> Int -> Int -> Value
@@ -147,151 +157,153 @@ writeSlice (VArr dest) offset (VNumber n) =
 writeSlice _ _ v = v
 
 -- Read a slice value from the execution context
-readSlice :: Slice -> VarTable -> Map Captured Value -> Maybe Value -> Value
-readSlice (SConst n) _ _ _ = VNumber n
-readSlice (SFuncRef fr) _ _ _ = VNumber (I32 0) -- Function references as dummy values
-readSlice (SSlice _ (SArg arg) (Left offset) len) _ args _ =
+readSlice :: Slice -> Map Captured (STRef s Value) -> Maybe (STRef s Value) -> InterpretM s Value
+readSlice (SConst n) _ _ = pure $ VNumber n
+readSlice (SFuncRef fr) _ _ = pure $ VNumber (I32 0) -- Function references as dummy values
+readSlice (SSlice _ (SArg arg) (Left offset) len) args _ = do
   case M.lookup arg args of
-    Just val -> extractSlice val offset len
+    Just ref -> do
+      val <- lift $ readSTRef ref
+      pure $ extractSlice val offset len
     Nothing -> error $ "readSlice: arg not found: " <> show arg
-readSlice (SSlice _ (SVar loc) (Left offset) len) vars _ _ =
-  let val = fromMaybe (error $ "readSlice: SVar (Left offset): location not found: " <> show loc) (M.lookup loc vars)
-  in extractSlice val offset len
-readSlice (SSlice _ (SVar loc) (Right offsetLoc) len) vars _ _ =
-  let VNumber offsetNum = fromMaybe (error $ "readSlice: SVar (Right offsetLoc) - offsetLoc: location not found: " <> show offsetLoc) (M.lookup offsetLoc vars)
-      offset = case offsetNum of
+readSlice (SSlice _ (SVar loc) (Left offset) len) _ _ = do
+  val <- getVar loc
+  pure $ extractSlice val offset len
+readSlice (SSlice _ (SVar loc) (Right offsetLoc) len) _ _ = do
+  VNumber offsetNum <- getVar offsetLoc
+  let offset = case offsetNum of
         I32 i -> fromIntegral i
         I64 i -> fromIntegral i
         _ -> error "readSlice: offset must be integer"
-      val = fromMaybe (error $ "readSlice: SVar (Right offsetLoc) - loc: location not found: " <> show loc) (M.lookup loc vars)
-  in extractSlice val offset len
-readSlice (SSlice _ SRet (Left offset) len) _ _ (Just retVal) =
-  extractSlice retVal offset len
-readSlice (SSlice _ SRet (Right offsetLoc) len) vars _ (Just retVal) =
-  let VNumber offsetNum = fromMaybe (error $ "readSlice: SRet (Right offsetLoc): location not found: " <> show offsetLoc) (M.lookup offsetLoc vars)
-      offset = case offsetNum of
+  val <- getVar loc
+  pure $ extractSlice val offset len
+readSlice (SSlice _ SRet (Left offset) len) _ (Just retRef) = do
+  retVal <- lift $ readSTRef retRef
+  pure $ extractSlice retVal offset len
+readSlice (SSlice _ SRet (Right offsetLoc) len) _ (Just retRef) = do
+  VNumber offsetNum <- getVar offsetLoc
+  let offset = case offsetNum of
         I32 i -> fromIntegral i
         I64 i -> fromIntegral i
         _ -> error "readSlice: offset must be integer"
-  in extractSlice retVal offset len
-readSlice slice _ _ _ = error $ "readSlice: invalid slice: " <> show slice
+  retVal <- lift $ readSTRef retRef
+  pure $ extractSlice retVal offset len
+readSlice slice _ _ = error $ "readSlice: invalid slice: " <> show slice
 
 -- Write a slice value to the execution context
--- Returns (updated locals, updated retVal)
--- Note: vars contains both locals and globals merged
-writeSliceCtx :: String -> Slice -> Value -> VarTable -> Map Captured Value -> Maybe Value -> (VarTable, Maybe Value)
-writeSliceCtx callSite (SSlice _ (SVar loc) (Left offset) _) val vars _ retVal =
-  let current = fromMaybe (error $ "writeSliceCtx [" <> callSite <> "]: SVar (Left offset): location not found: " <> show loc <> ", available: " <> show (M.keys vars)) (M.lookup loc vars)
-      updated = writeSlice current offset val
-  in (setVar loc updated vars, retVal)
-writeSliceCtx callSite (SSlice _ (SVar loc) (Right offsetLoc) _) val vars _ retVal =
-  let VNumber offsetNum = fromMaybe (error $ "writeSliceCtx [" <> callSite <> "]: SVar (Right offsetLoc) - offsetLoc: location not found: " <> show offsetLoc <> ", available: " <> show (M.keys vars)) (M.lookup offsetLoc vars)
-      offset = case offsetNum of
+writeSliceCtx :: String -> Slice -> Value -> Map Captured (STRef s Value) -> Maybe (STRef s Value) -> InterpretM s ()
+writeSliceCtx callSite (SSlice _ (SVar loc) (Left offset) _) val _ _ = do
+  current <- getVar loc
+  let updated = writeSlice current offset val
+  setVar loc updated
+writeSliceCtx callSite (SSlice _ (SVar loc) (Right offsetLoc) _) val _ _ = do
+  VNumber offsetNum <- getVar offsetLoc
+  let offset = case offsetNum of
         I32 i -> fromIntegral i
         I64 i -> fromIntegral i
         _ -> error "writeSliceCtx: offset must be integer"
-      current = fromMaybe (error $ "writeSliceCtx [" <> callSite <> "]: SVar (Right offsetLoc) - loc: location not found: " <> show loc <> ", available: " <> show (M.keys vars)) (M.lookup loc vars)
-      updated = writeSlice current offset val
-  in (setVar loc updated vars, retVal)
-writeSliceCtx _ (SSlice _ SRet (Left offset) _) val vars _ (Just retVal) =
-  (vars, Just (writeSlice retVal offset val))
-writeSliceCtx callSite (SSlice _ SRet (Right offsetLoc) _) val vars _ (Just retVal) =
-  let VNumber offsetNum = fromMaybe (error $ "writeSliceCtx [" <> callSite <> "]: SRet (Right offsetLoc): location not found: " <> show offsetLoc) (M.lookup offsetLoc vars)
-      offset = case offsetNum of
+  current <- getVar loc
+  let updated = writeSlice current offset val
+  setVar loc updated
+writeSliceCtx _ (SSlice _ SRet (Left offset) _) val _ (Just retRef) = do
+  retVal <- lift $ readSTRef retRef
+  lift $ writeSTRef retRef (writeSlice retVal offset val)
+writeSliceCtx callSite (SSlice _ SRet (Right offsetLoc) _) val _ (Just retRef) = do
+  VNumber offsetNum <- getVar offsetLoc
+  let offset = case offsetNum of
         I32 i -> fromIntegral i
         I64 i -> fromIntegral i
         _ -> error "writeSliceCtx: offset must be integer"
-  in (vars, Just (writeSlice retVal offset val))
-writeSliceCtx callSite slice _ _ _ _ = error $ "writeSliceCtx [" <> callSite <> "]: invalid destination slice: " <> show slice
+  retVal <- lift $ readSTRef retRef
+  lift $ writeSTRef retRef (writeSlice retVal offset val)
+writeSliceCtx callSite slice _ _ _ = error $ "writeSliceCtx [" <> callSite <> "]: invalid destination slice: " <> show slice
 
--- Interpret instructions with local variables, arguments, and return value
-interpInstrs :: [Instruction] -> VarTable -> Map Captured Value -> Maybe Value -> InterpM (VarTable, Maybe Value)
-interpInstrs [] locals _ retVal = pure (locals, retVal)
-interpInstrs (instr:instrs) locals args retVal = trace (show instr) $ do
-  globs <- gets (.globals)
-  let allVars = locals <> globs
-
+-- Interpret instructions with arguments and return value
+interpInstrs :: [Instruction] -> Map Captured (STRef s Value) -> Maybe (STRef s Value) -> InterpretM s ()
+interpInstrs [] _ _ = pure ()
+interpInstrs (instr:instrs) args retRef = trace (show instr) $ do
   case instr of
     ICopy dest src -> do
-      let srcVal = readSlice src allVars args retVal
-      let (allVars', retVal') = writeSliceCtx "ICopy" dest srcVal allVars args retVal
-      -- Split back into locals and globals
-      let (locals', globs') = M.partitionWithKey (\(Location region _) _ -> region == AllocLocal) allVars'
-      modify $ \ExecState {..} -> ExecState { globals = globs', .. }
-      interpInstrs instrs locals' args retVal'
+      srcVal <- readSlice src args retRef
+      writeSliceCtx "ICopy" dest srcVal args retRef
+      interpInstrs instrs args retRef
 
     IBinOp op dest a b -> do
-      let aVal = readSlice a allVars args retVal
-      let bVal = readSlice b allVars args retVal
+      aVal <- readSlice a args retRef
+      bVal <- readSlice b args retRef
       let resultVal = applyOp op aVal bVal
-      let (allVars', retVal') = writeSliceCtx "IBinOp" dest resultVal allVars args retVal
-      -- Split back into locals and globals
-      let (locals', globs') = M.partitionWithKey (\(Location region _) _ -> region == AllocLocal) allVars'
-      modify $ \ExecState {..} -> ExecState { globals = globs', .. }
-      interpInstrs instrs locals' args retVal'
+      writeSliceCtx "IBinOp" dest resultVal args retRef
+      interpInstrs instrs args retRef
 
     IIf cond thn els -> do
-      let condVal = readSlice cond allVars args retVal
+      condVal <- readSlice cond args retRef
       let branch = case condVal of
             VNumber (I32 x) -> if x > 0 then thn else els
             VNumber (I64 x) -> if x > 0 then thn else els
             c -> error $ show c
-      (locals', retVal') <- interpInstrs branch locals args retVal
-      interpInstrs instrs locals' args retVal'
+      interpInstrs branch args retRef
+      interpInstrs instrs args retRef
 
-    ICall retSlice funcSlice argSlices -> trace ("FUNSLICE: " <> show funcSlice <> ", ALLVARS: " <> show allVars) $ do
-      let fr = case funcSlice of
-            SFuncRef fr -> fr
-            slice -> let VNumber (I32 fr) = readSlice funcSlice allVars args retVal in FuncRef fr
+    ICall retSlice funcSlice argSlices -> trace ("FUNSLICE: " <> show funcSlice) $ do
+      fr <- case funcSlice of
+        SFuncRef fr -> pure fr
+        slice -> do
+          VNumber (I32 fr) <- readSlice funcSlice args retRef
+          pure $ FuncRef fr
 
-      funcs <- gets (.funcMap)
-
-      case M.lookup fr funcs of
+      env <- ask
+      case M.lookup fr env.funcMap of
         Just func -> do
-          let argVals = M.fromList [ (arg, readSlice argSlice allVars args retVal) 
-                                   | (argSlice, (arg, _)) <- zip argSlices func.params ]
+          -- Allocate and populate argument refs
+          argRefs <- lift $ M.fromList <$> sequence
+            [ do
+                val <- runReaderT (readSlice argSlice args retRef) env
+                ref <- newSTRef val
+                pure (arg, ref)
+            | (argSlice, (arg, _)) <- zip argSlices func.params
+            ]
           
           -- Allocate locals for the function
-          let funcLocals = M.fromList [ (loc, allocateFlattened typ) | (loc, typ) <- M.toList func.locals ]
+          funcLocalRefs <- lift $ M.fromList <$> sequence
+            [ do
+                ref <- newSTRef (allocateFlattened typ)
+                pure (loc, ref)
+            | (loc, typ) <- M.toList func.locals
+            ]
           
           -- Allocate return value based on slice type
           let retType = case retSlice of
                 SSlice typ _ _ _ -> typ
                 _ -> error "ICall: return must be a slice"
-          let initialRet = allocateFlattened retType
+          funcRetRef <- lift $ newSTRef (allocateFlattened retType)
           
-          (_, mfinalRet) <- interpInstrs func.instructions funcLocals argVals (Just initialRet)
+          -- Execute function with new local environment
+          R.local (\e -> e { locals = funcLocalRefs }) $
+            interpInstrs func.instructions argRefs (Just funcRetRef)
           
-          case mfinalRet of
-            Just finalRet -> do
-              let (allVars', retVal') = writeSliceCtx "ICall" retSlice finalRet allVars args retVal
-              -- Split back into locals and globals
-              let (locals', globs') = M.partitionWithKey (\(Location region _) _ -> region == AllocLocal) allVars'
-              modify $ \ExecState {..} -> ExecState { globals = globs', .. }
-              interpInstrs instrs locals' args retVal'
-            Nothing -> error "finalRet"
+          -- Copy return value to destination
+          finalRet <- lift $ readSTRef funcRetRef
+          writeSliceCtx "ICall" retSlice finalRet args retRef
+          interpInstrs instrs args retRef
         Nothing -> error $ "ICall: function not found: " <> show fr
 
     IFor counterLoc initial steps step body -> do
-      let loop i locals' retVal'
-            | step > 0 && i >= steps = pure (locals', retVal')
-            | step < 0 && i <= steps = pure (locals', retVal')
-            | step == 0 = pure (locals', retVal')  -- Avoid infinite loop
+      let loop i
+            | step > 0 && i >= steps = pure ()
+            | step < 0 && i <= steps = pure ()
+            | step == 0 = pure ()  -- Avoid infinite loop
             | otherwise = do
-                let locals'' = setVar counterLoc (VNumber (I32 i)) locals'
-                modify $ \ExecState {..} -> ExecState { globals = M.union locals'' globals, .. }
-                (locals''', retVal'') <- interpInstrs body locals'' args retVal'
-                loop (i + step) locals''' retVal''
-      (locals', retVal') <- loop initial locals retVal
-      interpInstrs instrs locals' args retVal'
+                setVar counterLoc (VNumber (I32 i))
+                interpInstrs body args retRef
+                loop (i + step)
+      loop initial
+      interpInstrs instrs args retRef
 
 -- Evaluate a reference to get its current value
-evalRef :: Ref -> InterpM Value
+evalRef :: Ref -> InterpretM s Value
 evalRef (RConst n) = pure $ VNumber n
 evalRef (RFuncRef _) = pure $ VNumber (I32 0)
-evalRef (RVar typ loc) = do
-  globs <- gets (.globals)
-  pure $ fromMaybe (error $ "evalRef: RVar: location not found: " <> show loc) (M.lookup loc globs)
+evalRef (RVar typ loc) = getVar loc
 evalRef (RProj ref idx innerDim) = do
   val <- evalRef ref
   idxVal <- evalRef idx
@@ -303,41 +315,32 @@ evalRef (RProj ref idx innerDim) = do
   pure $ extractSlice val offset innerDim
 evalRef ref = error $ "evalRef: cannot evaluate ref at top level: " <> show ref
 
--- Initialize the interpreter with a program
-initInterpreter :: Program -> (InterpM (), InterpM (), InterpM Value)
-initInterpreter prog =
-  let startup = do
-        -- Allocate globals
-        let globalVars = M.fromList [ (loc, allocateFlattened typ) | (loc, typ) <- M.toList prog.globals ]
-        put $ ExecState { globals = globalVars, funcMap = prog.funcMap }
-        
-        -- Run startup instructions
-        (_, _) <- interpInstrs prog.startup M.empty M.empty Nothing
-        pure ()
-      
-      tick = do
-        -- Run tick instructions
-        (_, _) <- interpInstrs prog.tick M.empty M.empty Nothing
-        pure ()
-      
-      eval = evalRef prog.ref
-  
-  in (startup, tick, eval)
-
 -- Interpret a program and generate a list of values
 interpretToList :: Program -> Int -> [Value]
-interpretToList prog n =
-  let (startup, tick, eval) = initInterpreter prog
-      initialState = ExecState { globals = M.empty, funcMap = prog.funcMap }
-      
-      -- Run startup
-      stateAfterStartup = execState startup initialState
-      
-      -- Generate n values by calling eval then tick
-      go 0 st = []
-      go count st =
-        let (val, st') = runState eval st
-            st'' = execState tick st'
-        in val : go (count - 1) st''
+interpretToList prog n = runST $ do
+  -- Allocate globals
+  globalRefs <- M.fromList <$> sequence
+    [ do
+        ref <- newSTRef (allocateFlattened typ)
+        pure (loc, ref)
+    | (loc, typ) <- M.toList prog.globals
+    ]
   
-  in go n stateAfterStartup
+  let env = ExecEnv
+        { globals = globalRefs
+        , locals = M.empty
+        , funcMap = prog.funcMap
+        }
+  
+  -- Run startup instructions
+  runReaderT (interpInstrs prog.startup M.empty Nothing) env
+  
+  -- Generate n values by calling eval then tick
+  let go 0 = pure []
+      go count = do
+        val <- runReaderT (evalRef prog.ref) env
+        runReaderT (interpInstrs prog.tick M.empty Nothing) env
+        rest <- go (count - 1)
+        pure (val : rest)
+  
+  go n
