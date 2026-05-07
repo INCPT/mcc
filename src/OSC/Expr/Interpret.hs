@@ -8,9 +8,6 @@ import qualified Control.Monad.State as ST
 
 import Data.Bits ((.&.), (.|.), xor, shiftL, shiftR, rotateL, rotateR)
 
--- Helper function to copy the sign from one float to another
-copySign :: (RealFloat a) => a -> a -> a
-copySign x y = if signum y < 0 then negate (abs x) else abs x
 import Data.List (intercalate)
 import Data.Map (Map)
 import qualified Data.Map as M

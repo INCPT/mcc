@@ -159,7 +159,7 @@ writeSlice _ _ v = v
 -- Read a slice value from the execution context
 readSlice :: Slice -> Map Captured (STRef s Value) -> Maybe (STRef s Value) -> InterpretM s Value
 readSlice (SConst n) _ _ = pure $ VNumber n
-readSlice (SFuncRef fr) _ _ = pure $ VNumber (I32 0) -- Function references as dummy values
+readSlice (SFuncRef (FuncRef fr)) _ _ = pure $ VNumber (I32 fr)
 readSlice (SSlice _ (SArg arg) (Left offset) len) args _ = do
   case M.lookup arg args of
     Just ref -> do
@@ -191,12 +191,12 @@ readSlice (SSlice _ SRet (Right offsetLoc) len) _ (Just retRef) = do
 readSlice slice _ _ = error $ "readSlice: invalid slice: " <> show slice
 
 -- Write a slice value to the execution context
-writeSliceCtx :: String -> Slice -> Value -> Map Captured (STRef s Value) -> Maybe (STRef s Value) -> InterpretM s ()
-writeSliceCtx callSite (SSlice _ (SVar loc) (Left offset) _) val _ _ = do
+writeSliceCtx :: String -> Slice -> Value ->  Maybe (STRef s Value) -> InterpretM s ()
+writeSliceCtx callSite (SSlice _ (SVar loc) (Left offset) _) val _ = do
   current <- getVar loc
   let updated = writeSlice current offset val
   setVar loc updated
-writeSliceCtx callSite (SSlice _ (SVar loc) (Right offsetLoc) _) val _ _ = do
+writeSliceCtx callSite (SSlice _ (SVar loc) (Right offsetLoc) _) val _ = do
   offsetVal <- getVar offsetLoc
   let offset = case offsetVal of
         VNumber (I32 i) -> fromIntegral i
@@ -205,10 +205,10 @@ writeSliceCtx callSite (SSlice _ (SVar loc) (Right offsetLoc) _) val _ _ = do
   current <- getVar loc
   let updated = writeSlice current offset val
   setVar loc updated
-writeSliceCtx _ (SSlice _ SRet (Left offset) _) val _ (Just retRef) = do
+writeSliceCtx _ (SSlice _ SRet (Left offset) _) val (Just retRef) = do
   retVal <- lift $ readSTRef retRef
   lift $ writeSTRef retRef (writeSlice retVal offset val)
-writeSliceCtx callSite (SSlice _ SRet (Right offsetLoc) _) val _ (Just retRef) = do
+writeSliceCtx callSite (SSlice _ SRet (Right offsetLoc) _) val (Just retRef) = do
   offsetVal <- getVar offsetLoc
   let offset = case offsetVal of
         VNumber (I32 i) -> fromIntegral i
@@ -216,23 +216,23 @@ writeSliceCtx callSite (SSlice _ SRet (Right offsetLoc) _) val _ (Just retRef) =
         _ -> error "writeSliceCtx: offset must be integer"
   retVal <- lift $ readSTRef retRef
   lift $ writeSTRef retRef (writeSlice retVal offset val)
-writeSliceCtx callSite slice _ _ _ = error $ "writeSliceCtx [" <> callSite <> "]: invalid destination slice: " <> show slice
+writeSliceCtx callSite slice _ _ = error $ "writeSliceCtx [" <> callSite <> "]: invalid destination slice: " <> show slice
 
 -- Interpret instructions with arguments and return value
 interpInstrs :: [Instruction] -> Map Captured (STRef s Value) -> Maybe (STRef s Value) -> InterpretM s ()
 interpInstrs [] _ _ = pure ()
-interpInstrs (instr:instrs) args retRef = trace (show instr) $ do
+interpInstrs (instr:instrs) args retRef = do
   case instr of
     ICopy dest src -> do
       srcVal <- readSlice src args retRef
-      writeSliceCtx "ICopy" dest srcVal args retRef
+      writeSliceCtx "ICopy" dest srcVal retRef
       interpInstrs instrs args retRef
 
     IBinOp op dest a b -> do
       aVal <- readSlice a args retRef
       bVal <- readSlice b args retRef
       let resultVal = applyOp op aVal bVal
-      writeSliceCtx "IBinOp" dest resultVal args retRef
+      writeSliceCtx "IBinOp" dest resultVal retRef
       interpInstrs instrs args retRef
 
     IIf cond thn els -> do
@@ -244,7 +244,7 @@ interpInstrs (instr:instrs) args retRef = trace (show instr) $ do
       interpInstrs branch args retRef
       interpInstrs instrs args retRef
 
-    ICall retSlice funcSlice argSlices -> trace ("FUNSLICE: " <> show funcSlice) $ do
+    ICall retSlice funcSlice argSlices -> do
       fr <- case funcSlice of
         SFuncRef fr -> pure fr
         slice -> do
@@ -285,7 +285,7 @@ interpInstrs (instr:instrs) args retRef = trace (show instr) $ do
           
           -- Copy return value to destination
           finalRet <- lift $ readSTRef funcRetRef
-          writeSliceCtx "ICall" retSlice finalRet args retRef
+          writeSliceCtx "ICall" retSlice finalRet retRef
           interpInstrs instrs args retRef
         Nothing -> error $ "ICall: function not found: " <> show fr
 
