@@ -278,7 +278,7 @@ interpInstrs (instr:instrs) args retRef = trace (show instr) $ do
           funcRetRef <- lift $ newSTRef (allocateFlattened retType)
           
           -- Execute function with new local environment
-          R.local (\e -> e { locals = funcLocalRefs }) $
+          R.local (\ExecEnv {..} -> ExecEnv { locals = funcLocalRefs, .. }) $
             interpInstrs func.instructions argRefs (Just funcRetRef)
           
           -- Copy return value to destination
