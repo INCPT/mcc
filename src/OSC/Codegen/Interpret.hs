@@ -13,6 +13,8 @@ import qualified Data.Map as M
 import Data.Map (Map)
 import Data.Maybe (fromMaybe)
 
+import Debug.Trace
+
 data Value = VNumber Number | VArr [Value]
   deriving Show
 
@@ -56,7 +58,7 @@ applyOp Eq (VNumber (I32 a)) (VNumber (I32 b)) = VNumber (I32 (if a == b then 1 
 applyOp Eq (VNumber (I64 a)) (VNumber (I64 b)) = VNumber (I64 (if a == b then 1 else 0))
 applyOp Eq (VNumber (F32 a)) (VNumber (F32 b)) = VNumber (I32 (if a == b then 1 else 0))
 applyOp Eq (VNumber (F64 a)) (VNumber (F64 b)) = VNumber (I64 (if a == b then 1 else 0))
-applyOp _ _ _ = error "applyOp: unsupported operation"
+applyOp op a b = error $ "applyOp: unsupported operation: " <> show a <> " " <> show op <> " " <> show b
 
 -- Allocate flattened array storage
 allocateFlattened :: Type -> Value
@@ -152,7 +154,7 @@ writeSliceCtx callSite slice _ _ _ _ = error $ "writeSliceCtx [" <> callSite <> 
 -- Interpret instructions with local variables, arguments, and return value
 interpInstrs :: [Instruction] -> VarTable -> Map Captured Value -> Maybe Value -> InterpM (VarTable, Maybe Value)
 interpInstrs [] locals _ retVal = pure (locals, retVal)
-interpInstrs (instr:instrs) locals args retVal = do
+interpInstrs (instr:instrs) locals args retVal = trace (show instr) $ do
   globs <- gets (.globals)
   let allVars = locals <> globs
 
@@ -184,16 +186,13 @@ interpInstrs (instr:instrs) locals args retVal = do
       (locals', retVal') <- interpInstrs branch locals args retVal
       interpInstrs instrs locals' args retVal'
 
-    ICall retSlice funcSlice argSlices -> do
-      
-      
+    ICall retSlice funcSlice argSlices -> trace ("FUNSLICE: " <> show funcSlice <> ", ALLVARS: " <> show allVars) $ do
       let fr = case funcSlice of
             SFuncRef fr -> fr
             slice -> let VNumber (I32 fr) = readSlice funcSlice allVars args retVal in FuncRef fr
-              
-      -- For now, just handle function calls by looking up in funcMap
-      -- This is simplified - in reality we'd need to handle the function reference properly
+
       funcs <- gets (.funcMap)
+
       case M.lookup fr funcs of
         Just func -> do
           let argVals = M.fromList [ (arg, readSlice argSlice allVars args retVal) 
