@@ -220,9 +220,10 @@ codegen dfm expr = Program {..}
 
     (((tick, funcMap, ref), startup), (_, globals)) = flip runState (0, mempty) $ flip runReaderT C.AllocGlobal $ runWriterT top
 
+    top :: WriterT [Instruction] AllocM ([Instruction], Map FuncRef ProgramFunc, Ref)
     top = do
       lamAllocs <- mconcat <$> traverse (lift . collectLamAllocations) (M.elems dfm.funcMap)
-      (recAllocs, recEnvs) <- mconcat <$> traverse (lift . collectRecAllocations) dfm.recs
+      (recAllocs, recEnvs) <- mconcat <$> traverse collectRecAllocations dfm.recs
   
       let env = Env { varMap = lamAllocs <> recAllocs, recMap = recEnvs }
   
@@ -247,21 +248,26 @@ codegen dfm expr = Program {..}
         ]
       ]
 
-    collectRecAllocations :: C.RecAnn (Ann Type Expr) -> AllocM (Map Captured Ref, Map Captured RecEnv)
+    collectRecAllocations :: C.RecAnn (Ann Type Expr) -> WriterT [Instruction] AllocM (Map Captured Ref, Map Captured RecEnv)
     collectRecAllocations (C.RecAnn typ delay param bindings _) = do
-      varMap <- sequence
-        [ do
-            loc <- allocLoc typ
-            pure (n, RVar typ loc)
-        | (n, C.AllocGlobal, Ann (typ, _)) <- bindings
-        ]
+      (varMap, readLoc, recEnv) <- lift $ do
+        varMap <- sequence
+          [ do
+              loc <- allocLoc typ
+              pure (n, RVar typ loc)
+          | (n, C.AllocGlobal, Ann (typ, _)) <- bindings
+          ]
 
-      delayBuffer <- RVar (TArr typ delay) <$> allocLoc (TArr typ delay)
-      writeIdx <- RVar C.ti32 <$> allocLoc C.ti32
-      readIdx <- RVar C.ti32 <$> allocLoc C.ti32
-      current <- RVar typ <$> allocLoc typ
+        delayBuffer <- RVar (TArr typ delay) <$> allocLoc (TArr typ delay)
+        writeIdx <- RVar C.ti32 <$> allocLoc C.ti32
+        readLoc <- allocLoc C.ti32; let readIdx = RVar C.ti32 readLoc
+        current <- RVar typ <$> allocLoc typ
+        pure (varMap, readLoc, RecEnv {..})
+      
+      -- Initialize read index with delay - 1
+      tell [IBinOp C.Sub (SSlice (TNumber TI32) (SVar readLoc) (Left 0) 1) (SConst (I32 delay)) (SConst (I32 1))]
 
-      pure (M.fromList ((param, current):varMap), M.singleton param (RecEnv {..}))
+      pure (M.fromList ((param, recEnv.current):varMap), M.singleton param recEnv)
 
     genLam :: Env -> C.LamAnn (Ann Type Expr) -> ProgramFunc
     genLam env lam@(C.LamAnn typ params_ _ _) = ProgramFunc {..}
@@ -323,12 +329,12 @@ codegen dfm expr = Program {..}
         copyRef recEnv.current (RProj recEnv.delayBuffer recEnv.readIdx 1)
 
         -- Increment read & write index
-        binOp Add recEnv.writeIdx (RConst $ I32 1) recEnv.writeIdx
-        binOp Mod recEnv.writeIdx (RConst $ I32 delay) recEnv.writeIdx
+        binOp Add recEnv.writeIdx recEnv.writeIdx (RConst $ I32 1)
+        binOp Mod recEnv.writeIdx recEnv.writeIdx (RConst $ I32 delay)
       
         -- TODO: variable delay
-        binOp Add recEnv.readIdx (RConst $ I32 1) recEnv.readIdx
-        binOp Mod recEnv.readIdx (RConst $ I32 delay) recEnv.readIdx
+        binOp Add recEnv.readIdx recEnv.readIdx (RConst $ I32 1)
+        binOp Mod recEnv.readIdx recEnv.readIdx (RConst $ I32 delay)
     
     pfoldedSelectR body@(Ann (bodyTyp, _)) idxs = do
       bodyVar <- alloc bodyTyp
