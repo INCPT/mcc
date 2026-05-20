@@ -13,6 +13,15 @@ import Control.Monad (replicateM)
 import qualified Data.Map as M
 import Data.Map (Map)
 
+import qualified OSC.Expr.Interpret as I
+import qualified OSC.Codegen.Interpret as C
+
+import OSC.Codegen
+import OSC.Transforms.Typecheck
+import OSC.Transforms.AnnBind
+import OSC.Transforms.FoldSel
+import OSC.Transforms.Defunc
+
 -- | Generate non-zero numeric constants (heavily biased against 0)
 genNonZeroI32 :: Corecursive f => Gen (f Expr)
 genNonZeroI32 = B.const . C.I32 <$> frequency [(9, arbitrary `suchThat` (/= 0)), (1, pure 0)]
@@ -388,3 +397,28 @@ sampleExpr = T.sample' randomExpr
 
 sampleOneExpr :: IO (Fix Expr)
 sampleOneExpr = last <$> T.sample' randomExpr
+
+--------------------------------------------------------------------------------
+
+interpretExpr :: Fix Expr -> [I.Value]
+interpretExpr expr = I.interpretToList 20 expr'
+   where
+      expr' = dbgInfer $ hoist expr
+
+interpretIR :: Fix Expr -> [C.Value]
+interpretIR expr = C.interpretToList 20 program
+   where
+      (expr', dfm) = defunc $ annCapturedBindings $ foldSelections $ dbgInfer $ hoist expr
+      program = codegen dfm expr'
+
+cmpValue :: C.Value -> I.Value -> Bool
+cmpValue (C.VNumber n) (I.VNumber m) = n == m
+cmpValue (C.VArr ns) (I.VArr ms) = and [ cmpValue n m | (n, m) <- zip ns ms ]
+cmpValue _ _ = False
+
+test :: Gen Bool
+test = do
+  expr <- randomExprOfType C.ti32
+  let ns = interpretIR expr
+  let ms = interpretExpr expr
+  pure $ and [ cmpValue n m | (n, m) <- zip ns ms ]
