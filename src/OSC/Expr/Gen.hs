@@ -145,7 +145,7 @@ genVarOfType ctx targetType =
     then Nothing
     else Just $ do
       (ident, _) <- elements varsOfType
-      pure $ var ident
+      pure $ iVar ident
   where
     varsOfType = M.toList $ M.filter (== targetType) (availableVars ctx)
 
@@ -301,8 +301,8 @@ genRec ctx recType = do
           other <- scale (`div` 2) $ genExprOfType ctx t
           -- Randomly put param on left or right
           elements
-            [ B.op op (var paramName) other
-            , B.op op other (var paramName)
+            [ B.op op (iVar paramName) other
+            , B.op op other (iVar paramName)
             ]
       , -- Use param in a more complex expression
         do
@@ -310,14 +310,14 @@ genRec ctx recType = do
           op2 <- elements [C.Add, C.Sub]
           a <- scale (`div` 3) $ genExprOfType ctx t
           b <- scale (`div` 3) $ genExprOfType ctx t
-          B.op op1 <$> (B.op op2 (var paramName) <$> pure a) <*> pure b
+          B.op op1 <$> (B.op op2 (iVar paramName) <$> pure a) <*> pure b
       ]
     genBodyUsingParam ctx (C.TArr elemType len) paramName = oneof
       [ -- Select from the recursive parameter array
         do
           idxVal <- choose (0, len - 1)
           idx <- elements [B.const (C.I32 idxVal), B.const (C.I64 idxVal)]
-          pure $ select (var paramName) idx
+          pure $ select (iVar paramName) idx
       , -- Build array using recursive parameter elements
         do
           indices <- replicateM len $ choose (0, len - 1)
@@ -330,16 +330,16 @@ genRec ctx recType = do
           otherElems <- replicateM (len - 1) (scale (`div` len) $ genExprOfType ctx elemType)
           pos <- choose (0, len - 1)
           let (before, after) = splitAt pos otherElems
-          let paramElem = select (var paramName) idx
+          let paramElem = select (iVar paramName) idx
           pure $ arr (before <> [paramElem] <> after)
       ]
       where
         mkSelect i = do
           idx <- elements [B.const (C.I32 i), B.const (C.I64 i)]
-          pure $ select (var paramName) idx
+          pure $ select (iVar paramName) idx
     genBodyUsingParam _ _ paramName = 
       -- Fallback: just return the parameter itself
-      pure $ var paramName
+      pure $ iVar paramName
 
 -- | Arbitrary instance for Fix Expr
 instance Arbitrary (Fix Expr) where
