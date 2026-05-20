@@ -416,8 +416,8 @@ cmpValue (C.VNumber n) (I.VNumber m) = n == m
 cmpValue (C.VArr ns) (I.VArr ms) = and [ cmpValue n m | (n, m) <- zip ns ms ]
 cmpValue _ _ = False
 
-test :: Gen Bool
-test = do
+prop_interpretationEquivalence :: Property
+prop_interpretationEquivalence = property $ do
   expr <- randomExprOfType C.ti32
   let ns = interpretIR expr
   let ms = interpretExpr expr
