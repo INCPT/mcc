@@ -241,8 +241,8 @@ interpret (Ann (t, PRec _ delay param bindings body)) = mdo
     alloc (C.TArr t n) = VArr $ take (n + 1) $ repeat (alloc t)
     alloc (C.TLam _ _) = error "interpret: Rec: function in return type"
 
-interpretToList :: Ann C.Type Expr -> [Value]
-interpretToList texpr = take 20 (go st.initialMem sim)
+interpretToList :: Int -> Ann C.Type Expr -> [Value]
+interpretToList n texpr = take n (go st.initialMem sim)
   where
     go mem sim = let (a, mem') = ST.runState (R.runReaderT sim (SimEnv mempty)) mem in a:go mem' sim
     (sim, st) = ST.runState (R.runReaderT (interpret texpr) mempty) (GenState { nextCell = 0, initialMem = mempty })

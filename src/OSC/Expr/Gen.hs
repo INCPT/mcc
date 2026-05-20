@@ -413,7 +413,7 @@ interpretIR expr = C.interpretToList 20 program
 
 cmpValue :: C.Value -> I.Value -> Bool
 cmpValue (C.VNumber n) (I.VNumber m) = n == m
-cmpValue (C.VArr ns) (I.VArr ms) = and [ cmpValue n m | (n, m) <- zip ns ms ]
+cmpValue (C.VArr ns) (I.VArr ms) = and [ cmpValue (C.VNumber n) m | (n, m) <- zip ns ms ]
 cmpValue _ _ = False
 
 prop_interpretationEquivalence :: Property

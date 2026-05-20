@@ -82,7 +82,7 @@ paramTypes _ (TLam params _) = params
 paramTypes e _ = error $ "paramTypes: not an abs: " <> e
 
 data Number = I32 Int | I64 Int | F32 Float | F64 Double
-  deriving Show
+  deriving (Eq, Ord, Show)
 
 instance Pretty Number where
   pretty = \case

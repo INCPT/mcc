@@ -19,7 +19,7 @@ import Data.Maybe (fromMaybe)
 
 import Debug.Trace
 
-data Value = VNumber Number | VArr [Value]
+data Value = VNumber Number | VArr [Number]
   deriving Show
 
 data ExecEnv s = ExecEnv
@@ -30,12 +30,18 @@ data ExecEnv s = ExecEnv
 
 type InterpretM s = ReaderT (ExecEnv s) (ST s)
 
+numZeroValue :: TNumber -> Number
+numZeroValue TI32 = I32 0
+numZeroValue TF32 = F32 0
+numZeroValue TI64 = I64 0
+numZeroValue TF64 = F64 0
+
 zeroValue :: Type -> Value
-zeroValue (TNumber TI32) = VNumber (I32 0)
-zeroValue (TNumber TF32) = VNumber (F32 0)
-zeroValue (TNumber TI64) = VNumber (I64 0)
-zeroValue (TNumber TF64) = VNumber (F64 0)
-zeroValue (TArr t dim) = VArr (replicate dim (zeroValue t))
+zeroValue (TNumber typ) = VNumber $ numZeroValue typ
+zeroValue typ@(TArr _ _) = VArr (replicate count (numZeroValue bt))
+  where
+    bt = baseType typ
+    count = elemCountOfType typ
 zeroValue (TLam _ _) = VNumber (I32 0)
 
 -- Helper function to copy the sign from one float to another
@@ -115,14 +121,6 @@ applyOp CopySign (VNumber (F32 a)) (VNumber (F32 b)) = VNumber (F32 (copySign a 
 applyOp CopySign (VNumber (F64 a)) (VNumber (F64 b)) = VNumber (F64 (copySign a b))
 applyOp op a b = error $ "applyOp: unsupported operation: " <> show a <> " " <> show op <> " " <> show b
 
--- Allocate flattened array storage
-allocateFlattened :: Type -> Value
-allocateFlattened typ@(TArr _ _) =
-  let bt = baseType typ
-      count = elemCountOfType typ
-  in VArr (replicate count (zeroValue (TNumber bt)))
-allocateFlattened typ = zeroValue typ
-
 -- Get a value from a location
 getVar :: Location -> InterpretM s Value
 getVar loc = do
@@ -140,10 +138,11 @@ setVar loc val = do
     Nothing -> error $ "setVar: location not found: " <> show loc
 
 -- Extract a slice from a value
-extractSlice :: Value -> Int -> Int -> Value
-extractSlice (VArr vals) offset len = VArr (take len (drop offset vals))
-extractSlice (VNumber n) 0 1 = VNumber n
-extractSlice v offset len = error $ "extractSlice: invalid slice " <> show offset <> ".." <> show (offset + len) <> " of " <> show v
+extractSlice :: Type -> Value -> Int -> Int -> Value
+extractSlice (TArr _ _) (VArr vals) offset len = VArr (take len (drop offset vals))
+extractSlice (TNumber _) (VArr vals) offset 1 = VNumber $ head (drop offset vals)
+extractSlice _ (VNumber n) 0 1 = VNumber n
+extractSlice _ v offset len = error $ "extractSlice: invalid slice " <> show offset <> ".." <> show (offset + len) <> " of " <> show v
 
 -- Write a slice into a value
 writeSlice :: Value -> Int -> Value -> Value
@@ -153,50 +152,50 @@ writeSlice (VArr dest) offset (VArr src) =
   in VArr (before <> src <> after)
 writeSlice (VArr dest) offset (VNumber n) =
   let (before, _:after) = splitAt offset dest
-  in VArr (before <> [VNumber n] <> after)
+  in VArr (before <> [n] <> after)
 writeSlice _ _ v = v
 
 -- Read a slice value from the execution context
 readSlice :: Slice -> Map Captured (STRef s Value) -> Maybe (STRef s Value) -> InterpretM s Value
 readSlice (SConst n) _ _ = pure $ VNumber n
 readSlice (SFuncRef (FuncRef fr)) _ _ = pure $ VNumber (I32 fr)
-readSlice (SSlice _ (SArg arg) (Left offset) len) args _ = do
+readSlice (SSlice typ (SArg arg) (Left offset) len) args _ = do
   case M.lookup arg args of
     Just ref -> do
       val <- lift $ readSTRef ref
-      pure $ extractSlice val offset len
+      pure $ extractSlice typ val offset len
     Nothing -> error $ "readSlice: arg not found: " <> show arg
-readSlice (SSlice _ (SVar loc) (Left offset) len) _ _ = do
+readSlice (SSlice typ (SVar loc) (Left offset) len) _ _ = do
   val <- getVar loc
-  pure $ extractSlice val offset len
-readSlice (SSlice _ (SVar loc) (Right offsetLoc) len) _ _ = do
+  pure $ extractSlice typ val offset len
+readSlice (SSlice typ (SVar loc) (Right offsetLoc) len) _ _ = do
   offsetVal <- getVar offsetLoc
   let offset = case offsetVal of
         VNumber (I32 i) -> fromIntegral i
         VNumber (I64 i) -> fromIntegral i
         _ -> error "readSlice: offset must be integer"
   val <- getVar loc
-  pure $ extractSlice val offset len
-readSlice (SSlice _ SRet (Left offset) len) _ (Just retRef) = do
+  pure $ extractSlice typ val offset len
+readSlice (SSlice typ SRet (Left offset) len) _ (Just retRef) = do
   retVal <- lift $ readSTRef retRef
-  pure $ extractSlice retVal offset len
-readSlice (SSlice _ SRet (Right offsetLoc) len) _ (Just retRef) = do
+  pure $ extractSlice typ retVal offset len
+readSlice (SSlice typ SRet (Right offsetLoc) len) _ (Just retRef) = do
   offsetVal <- getVar offsetLoc
   let offset = case offsetVal of
         VNumber (I32 i) -> fromIntegral i
         VNumber (I64 i) -> fromIntegral i
         _ -> error "readSlice: offset must be integer"
   retVal <- lift $ readSTRef retRef
-  pure $ extractSlice retVal offset len
+  pure $ extractSlice typ retVal offset len
 readSlice slice _ _ = error $ "readSlice: invalid slice: " <> show slice
 
 -- Write a slice value to the execution context
 writeSliceCtx :: String -> Slice -> Value ->  Maybe (STRef s Value) -> InterpretM s ()
-writeSliceCtx callSite (SSlice _ (SVar loc) (Left offset) _) val _ = do
+writeSliceCtx _ (SSlice _ (SVar loc) (Left offset) _) val _ = do
   current <- getVar loc
   let updated = writeSlice current offset val
   setVar loc updated
-writeSliceCtx callSite (SSlice _ (SVar loc) (Right offsetLoc) _) val _ = do
+writeSliceCtx _ (SSlice _ (SVar loc) (Right offsetLoc) _) val _ = do
   offsetVal <- getVar offsetLoc
   let offset = case offsetVal of
         VNumber (I32 i) -> fromIntegral i
@@ -208,7 +207,7 @@ writeSliceCtx callSite (SSlice _ (SVar loc) (Right offsetLoc) _) val _ = do
 writeSliceCtx _ (SSlice _ SRet (Left offset) _) val (Just retRef) = do
   retVal <- lift $ readSTRef retRef
   lift $ writeSTRef retRef (writeSlice retVal offset val)
-writeSliceCtx callSite (SSlice _ SRet (Right offsetLoc) _) val (Just retRef) = do
+writeSliceCtx _ (SSlice _ SRet (Right offsetLoc) _) val (Just retRef) = do
   offsetVal <- getVar offsetLoc
   let offset = case offsetVal of
         VNumber (I32 i) -> fromIntegral i
@@ -247,7 +246,7 @@ interpInstrs (instr:instrs) args retRef = do
     ICall retSlice funcSlice argSlices -> do
       fr <- case funcSlice of
         SFuncRef fr -> pure fr
-        slice -> do
+        _ -> do
           funcVal <- readSlice funcSlice args retRef
           case funcVal of
             VNumber (I32 fr) -> pure $ FuncRef fr
@@ -268,7 +267,7 @@ interpInstrs (instr:instrs) args retRef = do
           -- Allocate locals for the function
           funcLocalRefs <- lift $ M.fromList <$> sequence
             [ do
-                ref <- newSTRef (allocateFlattened typ)
+                ref <- newSTRef (zeroValue typ)
                 pure (loc, ref)
             | (loc, typ) <- M.toList func.locals
             ]
@@ -277,7 +276,7 @@ interpInstrs (instr:instrs) args retRef = do
           let retType = case retSlice of
                 SSlice typ _ _ _ -> typ
                 _ -> error "ICall: return must be a slice"
-          funcRetRef <- lift $ newSTRef (allocateFlattened retType)
+          funcRetRef <- lift $ newSTRef (zeroValue retType)
           
           -- Execute function with new local environment
           R.local (\ExecEnv {..} -> ExecEnv { locals = funcLocalRefs, .. }) $
@@ -301,11 +300,19 @@ interpInstrs (instr:instrs) args retRef = do
       loop initial
       interpInstrs instrs args retRef
 
+refType :: Ref -> Type
+refType (RConst n) = numberType n
+refType (RRet typ) = typ
+refType (RArg typ _) = typ
+refType (RVar typ _) = typ
+refType (RProj ref _ _) = peelType $ refType ref
+refType (RFuncRef _) = TNumber TI32
+
 -- Evaluate a reference to get its current value
 evalRef :: Ref -> InterpretM s Value
 evalRef (RConst n) = pure $ VNumber n
 evalRef (RFuncRef _) = pure $ VNumber (I32 0)
-evalRef (RVar typ loc) = getVar loc
+evalRef (RVar _ loc) = getVar loc
 evalRef (RProj ref idx innerDim) = do
   val <- evalRef ref
   idxVal <- evalRef idx
@@ -313,16 +320,16 @@ evalRef (RProj ref idx innerDim) = do
         VNumber (I32 i) -> fromIntegral i * innerDim
         VNumber (I64 i) -> fromIntegral i * innerDim
         _ -> error "evalRef: index must be integer"
-  pure $ extractSlice val offset innerDim
+  pure $ extractSlice (refType ref) val offset innerDim
 evalRef ref = error $ "evalRef: cannot evaluate ref at top level: " <> show ref
 
 -- Interpret a program and generate a list of values
-interpretToList :: Program -> Int -> [Value]
-interpretToList prog n = runST $ do
+interpretToList :: Int -> Program -> [Value]
+interpretToList n prog = runST $ do
   -- Allocate globals
   globalRefs <- M.fromList <$> sequence
     [ do
-        ref <- newSTRef (allocateFlattened typ)
+        ref <- newSTRef (zeroValue typ)
         pure (loc, ref)
     | (loc, typ) <- M.toList prog.globals
     ]
