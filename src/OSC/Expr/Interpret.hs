@@ -192,18 +192,18 @@ interpret (Ann (t, PRec _ delay param bindings body)) = mdo
 
   ST.modify $ \st -> st
     { nextCell = st.nextCell + 2
-    , initialMem = M.fromList [(delayBufferIdx, initialValue), (delayIndexIdx, VNumber (C.I32 (delay - 1)))] <> st.initialMem
+    , initialMem = M.fromList [(delayBufferIdx, initialValue), (delayIndexIdx, VNumber (C.I32 0))] <> st.initialMem
     }
 
-  let delayLine offset = ST.get >>= \mem -> do
+  let delayLine = ST.get >>= \mem -> do
         let delayBuffer = lookupE "delayBuffer" mem delayBufferIdx
         let delayIdx = lookupE "delayIdx" mem delayIndexIdx
         case (delayBuffer, delayIdx) of
-          (VArr ds, VNumber (C.I32 i)) -> pure (ds !! ((i - offset) `mod` delay))
+          (VArr ds, VNumber (C.I32 i)) -> pure (ds !! i)
           _ -> error $ "delayLine: (this is a bug): " <> show delayBuffer <> ", " <> show delayIdx
 
   simbindings <- fmap M.fromList $ sequence $ mconcat
-    [ [ pure (param, delayLine delay) ]
+    [ [ pure (param, delayLine) ]
     , [ fmap (n,) $ R.local (\env -> simbindings <> env) $ interpret bbody | (n, bbody) <- bindings ]
     ]
 
@@ -218,6 +218,8 @@ interpret (Ann (t, PRec _ delay param bindings body)) = mdo
     let delayBuffer = lookupE "delayBuffer: tick" mem' delayBufferIdx
     let delayIndex = lookupE "delayIndex: tick" mem' delayIndexIdx
 
+    d <- delayLine
+
     ST.put $ mconcat
       -- Update delay lines
       [ case (delayBuffer, delayIndex) of
@@ -230,7 +232,7 @@ interpret (Ann (t, PRec _ delay param bindings body)) = mdo
       , mem'
       ]
 
-    delayLine 0
+    pure d
   where
     replace i a as = take i as <> [a] <> drop (i + 1) as
 

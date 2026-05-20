@@ -130,9 +130,9 @@ toSlice (RProj ref idx innerDim) = do
   case (slice, idxSlice) of
     -- Constant index with constant offset - compute statically
     (SSlice typ loc (Left offset) _, SConst (I32 i)) ->
-      pure $ SSlice typ loc (Left (offset + i * innerDim)) innerDim
+      pure $ SSlice (C.peelType typ) loc (Left (offset + i * innerDim)) innerDim
     (SSlice typ loc (Left offset) _, SConst (I64 i)) ->
-      pure $ SSlice typ loc (Left (offset + i * innerDim)) innerDim
+      pure $ SSlice (C.peelType typ) loc (Left (offset + i * innerDim)) innerDim
     
     -- Dynamic cases - need to compute offset at runtime
     (SSlice typ loc baseOffset _, _) -> do
@@ -157,7 +157,7 @@ toSlice (RProj ref idx innerDim) = do
         Right baseLoc -> do
           binOp Add offsetVar (RVar C.ti32 baseLoc) offsetVar
       
-      pure $ SSlice typ loc (Right offsetLoc) innerDim
+      pure $ SSlice (C.peelType typ) loc (Right offsetLoc) innerDim
     
     _ -> error "toSlice: projection of non-variable slice"
 
@@ -227,11 +227,12 @@ codegen dfm expr = Program {..}
   
       let env = Env { varMap = lamAllocs <> recAllocs, recMap = recEnvs }
   
-      ((), tick) <- lift $ W.runWriterT $ flip R.runReaderT env $ sequence_ [ genRec rec_ | rec_ <- dfm.recs ]
+      (ref, tick) <- lift $ W.runWriterT $ flip R.runReaderT env $ do
+        sequence_ [ genRec rec_ | rec_ <- dfm.recs ]
+        rhs expr
 
       let funcMap = fmap (genLam env) dfm.funcMap
   
-      ref <- flip R.runReaderT env $ rhs expr
       pure (tick, funcMap, ref)
 
     collectLamAllocations :: C.LamAnn (Ann Type Expr) -> AllocM (Map Captured Ref)
@@ -250,7 +251,7 @@ codegen dfm expr = Program {..}
 
     collectRecAllocations :: C.RecAnn (Ann Type Expr) -> WriterT [Instruction] AllocM (Map Captured Ref, Map Captured RecEnv)
     collectRecAllocations (C.RecAnn typ delay param bindings _) = do
-      (varMap, readLoc, recEnv) <- lift $ do
+      (varMap, writeLoc, recEnv) <- lift $ do
         varMap <- sequence
           [ do
               loc <- allocLoc typ
@@ -259,13 +260,13 @@ codegen dfm expr = Program {..}
           ]
 
         delayBuffer <- RVar (TArr typ delay) <$> allocLoc (TArr typ delay)
-        writeIdx <- RVar C.ti32 <$> allocLoc C.ti32
-        readLoc <- allocLoc C.ti32; let readIdx = RVar C.ti32 readLoc
+        writeLoc <- allocLoc C.ti32; let writeIdx = RVar C.ti32 writeLoc
+        readIdx <- RVar C.ti32 <$> allocLoc C.ti32
         current <- RVar typ <$> allocLoc typ
-        pure (varMap, readLoc, RecEnv {..})
+        pure (varMap, writeLoc, RecEnv {..})
       
-      -- Initialize read index with delay - 1
-      tell [IBinOp C.Sub (SSlice (TNumber TI32) (SVar readLoc) (Left 0) 1) (SConst (I32 delay)) (SConst (I32 1))]
+      -- Initialize write index with delay - 1
+      tell [IBinOp C.Sub (SSlice (TNumber TI32) (SVar writeLoc) (Left 0) 1) (SConst (I32 delay)) (SConst (I32 1))]
 
       pure (M.fromList ((param, recEnv.current):varMap), M.singleton param recEnv)
 
@@ -323,18 +324,17 @@ codegen dfm expr = Program {..}
         let withBindingVars :: Env -> Env
             withBindingVars Env {..} = Env { varMap = bindingVars <> varMap, .. }
 
-        local withBindingVars $ gen (RProj recEnv.delayBuffer recEnv.writeIdx 1) body
-        
         -- Copy current value
         copyRef recEnv.current (RProj recEnv.delayBuffer recEnv.readIdx 1)
 
-        -- Increment read & write index
         binOp Add recEnv.writeIdx recEnv.writeIdx (RConst $ I32 1)
         binOp Mod recEnv.writeIdx recEnv.writeIdx (RConst $ I32 delay)
-      
+        
         -- TODO: variable delay
         binOp Add recEnv.readIdx recEnv.readIdx (RConst $ I32 1)
         binOp Mod recEnv.readIdx recEnv.readIdx (RConst $ I32 delay)
+
+        local withBindingVars $ gen (RProj recEnv.delayBuffer recEnv.writeIdx 1) body
     
     pfoldedSelectR body@(Ann (bodyTyp, _)) idxs = do
       bodyVar <- alloc bodyTyp

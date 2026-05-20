@@ -9,15 +9,12 @@
 module OSC.Expr.Functors where
 
 import Data.Functor.Identity (runIdentity)
-import Data.Typeable
 
 import qualified Control.Monad.Reader as R
 import Prettyprinter
 
 import OSC.Records
 
-import GHC.OverloadedLabels
-import GHC.Records
 import GHC.TypeLits
 
 class Corecursive f where

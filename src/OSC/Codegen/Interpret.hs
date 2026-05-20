@@ -346,8 +346,8 @@ interpretToList n prog = runST $ do
   -- Generate n values by calling eval then tick
   let go 0 = pure []
       go count = do
-        val <- runReaderT (evalRef prog.ref) env
         runReaderT (interpInstrs prog.tick M.empty Nothing) env
+        val <- runReaderT (evalRef prog.ref) env
         rest <- go (count - 1)
         pure (val : rest)
   

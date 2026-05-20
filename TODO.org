@@ -1,3 +1,11 @@
+* inefficient code:
+  global4[0..1]:i32 := global2[0..1]:i32
+  global4[0..1]:i32 := 1:i32 * global4[0..1]:i32
+  global3[0..1]:i32 := global0[global4..global4+1]:i32[2]
+  
+  global6[0..1]:i32 := global1[0..1]:i32
+  global6[0..1]:i32 := 1:i32 * global6[0..1]:i32
+  global0[global6..global6+1]:i32[2] := global5[0..1]:i32 + 0:i32
 * TODO recs should write their result into a global so that each call site doesn't do the indexing
 * TODO binary ifs
 * TODO variable delays

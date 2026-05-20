@@ -13,7 +13,7 @@ import qualified OSC.Expr.Base as SRC
 type FoldSelM = ST.State [Ann Type SRC.Expr]
 
 push :: Ann Type SRC.Expr -> FoldSelM ()
-push s = ST.modify (s:)
+push s = ST.modify' (s:)
 
 pop :: FoldSelM (Maybe (Ann Type SRC.Expr))
 pop = do
@@ -32,7 +32,7 @@ foldSelections :: Ann Type SRC.Expr -> Ann Type Expr
 foldSelections = flip ST.evalState [] . foldSelections_
 
 foldSelections_ :: Ann Type SRC.Expr -> FoldSelM (Ann Type Expr)
-foldSelections_ = bitraverse trav diff
+foldSelections_ = bitraverse trav undefined
   where
     peelOffIndices :: Int -> Type -> Type
     peelOffIndices 0 t = t
@@ -42,24 +42,23 @@ foldSelections_ = bitraverse trav diff
     trav _ (Ann (typ, SRC.PArr elems)) = do
      s <- pop
      case s of
-       Just idx -> do
+       Just idx@(Ann (typ', _)) -> do
          elems' <- traverse foldSelections_ elems
          push idx
-         pure $ Ann (typ, PFoldedSelectL elems' (foldSelections idx))
+         pure $ Ann (typ', PFoldedSelectL elems' (foldSelections idx))
        Nothing -> pure $ Ann (typ, PArr $ fmap foldSelections elems)
+
+    trav _ (Ann (_, SRC.PSelect sel idx)) = do
+      push idx
+      sel' <- foldSelections_ sel
+      _ <- pop
+      pure sel'
 
     trav rmap expr@(Ann (typ, _)) = do
       idxs <- ST.get
       case idxs of
         [] -> rtraverse rmap expr
         _ -> pure $ Ann (peelOffIndices (length idxs) typ, PFoldedSelectR (foldSelections expr) (fmap foldSelections idxs))
-
-    diff :: Diff (Ann Type SRC.Expr) -> FoldSelM (Expr (Ann Type Expr))
-    diff (DSelect sel idx) = do
-      push idx
-      sel' <- foldSelections_ sel
-      _ <- pop
-      pure $ project sel'
 
 {-
 -- TODO: this must happen after inlining / CSE (otherwise things like let a = [1, 2, 3] in a[0] won't be optimized)
