@@ -421,4 +421,8 @@ prop_interpretationEquivalence = property $ do
   expr <- randomExprOfType C.ti32
   let ns = interpretIR expr
   let ms = interpretExpr expr
-  pure $ and [ cmpValue n m | (n, m) <- zip ns ms ]
+  let matches = [ cmpValue n m | (n, m) <- zip ns ms ]
+  pure $ counterexample ("Expression: " ++ show expr) $
+         counterexample ("IR output: " ++ show ns) $
+         counterexample ("Expr output: " ++ show ms) $
+         and matches
