@@ -356,16 +356,54 @@ instance Arbitrary (Fix Expr) where
     returnType <- genSimpleType
     genExprOfType emptyCtx returnType
   
-  shrink (Fix (PConst (C.I32 n))) = [Fix (PConst (C.I32 n')) | n' <- shrink n]
-  shrink (Fix (PConst (C.I64 n))) = [Fix (PConst (C.I64 n')) | n' <- shrink n]
-  shrink (Fix (PConst (C.F32 n))) = [Fix (PConst (C.F32 n')) | n' <- shrink n]
-  shrink (Fix (PConst (C.F64 n))) = [Fix (PConst (C.F64 n')) | n' <- shrink n]
-  shrink (Fix (POp _ a b)) = [a, b]
-  shrink (Fix (PArr es)) = es
-  shrink (Fix (PSelect arr _)) = [arr]
-  shrink (Fix (PApp f args)) = f : args
-  shrink (Fix (PLam _ _ bindings body)) = body : [e | (_,  e) <- bindings]
-  shrink (Fix (PRec _ _ _ bindings body)) = body : [e | (_,  e) <- bindings]
+  shrink (Fix (PConst (C.I32 n))) = [Fix (PConst (C.I32 n')) | n' <- shrink n, n' /= n]
+  shrink (Fix (PConst (C.I64 n))) = [Fix (PConst (C.I64 n')) | n' <- shrink n, n' /= n]
+  shrink (Fix (PConst (C.F32 n))) = [Fix (PConst (C.F32 n')) | n' <- shrink n, n' /= n]
+  shrink (Fix (PConst (C.F64 n))) = [Fix (PConst (C.F64 n')) | n' <- shrink n, n' /= n]
+  
+  -- For binary operations, try: just the operands, or shrink the operands
+  shrink (Fix (POp op a b)) = 
+    [a, b] ++  -- Try just the operands
+    [Fix (POp op a' b) | a' <- shrink a] ++
+    [Fix (POp op a b') | b' <- shrink b]
+  
+  -- For arrays, try: individual elements, smaller arrays, or shrink elements
+  shrink (Fix (PArr es)) = 
+    es ++  -- Try individual elements
+    [Fix (PArr es') | es' <- shrinkList shrink es, not (null es')] ++  -- Smaller arrays
+    [Fix (PArr es') | es' <- traverse shrink es, es' /= es]  -- Shrink elements
+  
+  -- For select, try: just the array, or shrink array/index
+  shrink (Fix (PSelect arr idx)) = 
+    [arr] ++
+    [Fix (PSelect arr' idx) | arr' <- shrink arr] ++
+    [Fix (PSelect arr idx') | idx' <- shrink idx]
+  
+  -- For application, try: just the function, just args, or shrink components
+  shrink (Fix (PApp f args)) = 
+    (f : args) ++
+    [Fix (PApp f' args) | f' <- shrink f] ++
+    [Fix (PApp f args') | args' <- shrinkList shrink args, not (null args')]
+  
+  -- For lambda, try: just the body, remove bindings, or shrink components
+  shrink (Fix (PLam t params bindings body)) = 
+    [body] ++  -- Try just the body
+    [Fix (PLam t params [] body)] ++  -- Try without bindings
+    [Fix (PLam t params bindings' body) | bindings' <- shrinkList shrinkBinding bindings, not (null bindings')] ++
+    [Fix (PLam t params bindings body') | body' <- shrink body]
+    where
+      shrinkBinding (name, expr) = [(name, expr') | expr' <- shrink expr]
+  
+  -- For rec, try: just the body, remove bindings, reduce delay, or shrink components
+  shrink (Fix (PRec t delay param bindings body)) = 
+    [body] ++  -- Try just the body
+    [Fix (PRec t delay param [] body)] ++  -- Try without bindings
+    [Fix (PRec t delay' param bindings body) | delay' <- shrink delay, delay' > 0] ++  -- Reduce delay
+    [Fix (PRec t delay param bindings' body) | bindings' <- shrinkList shrinkBinding bindings, not (null bindings')] ++
+    [Fix (PRec t delay param bindings body') | body' <- shrink body]
+    where
+      shrinkBinding (name, expr) = [(name, expr') | expr' <- shrink expr]
+  
   shrink _ = []
 
 -- | Generate a random expression for testing in GHCi
