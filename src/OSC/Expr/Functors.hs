@@ -36,6 +36,7 @@ hoist = embed . fmap hoist . project
 
 newtype Fix f = Fix { unFix :: f (Fix f) }
 
+deriving instance Eq (f (Fix f)) => Eq (Fix f)
 deriving instance Show (f (Fix f)) => Show (Fix f)
 
 instance Recursive Fix where project = unFix
@@ -49,6 +50,7 @@ instance Pretty (f (Fix f)) => Pretty (Fix f) where
 
 newtype Ann ann f = Ann { unAnn :: (ann, f (Ann ann f)) }
 
+deriving instance (Eq ann, Eq (f (Ann ann f))) => Eq (Ann ann f)
 deriving instance (Show ann, Show (f (Ann ann f))) => Show (Ann ann f)
 
 instance Recursive (Ann ann) where project = snd . unAnn

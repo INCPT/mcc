@@ -23,6 +23,8 @@ import qualified OSC.Expr.Comp as C
 import OSC.Expr.Functors
 import OSC.Expr.Defunc hiding (const)
 
+import Debug.Trace
+
 data Location = Location C.AllocRegion Int
   deriving (Eq, Ord, Show)
 
@@ -190,10 +192,12 @@ if_ cond t e = do
   condSlice <- toSlice cond
   lift $ tell [IIf condSlice t' e']
 
+dims :: Type -> [Int]
+dims (TArr inner dim) = dim:dims inner
+dims _ = []
+
 innerDims :: Type -> [Int]
-innerDims (TArr (TArr t dim) _) = dim:innerDims t
-innerDims (TArr _ _) = [1]
-innerDims _ = []
+innerDims = (<> [1]) . tail . dims
 
 data ProgramFunc = ProgramFunc
   { params :: [(Captured, Type)]
@@ -340,7 +344,9 @@ codegen dfm expr = Program {..}
       bodyVar <- alloc bodyTyp
       gen bodyVar body
       idxVars <- traverse rhs idxs
-      pure $ foldr (\(idx, dim) body' -> RProj body' idx dim) bodyVar (zip idxVars (scanl1 (*) (innerDims bodyTyp)))
+      -- _ <- trace ("PROJ: " <> show (foldr (\(idx, dim) body' -> RProj body' idx dim) bodyVar (zip idxVars (reverse $ scanl1 (*) (reverse $ innerDims bodyTyp))))) (pure ())
+      _ <- trace ("DIMS: " <> show (idxVars)) (pure ())
+      pure $ foldr (\(idx, dim) body' -> RProj body' idx dim) bodyVar (zip idxVars (reverse $ scanl1 (*) (reverse $ innerDims bodyTyp)))
 
     prec param = ask >>= \env -> pure (lookupE "prec: param" param env.recMap).current
 
@@ -419,7 +425,7 @@ showType (TNumber TI32) = "i32"
 showType (TNumber TF32) = "f32"
 showType (TNumber TI64) = "i64"
 showType (TNumber TF64) = "f64"
-showType (TArr t dim) = showType t <> "[" <> show dim <> "]"
+showType arr@(TArr t dim) = showType (TNumber $ C.baseType t) <> concatMap (\d -> "[" <> show d <> "]") (dims arr)
 showType (TLam [] retType) = "() -> " <> showType retType
 showType (TLam params retType) = 
   "(" <> intercalate ", " (map showType params) <> ") -> " <> showType retType
@@ -429,6 +435,7 @@ instance Pretty Ref where
   pretty (RRet typ) = "ret:" <> pretty (showType typ)
   pretty (RArg typ ident) = "arg:" <> pretty ident <> ":" <> pretty (showType typ)
   pretty (RVar typ (Location region loc)) = allocRegion region <> pretty loc <> ":" <> pretty (showType typ)
+  -- TODO: reverse indices
   pretty (RProj ref idx innerDim) = pretty ref <> brackets (pretty idx <> ":" <> pretty innerDim)
   pretty (RFuncRef (FuncRef i)) = "f" <> pretty i
 

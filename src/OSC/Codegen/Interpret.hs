@@ -142,7 +142,7 @@ extractSlice :: Type -> Value -> Int -> Int -> Value
 extractSlice (TArr _ _) (VArr vals) offset len = VArr (take len (drop offset vals))
 extractSlice (TNumber _) (VArr vals) offset 1 = VNumber $ head (drop offset vals)
 extractSlice _ (VNumber n) 0 1 = VNumber n
-extractSlice _ v offset len = error $ "extractSlice: invalid slice " <> show offset <> ".." <> show (offset + len) <> " of " <> show v
+extractSlice typ v offset len = error $ "extractSlice: invalid slice of type " <> show typ <> ": " <> show offset <> ".." <> show (offset + len) <> " of " <> show v
 
 -- Write a slice into a value
 writeSlice :: Value -> Int -> Value -> Value
@@ -157,6 +157,8 @@ writeSlice _ _ v = v
 
 -- Read a slice value from the execution context
 readSlice :: Slice -> Map Captured (STRef s Value) -> Maybe (STRef s Value) -> InterpretM s Value
+-- readSlice slice _ _
+--   | trace ("SLICE: " <> show slice) False = undefined
 readSlice (SConst n) _ _ = pure $ VNumber n
 readSlice (SFuncRef (FuncRef fr)) _ _ = pure $ VNumber (I32 fr)
 readSlice (SSlice typ (SArg arg) (Left offset) len) args _ = do
@@ -305,7 +307,7 @@ refType (RConst n) = numberType n
 refType (RRet typ) = typ
 refType (RArg typ _) = typ
 refType (RVar typ _) = typ
-refType (RProj ref _ _) = peelType $ refType ref
+refType (RProj ref _ _) = peelType (refType ref)
 refType (RFuncRef _) = TNumber TI32
 
 -- Evaluate a reference to get its current value
@@ -313,14 +315,17 @@ evalRef :: Ref -> InterpretM s Value
 evalRef (RConst n) = pure $ VNumber n
 evalRef (RFuncRef _) = pure $ VNumber (I32 0)
 evalRef (RVar _ loc) = getVar loc
-evalRef (RProj ref idx innerDim) = do
+evalRef projRef@(RProj ref idx innerDim) = do
   val <- evalRef ref
   idxVal <- evalRef idx
+  _ <- trace (show projRef) (pure ())
+  _ <- trace ("VAL: " <> show val) (pure ())
+  _ <- trace ("OFFSET: " <> show idxVal) (pure ())
   let offset = case idxVal of
         VNumber (I32 i) -> fromIntegral i * innerDim
         VNumber (I64 i) -> fromIntegral i * innerDim
         _ -> error "evalRef: index must be integer"
-  pure $ extractSlice (refType ref) val offset innerDim
+  pure $ extractSlice (refType projRef) val offset innerDim
 evalRef ref = error $ "evalRef: cannot evaluate ref at top level: " <> show ref
 
 -- Interpret a program and generate a list of values

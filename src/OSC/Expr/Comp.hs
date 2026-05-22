@@ -170,7 +170,7 @@ instance Pretty UOp where
 -- Building blocks -------------------------------------------------------------
 
 data Lam exp = Lam Type [Ident] [(Ident, exp)] exp
-  deriving (Functor, Foldable, Traversable, Show)
+  deriving (Eq, Functor, Foldable, Traversable, Show)
 
 instance Pretty exp => Pretty (Lam exp) where
   pretty (Lam ty params bindings body) = nest 2 $ parens $ vsep
@@ -187,7 +187,7 @@ instance Pretty exp => Pretty (Lam exp) where
       prettyBinding (ident, expr) = parens $ hsep [pretty ident, pretty expr]
 
 data Rec exp = Rec Type Int Ident [(Ident, exp)] exp
-  deriving (Functor, Foldable, Traversable, Show)
+  deriving (Eq, Functor, Foldable, Traversable, Show)
 
 instance Pretty exp => Pretty (Rec exp) where
   pretty (Rec ty delay param bindings body) = nest 2 $ parens $ vsep
@@ -202,7 +202,7 @@ instance Pretty exp => Pretty (Rec exp) where
       prettyBinding (ident, expr) = parens $ hsep [pretty ident, pretty expr]
 
 data Select exp = Select exp exp
-  deriving (Functor, Foldable, Traversable, Show)
+  deriving (Eq, Functor, Foldable, Traversable, Show)
 
 instance Pretty exp => Pretty (Select exp) where
   pretty (Select sel idx) = parens $ hsep ["select", pretty sel, pretty idx]
@@ -222,7 +222,7 @@ instance Pretty exp => Pretty (FoldedSelect exp) where
       list docs = parens $ hsep docs
 
 data IVar exp = IVar Ident
-  deriving (Functor, Foldable, Traversable, Show)
+  deriving (Eq, Functor, Foldable, Traversable, Show)
 
 instance Pretty (IVar exp) where
   pretty (IVar v) = pretty v
@@ -238,7 +238,7 @@ data Expr exp
   | Arr [exp]
   | Op Op exp exp
   | App exp [exp]
-  deriving (Functor, Foldable, Traversable, Show)
+  deriving (Eq, Functor, Foldable, Traversable, Show)
 
 instance Pretty exp => Pretty (Expr exp) where
   pretty = \case

@@ -19,7 +19,7 @@ data Expr exp
   | BVar (C.IVar exp)
   | BLam (C.Lam exp)
   | BRec (C.Rec exp)
-  deriving (Functor, Foldable, Traversable, Generic, Show)
+  deriving (Eq, Functor, Foldable, Traversable, Generic, Show)
 
 $(genSmartConstructors ''Expr)
 $(genPatternSynonyms (('P':)) ''Expr)
