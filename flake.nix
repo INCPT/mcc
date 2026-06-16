@@ -15,7 +15,7 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          nativeBuildInputs = [
+          packages = [
             # Haskell tooling
             hsPkgs.haskell-language-server
             hsPkgs.ghc
