@@ -26,4 +26,6 @@ _build*
 /.dir-locals.el
 .aider*
 .env
+.envrc
+.direnv
 result
