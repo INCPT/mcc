@@ -14,9 +14,7 @@
         hsPkgs = pkgs.haskell.packages.ghc910;
       in
       {
-        devShells.default = hsPkgs.shellFor {
-          packages = p: [];
-
+        devShells.default = pkgs.mkShell {
           nativeBuildInputs = [
             # Haskell tooling
             hsPkgs.haskell-language-server
