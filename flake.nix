@@ -11,9 +11,7 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        # LTS 24.33 uses GHC 9.8.x
-        # If your GHC version differs, adjust accordingly (e.g. ghc96, ghc910)
-        hsPkgs = pkgs.haskell.packages.ghc98;
+        hsPkgs = pkgs.haskell.packages.ghc910;
       in
       {
         devShells.default = hsPkgs.shellFor {
