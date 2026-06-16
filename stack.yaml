@@ -15,6 +15,5 @@ extra-deps:
 #     - llvm-hs-pure
 # - llvm-hs-pretty-0.6.1.0
 
-# nix:
-#     enable: false
-#     packages: [llvm_6, clang_6]
+nix:
+    enable: false
