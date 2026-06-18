@@ -302,25 +302,6 @@ interpInstrs (instr:instrs) args retRef = do
       loop initial
       interpInstrs instrs args retRef
 
--- Evaluate a reference to get its current value
-evalRef :: Ref -> InterpretM s Value
-evalRef (RConst n) = pure $ VNumber n
-evalRef (RFuncRef _) = pure $ VNumber (I32 0)
-evalRef (RVar _ loc) = getVar loc
-evalRef projRef@(RProj _ _ _) = do
-  valSlice <- toSlice ref
-  idxVal <- evalRef idx
-
-  _ <- trace (show projRef) (pure ())
-  _ <- trace ("VAL: " <> show val) (pure ())
-  _ <- trace ("OFFSET: " <> show idxVal) (pure ())
-  let offset = case idxVal of
-        VNumber (I32 i) -> fromIntegral i * innerDim
-        VNumber (I64 i) -> fromIntegral i * innerDim
-        _ -> error "evalRef: index must be integer"
-  pure $ extractSlice (refType projRef) val offset innerDim
-evalRef ref = error $ "evalRef: cannot evaluate ref at top level: " <> show ref
-
 -- Interpret a program and generate a list of values
 interpretToList :: Int -> Program -> [Value]
 interpretToList n prog = runST $ do
@@ -345,7 +326,7 @@ interpretToList n prog = runST $ do
   let go 0 = pure []
       go count = do
         runReaderT (interpInstrs prog.tick M.empty Nothing) env
-        val <- runReaderT (evalRef prog.ref) env
+        val <- runReaderT (readSlice prog.ref M.empty Nothing) env
         rest <- go (count - 1)
         pure (val : rest)
   

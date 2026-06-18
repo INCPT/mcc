@@ -280,7 +280,7 @@ data Program = Program
   , funcMap :: Map FuncRef ProgramFunc
   , tick :: [Instruction]
   , startup :: [Instruction]
-  , ref :: Ref
+  , ref :: Slice
   } deriving Show
 
 --------------------------------------------------------------------------------
@@ -294,7 +294,7 @@ codegen dfm expr = Program {..}
 
     (((tick, funcMap, ref), startup), (_, globals)) = flip runState (0, mempty) $ flip runReaderT C.AllocGlobal $ runWriterT top
 
-    top :: WriterT [Instruction] AllocM ([Instruction], Map FuncRef ProgramFunc, Ref)
+    top :: WriterT [Instruction] AllocM ([Instruction], Map FuncRef ProgramFunc, Slice)
     top = do
       lamAllocs <- mconcat <$> traverse (lift . collectLamAllocations) (M.elems dfm.funcMap)
       (recAllocs, recEnvs) <- mconcat <$> traverse collectRecAllocations dfm.recs
@@ -303,7 +303,8 @@ codegen dfm expr = Program {..}
   
       (ref, tick) <- lift $ W.runWriterT $ flip R.runReaderT env $ do
         sequence_ [ genRec rec_ | rec_ <- dfm.recs ]
-        rhs expr
+        ref <- rhs expr
+        toSlice ref
 
       let funcMap = fmap (genLam env) dfm.funcMap
   
