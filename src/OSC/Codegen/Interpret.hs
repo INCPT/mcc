@@ -302,22 +302,15 @@ interpInstrs (instr:instrs) args retRef = do
       loop initial
       interpInstrs instrs args retRef
 
-refType :: Ref -> Type
-refType (RConst n) = numberType n
-refType (RRet typ) = typ
-refType (RArg typ _) = typ
-refType (RVar typ _) = typ
-refType (RProj ref _ _) = peelType (refType ref)
-refType (RFuncRef _) = TNumber TI32
-
 -- Evaluate a reference to get its current value
 evalRef :: Ref -> InterpretM s Value
 evalRef (RConst n) = pure $ VNumber n
 evalRef (RFuncRef _) = pure $ VNumber (I32 0)
 evalRef (RVar _ loc) = getVar loc
-evalRef projRef@(RProj ref idx innerDim) = do
-  val <- evalRef ref
+evalRef projRef@(RProj _ _ _) = do
+  valSlice <- toSlice ref
   idxVal <- evalRef idx
+
   _ <- trace (show projRef) (pure ())
   _ <- trace ("VAL: " <> show val) (pure ())
   _ <- trace ("OFFSET: " <> show idxVal) (pure ())
