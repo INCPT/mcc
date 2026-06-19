@@ -14,6 +14,7 @@ import Control.Monad.State.Lazy (State, state, runState)
 import Control.Monad.Trans.Writer (WriterT, runWriterT, tell)
 import qualified Control.Monad.Trans.Writer as W
 import Data.Map (Map)
+import Data.Maybe (fromMaybe)
 import Data.List (intercalate)
 import qualified Data.Map as M
 import Prettyprinter (Pretty(..), Doc, (<+>), vsep, hsep, parens, brackets, indent)
@@ -33,16 +34,24 @@ data Ref
   | RRet Type
   | RArg Type Captured
   | RVar Type Location
-  | RProj Type {- expression -} Ref {- index -} Ref
+  | RProj {- expression -} Ref {- index -} Ref
   | RFuncRef FuncRef
   deriving Show
+
+refType :: Ref -> Type
+refType (RConst n) = C.numberType n
+refType (RRet typ) = typ
+refType (RArg typ _) = typ
+refType (RVar typ _) = typ
+refType (RProj exp _) = C.peelType (refType exp)
+refType (RFuncRef _) = C.tlam
 
 data SliceRoot = SArg Captured | SVar Location | SRet
   deriving Show
 
 data Slice
   = SConst Number
-  | SSlice Type {- arg or var or ret -} SliceRoot {- offset -} (Either Int Location) {- length -} Int
+  | SSlice {- result type of slice -} Type {- arg or var or ret -} SliceRoot {- offset -} (Either Int Location) {- length -} Int
   | SFuncRef FuncRef
   deriving Show
 
@@ -122,59 +131,25 @@ alloc typ = fmap (RVar typ) $ lift $ lift $ allocLoc typ
 -- array[5][2] :: x[0][3]
 -- inner dims: 1 2
 
-toSlice' :: Either Int Location -> Ref -> CodegenM Slice
-toSlice' _ (RConst n) = pure $ SConst n
-toSlice' _ (RFuncRef fr) = pure $ SFuncRef fr
-toSlice' offset (RArg typ arg) = pure $ SSlice typ (SArg arg) offset (C.elemCountOfType typ)
-toSlice' offset (RVar typ loc) = pure $ SSlice typ (SVar loc) offset (C.elemCountOfType typ)
-toSlice' offset (RRet typ) = pure $ SSlice typ SRet offset (C.elemCountOfType typ)
--- toSlice (RProj typ ref idx innerDim) = do
---   slice <- toSlice ref
---   idxSlice <- toSlice idx
---   
---   case (slice, idxSlice) of
---     -- Constant index with constant offset - compute statically
---     (SSlice typ loc (Left offset) _, SConst (I32 i)) ->
---       pure $ SSlice (C.peelType typ) loc (Left (offset + i * innerDim)) innerDim
---     (SSlice typ loc (Left offset) _, SConst (I64 i)) ->
---       pure $ SSlice (C.peelType typ) loc (Left (offset + i * innerDim)) innerDim
---     
---     -- Dynamic cases - need to compute offset at runtime
---     (SSlice typ loc baseOffset _, _) -> do
---       offsetLoc <- lift $ lift $ allocLoc C.ti32
---       let offsetVar = RVar C.ti32 offsetLoc
--- 
---       -- Load index into offset variable
---       case idxSlice of
---         SConst n
---           | C.numberType n == TNumber TI32 -> copyRef offsetVar (RConst n)
---         SSlice (TNumber TI32) (SArg arg) (Left 0) 1 -> copyRef offsetVar (RArg C.ti32 arg)
---         SSlice (TNumber TI32) (SVar loc) (Left 0) 1 -> copyRef offsetVar (RVar C.ti32 loc)
---         _ -> error $ "toSlice: unexpected index slice type: " <> show idxSlice
---       
---       -- Multiply by inner dimension
---       binOp Mul offsetVar (RConst $ I32 innerDim) offsetVar
---       
---       -- Add base offset
---       case baseOffset of
---         Left offset -> when (offset /= 0) $ do
---           binOp Add offsetVar (RConst $ I32 offset) offsetVar
---         Right baseLoc -> do
---           binOp Add offsetVar (RVar C.ti32 baseLoc) offsetVar
---       
---       pure $ SSlice (C.peelType typ) loc (Right offsetLoc) innerDim
---     
---     _ -> error "toSlice: projection of non-variable slice"
+peelMany :: Int -> Type -> Type
+peelMany 0 typ = typ
+peelMany n typ = peelMany (n - 1) (C.peelType typ)
 
-toSlice' baseOffset (RProj typ ref idx) = do
-  -- slice <- toSlice ref
+toSlice' :: Int -> Either Int Location -> Ref -> CodegenM Slice
+toSlice' _ _ (RConst n) = pure $ SConst n
+toSlice' _ _ (RFuncRef fr) = pure $ SFuncRef fr
+toSlice' layers offset (RArg typ' arg) = let typ = peelMany layers typ' in pure $ SSlice typ (SArg arg) offset (C.elemCountOfType typ)
+toSlice' layers offset (RVar typ' loc) = let typ = peelMany layers typ' in pure $ SSlice typ (SVar loc) offset (C.elemCountOfType typ)
+toSlice' layers offset (RRet typ') = let typ = peelMany layers typ' in pure $ SSlice typ SRet offset (C.elemCountOfType typ)
+toSlice' layers baseOffset (RProj ref idx) = do
   idxSlice <- toSlice idx
 
-  let dims' = dims typ
+  let typ = C.peelType $ refType ref
+  let dims = typeDimensions typ
   
   case (baseOffset, idxSlice) of
-         (Left offset, SConst (I32 i)) -> toSlice' (Left (offset + i * product dims')) ref
-         (Left offset, SConst (I64 i)) -> toSlice' (Left (offset + i * product dims')) ref
+         (Left offset, SConst (I32 i)) -> toSlice' (layers + 1) (Left (offset + i * product dims)) ref
+         (Left offset, SConst (I64 i)) -> toSlice' (layers + 1) (Left (offset + i * product dims)) ref
          _ -> do
            offsetLoc <- lift $ lift $ allocLoc C.ti32
            let offsetVar = RVar C.ti32 offsetLoc
@@ -188,7 +163,7 @@ toSlice' baseOffset (RProj typ ref idx) = do
              _ -> error $ "toSlice: unexpected index slice type: " <> show idxSlice
            
            -- Multiply by inner dimension
-           binOp Mul offsetVar (RConst $ I32 $ product dims') offsetVar
+           binOp Mul offsetVar (RConst $ I32 $ product dims) offsetVar
            
            -- Add base offset
            case baseOffset of
@@ -197,44 +172,10 @@ toSlice' baseOffset (RProj typ ref idx) = do
              Right baseLoc -> do
                binOp Add offsetVar (RVar C.ti32 baseLoc) offsetVar
 
-           toSlice' (Right offsetLoc) ref
+           toSlice' (layers + 1) (Right offsetLoc) ref
 
 toSlice :: Ref -> CodegenM Slice
-toSlice = toSlice' (Left 0)
-  
-  -- case (slice, idxSlice) of
-  --   -- Constant index with constant offset - compute statically
-  --   (SSlice typ loc (Left offset) _, SConst (I32 i)) ->
-  --     pure $ SSlice (C.peelType typ) loc (Left (offset + i * innerDim)) innerDim
-  --   (SSlice typ loc (Left offset) _, SConst (I64 i)) ->
-  --     pure $ SSlice (C.peelType typ) loc (Left (offset + i * innerDim)) innerDim
-  --   
-  --   -- Dynamic cases - need to compute offset at runtime
-  --   (SSlice typ loc baseOffset _, _) -> do
-  --     offsetLoc <- lift $ lift $ allocLoc C.ti32
-  --     let offsetVar = RVar C.ti32 offsetLoc
-
-  --     -- Load index into offset variable
-  --     case idxSlice of
-  --       SConst n
-  --         | C.numberType n == TNumber TI32 -> copyRef offsetVar (RConst n)
-  --       SSlice (TNumber TI32) (SArg arg) (Left 0) 1 -> copyRef offsetVar (RArg C.ti32 arg)
-  --       SSlice (TNumber TI32) (SVar loc) (Left 0) 1 -> copyRef offsetVar (RVar C.ti32 loc)
-  --       _ -> error $ "toSlice: unexpected index slice type: " <> show idxSlice
-  --     
-  --     -- Multiply by inner dimension
-  --     binOp Mul offsetVar (RConst $ I32 innerDim) offsetVar
-  --     
-  --     -- Add base offset
-  --     case baseOffset of
-  --       Left offset -> when (offset /= 0) $ do
-  --         binOp Add offsetVar (RConst $ I32 offset) offsetVar
-  --       Right baseLoc -> do
-  --         binOp Add offsetVar (RVar C.ti32 baseLoc) offsetVar
-  --     
-  --     pure $ SSlice (C.peelType typ) loc (Right offsetLoc) innerDim
-
-  --   _ -> error "toSlice: projection of non-variable slice"
+toSlice = toSlice' 0 (Left 0)
 
 copyRef :: Ref -> Ref -> CodegenM ()
 copyRef dst src = do
@@ -265,9 +206,9 @@ if_ cond t e = do
   condSlice <- toSlice cond
   lift $ tell [IIf condSlice t' e']
 
-dims :: Type -> [Int]
-dims (TArr inner dim) = dim:dims inner
-dims _ = []
+typeDimensions :: Type -> [Int]
+typeDimensions (TArr inner dim) = dim:typeDimensions inner
+typeDimensions _ = []
 
 data ProgramFunc = ProgramFunc
   { params :: [(Captured, Type)]
@@ -400,7 +341,7 @@ codegen dfm expr = Program {..}
             withBindingVars Env {..} = Env { varMap = bindingVars <> varMap, .. }
 
         -- Copy current value
-        copyRef recEnv.current (RProj C.ti32 recEnv.delayBuffer recEnv.readIdx)
+        copyRef recEnv.current (RProj recEnv.delayBuffer recEnv.readIdx)
 
         binOp Add recEnv.writeIdx recEnv.writeIdx (RConst $ I32 1)
         binOp Mod recEnv.writeIdx recEnv.writeIdx (RConst $ I32 delay)
@@ -409,15 +350,14 @@ codegen dfm expr = Program {..}
         binOp Add recEnv.readIdx recEnv.readIdx (RConst $ I32 1)
         binOp Mod recEnv.readIdx recEnv.readIdx (RConst $ I32 delay)
 
-        local withBindingVars $ gen (RProj C.ti32 recEnv.delayBuffer recEnv.writeIdx) body
+        local withBindingVars $ gen (RProj recEnv.delayBuffer recEnv.writeIdx) body
     
     pfoldedSelectR body@(Ann (bodyTyp, _)) idxs = do
       bodyVar <- alloc bodyTyp
       gen bodyVar body
       idxVars <- traverse rhs idxs
       -- _ <- trace ("PROJ: " <> show (foldr (\(idx, dim) body' -> RProj body' idx dim) bodyVar (zip idxVars (reverse $ scanl1 (*) (reverse $ innerDims bodyTyp))))) (pure ())
-      _ <- trace ("DIMS: " <> show (idxVars)) (pure ())
-      pure $ snd $ foldr (\idx (typ, body') -> (C.peelType typ, RProj (C.peelType typ) body' idx)) (bodyTyp, bodyVar) idxVars
+      pure $ foldr (\idx body' -> RProj body' idx) bodyVar idxVars
 
     prec param = ask >>= \env -> pure (lookupE "prec: param" param env.recMap).current
 
@@ -443,13 +383,10 @@ codegen dfm expr = Program {..}
 
     gen ret (Ann (_, PCVar n)) = ask >>= \env -> copyRef ret (lookupE ("gen: PVar: " <> show n) n env.varMap)
 
-    gen ret (Ann (typ, PArr elems)) = do
-      let innerTyp = C.peelType typ
-
-      sequence_
-        [ gen (RProj innerTyp ret (RConst (C.I32 i))) elem
-        | (i, elem) <- zip [0..] elems
-        ]
+    gen ret (Ann (_, PArr elems)) = sequence_
+      [ gen (RProj ret (RConst (C.I32 i))) elem
+      | (i, elem) <- zip [0..] elems
+      ]
 
     gen ret (Ann (_, POp op a b)) = do
       avar <- rhs a
@@ -497,7 +434,7 @@ showType (TNumber TI32) = "i32"
 showType (TNumber TF32) = "f32"
 showType (TNumber TI64) = "i64"
 showType (TNumber TF64) = "f64"
-showType arr@(TArr t dim) = showType (TNumber $ C.baseType t) <> concatMap (\d -> "[" <> show d <> "]") (dims arr)
+showType arr@(TArr t dim) = showType (TNumber $ C.baseType t) <> concatMap (\d -> "[" <> show d <> "]") (typeDimensions arr)
 showType (TLam [] retType) = "() -> " <> showType retType
 showType (TLam params retType) = 
   "(" <> intercalate ", " (map showType params) <> ") -> " <> showType retType
@@ -508,7 +445,7 @@ instance Pretty Ref where
   pretty (RArg typ ident) = "arg:" <> pretty ident <> ":" <> pretty (showType typ)
   pretty (RVar typ (Location region loc)) = allocRegion region <> pretty loc <> ":" <> pretty (showType typ)
   -- TODO: reverse indices
-  pretty (RProj _ ref idx) = pretty ref <> brackets (pretty idx)
+  pretty (RProj ref idx) = pretty ref <> brackets (pretty idx)
   pretty (RFuncRef (FuncRef i)) = "f" <> pretty i
 
 instance Pretty SliceRoot where

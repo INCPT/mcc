@@ -31,6 +31,9 @@ tf64 = TNumber TF64
 tarr :: Type -> Int -> Type
 tarr = TArr
 
+tlam :: Type
+tlam = ti32
+
 (-->) :: [Type] -> Type -> Type
 (-->) = TLam
 

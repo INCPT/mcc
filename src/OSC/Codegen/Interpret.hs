@@ -139,6 +139,7 @@ setVar loc val = do
 
 -- Extract a slice from a value
 extractSlice :: Type -> Value -> Int -> Int -> Value
+-- TODO: Value must be in the shape determined by the type
 extractSlice (TArr _ _) (VArr vals) offset len = VArr (take len (drop offset vals))
 extractSlice (TNumber _) (VArr vals) offset 1 = VNumber $ head (drop offset vals)
 extractSlice _ (VNumber n) 0 1 = VNumber n
@@ -326,6 +327,7 @@ interpretToList n prog = runST $ do
   let go 0 = pure []
       go count = do
         runReaderT (interpInstrs prog.tick M.empty Nothing) env
+        _ <- trace ("TOP: " <> show prog.ref) (pure ())
         val <- runReaderT (readSlice prog.ref M.empty Nothing) env
         rest <- go (count - 1)
         pure (val : rest)
